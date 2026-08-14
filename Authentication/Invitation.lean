@@ -1,0 +1,68 @@
+/-
+Copyright (c) 2026 Paul Butcher. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+-/
+import Authentication.Digest
+import Authentication.Email
+import Authentication.Error
+import Authentication.Tenant
+import Authentication.Time
+
+namespace Authentication
+
+/-- Stored verbatim and returned on acceptance without being interpreted. This is how a client
+attaches its own roles to an invitation while roles stay out of the library (AUTH-8.7,
+AUTH-13.3). -/
+structure InvitationMetadata where
+  payload : String
+  deriving DecidableEq, Repr, Inhabited
+
+inductive InvitationState where
+  | pending
+  | accepted
+  | revoked
+  deriving DecidableEq, Repr, Inhabited
+
+/-- A grant on one address in one tenant (AUTH-4.4.4). -/
+structure Invitation (tenant : TenantId) where
+  id : InvitationId tenant
+  address : EmailAddress
+  tokenDigest : Digest
+  metadata : InvitationMetadata
+  state : InvitationState := .pending
+  expiresAt : Timestamp
+  createdBy : Actor
+  consumedAt : Option Timestamp := none
+  deriving DecidableEq, Repr
+
+/-- What acceptance authorises. Both the address and the tenant come from the invitation
+record; neither can be supplied at accept time (AUTH-8.3). -/
+structure InvitationGrant (tenant : TenantId) where
+  invitation : InvitationId tenant
+  address : EmailAddress
+  metadata : InvitationMetadata
+  deriving DecidableEq, Repr
+
+namespace Invitation
+
+/--
+Single use: acceptance moves the invitation to `accepted`, and a second attempt finds it no
+longer pending (AUTH-8.5).
+
+There is deliberately no address parameter. An accept form that submitted one would be the
+whole vulnerability of AUTH-8.3, so the signature does not admit one.
+-/
+def consume {tenant : TenantId} (now : Timestamp) (invitation : Invitation tenant)
+    (presented : PresentedSecret) :
+    Except AuthError (Invitation tenant × InvitationGrant tenant) :=
+  if invitation.state != .pending then .error .invitationNotPending
+  else if invitation.expiresAt ≤ now then .error .invitationExpired
+  else if !invitation.tokenDigest.accepts presented then .error .unknownToken
+  else
+    .ok ({ invitation with state := .accepted, consumedAt := some now },
+      { invitation := invitation.id, address := invitation.address,
+        metadata := invitation.metadata })
+
+end Invitation
+
+end Authentication

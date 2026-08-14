@@ -1,6 +1,19 @@
 name = "authentication"
 version = "0.1.0"
 defaultTargets = ["Authentication"]
+testDriver = "tests"
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+warningAsError = true
 
 [[lean_lib]]
 name = "Authentication"
+
+[[lean_lib]]
+name = "Tests"
+
+[[lean_exe]]
+name = "tests"
+root = "Tests.Main"
