@@ -4,6 +4,8 @@ Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Tests.Attempt
 import Tests.Codec
+import Tests.Crypto
+import Tests.EndToEnd
 import Tests.Digest
 import Tests.Email
 import Tests.Flow

@@ -3,6 +3,11 @@ version = "0.1.0"
 defaultTargets = ["Authentication"]
 testDriver = "tests"
 
+[[require]]
+name = "leansqlite"
+git = "https://github.com/leanprover/leansqlite"
+rev = "v4.33.0"
+
 [leanOptions]
 autoImplicit = false
 relaxedAutoImplicit = false
@@ -10,6 +15,9 @@ warningAsError = true
 
 [[lean_lib]]
 name = "Authentication"
+
+[[lean_lib]]
+name = "AuthenticationSqlite"
 
 [[lean_lib]]
 name = "Tests"
