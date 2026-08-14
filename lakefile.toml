@@ -1,0 +1,6 @@
+name = "authentication"
+version = "0.1.0"
+defaultTargets = ["Authentication"]
+
+[[lean_lib]]
+name = "Authentication"

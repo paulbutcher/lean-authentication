@@ -1,0 +1,22 @@
+{
+	"name": "Ubuntu",
+	"build": { "dockerfile": "Dockerfile" },
+
+  // Store Claude's persistent state on the host
+  "mounts": [
+    "source=${localEnv:HOME}/.claude-devcontainer,target=/home/vscode/.claude,type=bind,consistency=cached"
+  ],
+
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    "PGHOST": "host.docker.internal"
+  },
+
+  "postCreateCommand": "claude mcp add lean-lsp uvx lean-lsp-mcp --scope user",
+
+	"customizations": {
+		"vscode": {
+			"extensions": ["leanprover.lean4", "anthropic.claude-code"]
+		}
+	}
+}
