@@ -62,6 +62,8 @@ Project-specific guidance for Claude Code when working in this repo.
 
 ## Testing
 
+- Tests should be in a subproject called `test` with its own lakefile, called from the
+  top-level lakefile. 
 - Don't write tests which wholely or largely restate literals from the source with no
   computation in between. Before adding a test, ask: could this fail from a real behavior
   regression, or only by retyping the expected value wrong? If only the latter, it's

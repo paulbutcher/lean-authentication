@@ -52,7 +52,7 @@ Consequences while it stands:
 - The next stage that needs ES256 and RS256 signature verification will face the same question
   at a much larger size, and that is the point at which the shared library is worth creating.
 
-The crypto is checked against the published vectors in `Tests/Crypto.lean`: FIPS 180-4 for
+The crypto is checked against the published vectors in `test/Tests/Crypto.lean`: FIPS 180-4 for
 SHA-256 and RFC 4231 for HMAC-SHA256, including the oversized-key case where the key is hashed
 first. The codecs carry round-trip theorems.
 

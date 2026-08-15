@@ -46,6 +46,10 @@ lake build
 lake test
 ```
 
+The tests are a subproject in `test/` with its own lakefile, which the top-level `lake test`
+calls. They are not part of the package this library publishes, so a project depending on it is
+free to name its own modules `Tests.*` and acquires nothing the library does not ship.
+
 Warnings are errors. Most of the suite is theorems, which pass by compiling; `lake test` runs
 the worked cross-device flow, whose value is in the effects a theorem does not constrain.
 
