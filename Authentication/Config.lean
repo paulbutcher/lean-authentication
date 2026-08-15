@@ -3,6 +3,7 @@ Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Authentication.Policy
+import Authentication.Template
 import Authentication.Tenant
 import Authentication.Time
 
@@ -109,5 +110,8 @@ structure TenantConfig (tenant : TenantId) where
   sessionAbsoluteLifetime : Duration := Duration.days 90
   invitationLifetime : Duration := Duration.days 7
   returnToAllowlist : List String := []
+  /-- Overridable per tenant, which is what AUTH-10.7 asks for: a client supplies its own
+  renderer rather than filling in holes in one this library dictates. -/
+  templates : EmailTemplates := .standard
 
 end Authentication

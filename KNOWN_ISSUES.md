@@ -56,6 +56,28 @@ The crypto is checked against the published vectors in `test/Tests/Crypto.lean`:
 SHA-256 and RFC 4231 for HMAC-SHA256, including the oversized-key case where the key is hashed
 first. The codecs carry round-trip theorems.
 
+## No committed test makes an HTTP request (AUTH-16.5)
+
+`Authentication.Postmark.curlHttp` is the only part of the outbound transport the suite never
+runs. Everything above it is covered: the payload built, the responses interpreted, and the flow
+from `begin` through the template into the request. What is not covered is leancurl itself, and
+so whether the payload leaves this process intact.
+
+This is deliberate. AUTH-16.5 requires the flow to be exercisable with no network, and a suite
+that reaches an external service fails when that service has a bad day rather than when this
+library does.
+
+It was verified once by hand, against Postmark's `POSTMARK_API_TEST` token, which validates a
+payload without sending it and needs no account. That confirmed the field names, that
+`MessageStream` and `Metadata` are accepted, and that the response shape is what the golden
+payload in `test/Tests/Postmark.lean` says; the payload there is that capture rather than a
+transcription. Repeating it means writing a few lines against `curlHttp` with that token as the
+server token. Anyone changing the request should.
+
+The residue is that a change to how leancurl is called would pass the suite and fail in
+production. The metadata length check in `test/Tests/Postmark.lean` guards the one case where
+that would otherwise be silent.
+
 ## Rate limiting is not enforced (AUTH-14.1.1)
 
 Nothing limits how often a sign-in may be begun, and there is no `RateLimiter` port yet.

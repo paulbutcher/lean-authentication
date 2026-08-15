@@ -13,7 +13,8 @@ value is in the effects a theorem does not constrain.
 
 def main : IO UInt32 := do
   let checks := Tests.Flow.checks ++ Tests.Crypto.checks ++ (← Tests.Sqlite.conformanceChecks)
-    ++ (← Tests.EndToEnd.checks) ++ Tests.Sql.checks ++ (← Tests.Postgres.conformanceChecks)
+    ++ (← Tests.EndToEnd.checks) ++ Tests.Sql.checks ++ Tests.Template.checks
+    ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ (← Tests.Postgres.conformanceChecks)
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do
     IO.eprintln s!"FAILED: {name}"

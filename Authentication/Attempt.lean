@@ -30,14 +30,6 @@ def AttemptPhase.isLive : AttemptPhase → Bool
   | .pending | .revealed => true
   | .completed | .expired | .abandoned => false
 
-/-- Recorded against the attempt and stated in the mail, so the recipient can tell whether the
-request was theirs (AUTH-5.2.12). -/
-structure RequestContext where
-  ip : Option String := none
-  userAgent : Option String := none
-  approximateLocation : Option String := none
-  deriving DecidableEq, Repr, Inhabited
-
 /-- One sign-in in progress (AUTH-4.4.3). Every credential is held as a digest. -/
 structure AttemptState (tenant : TenantId) where
   id : AttemptId tenant

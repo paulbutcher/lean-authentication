@@ -35,9 +35,25 @@ implementation shared by both backends, with Postgres and SQLite each passing th
 Identifiers are indexed by the tenant they belong to (`AccountId tenant`), so an expression
 that crosses tenants does not typecheck.
 
-Still to come, in the order REQUIREMENTS §19 gives: the Postmark transport, signup policy and
-invitations wired through, OIDC, and the session management surface. Rate limiting is required
-and is not in any stage; see `KNOWN_ISSUES.md`.
+Still to come, in the order REQUIREMENTS §19 gives: signup policy and invitations wired through,
+OIDC, and the session management surface. Rate limiting is required and is not in any stage; see
+`KNOWN_ISSUES.md`.
+
+## Sending domain DNS
+
+The `From` domain needs all of these before it will be delivered rather than filed (AUTH-10.8):
+
+- **SPF** on the sending domain, authorising the provider's servers.
+- **DKIM** on the sending domain, with the provider's selector, so the signature survives
+  forwarding.
+- **DMARC** on the organisational domain, with an alignment policy you have tested at `p=none`
+  before moving to `p=quarantine` or `p=reject`.
+- **MX** on the sending subdomain: either a real one, or an explicit null MX (`0 .`, RFC 7505)
+  saying it accepts no mail. A `From` domain with no MX record at all is penalised by receivers
+  who read the absence as misconfiguration rather than intent.
+
+The last one is the one that gets missed, because mail sends fine without it until a receiver
+starts scoring it.
 
 ## Building
 

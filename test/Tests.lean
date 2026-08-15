@@ -11,6 +11,8 @@ import Tests.Email
 import Tests.Flow
 import Tests.Invitation
 import Tests.Policy
+import Tests.Postmark
 import Tests.Postgres
 import Tests.Response
 import Tests.Sql
+import Tests.Template

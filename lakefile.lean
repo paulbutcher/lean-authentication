@@ -18,6 +18,9 @@ require leansqlite from git
 require leanpostgres from git
   "https://github.com/paulbutcher/leanpostgres" @ "v0.4.0"
 
+require leancurl from git
+  "https://github.com/paulbutcher/leancurl" @ "v0.1.0"
+
 @[default_target]
 lean_lib Authentication
 
@@ -29,6 +32,9 @@ lean_lib AuthenticationSqlite
 
 @[default_target]
 lean_lib AuthenticationPostgres
+
+@[default_target]
+lean_lib AuthenticationPostmark
 
 /--
 Tests live in the `test/` subproject rather than here, so that a project depending on this one is

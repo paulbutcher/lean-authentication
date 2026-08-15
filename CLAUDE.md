@@ -95,3 +95,5 @@ Project-specific guidance for Claude Code when working in this repo.
 ## Lean Code
 
 - Never use a partial function unless it's absolutely essential.
+- Never use a function which might panic (typically indicated by an exclamation mark at
+  the end of the function name) unless it's absolution essential.

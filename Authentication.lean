@@ -6,6 +6,7 @@ import Authentication.Account
 import Authentication.Attempt
 import Authentication.Audit
 import Authentication.Codec.Base32
+import Authentication.Template
 import Authentication.Codec.Base64Url
 import Authentication.Config
 import Authentication.Crypto.Hmac

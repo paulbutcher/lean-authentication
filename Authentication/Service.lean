@@ -100,29 +100,22 @@ def mintSecrets {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId
           bindingNonce := { value := nonce, digest := peppers.current.digest nonce } })
 
 /-- The mail states the tenant, the time, and where the request came from, and carries nothing
-the requester typed (AUTH-5.2.11, AUTH-5.2.12). Templates the client can override per tenant
-arrive with the transport. -/
+the requester typed (AUTH-5.2.11, AUTH-5.2.12). What it says is the tenant's template's business
+(AUTH-10.7); what it is addressed from, and the key that makes a retry safe, are not. -/
 private def signInEmail {tenant : TenantId} (config : TenantConfig tenant)
     (message : SignInEmail tenant) : OutboundEmail :=
-  let requester :=
-    match message.requester.ip, message.requester.approximateLocation with
-    | some ip, some place => s!"from {ip}, near {place}"
-    | some ip, none => s!"from {ip}"
-    | none, some place => s!"from near {place}"
-    | none, none => "from an unrecorded address"
-  let code :=
-    match message.emailedCode with
-    | some value => s!"\n\nOr type this code instead: {value.encoded}"
-    | none => ""
+  let rendered := config.templates.signIn
+    { tenantName := config.displayName
+      recipient := message.recipient
+      magicLink := message.magicLink.value
+      emailedCode := message.emailedCode.map (·.encoded)
+      requester := message.requester
+      requestedAt := message.requestedAt }
   { «from» := config.sendingIdentity
     to := message.recipient
-    subject := s!"Sign in to {config.displayName}"
-    textBody :=
-      s!"Someone asked to sign in to {config.displayName} as {message.recipient.render}, " ++
-      s!"{requester}, at {message.requestedAt.epochSeconds} (epoch seconds).\n\n" ++
-      s!"To continue, open:\n{message.magicLink.value}{code}\n\n" ++
-      "If this was not you, you can ignore this message. Nobody can sign in without opening " ++
-      "the link above."
+    subject := rendered.subject
+    textBody := rendered.textBody
+    htmlBody := rendered.htmlBody
     replyTo := config.sendingIdentity.replyTo
     idempotencyKey := s!"attempt:{message.attempt.value}" }
 
