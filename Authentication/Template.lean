@@ -108,8 +108,29 @@ private def standardHtml (message : SignInDetails) : String :=
   "<p>If this was not you, you can ignore this message. Nobody can sign in without opening " ++
   "the link above.</p>"
 
+structure InvitationDetails where
+  tenantName : String
+  recipient : EmailAddress
+  acceptLink : String
+  expiresAt : Timestamp
+  deriving DecidableEq, Repr, Inhabited
+
+private def standardInvitationText (message : InvitationDetails) : String :=
+  s!"You have been invited to {message.tenantName} as {message.recipient.render}.\n\n" ++
+  s!"To accept, open:\n{message.acceptLink}\n\n" ++
+  s!"The invitation expires at {message.expiresAt.epochSeconds} (epoch seconds). " ++
+  "If you were not expecting it, you can ignore this message."
+
+private def standardInvitationHtml (message : InvitationDetails) : String :=
+  let e := escapeHtml
+  s!"<p>You have been invited to {e message.tenantName} as {e message.recipient.render}.</p>" ++
+  s!"<p><a href=\"{e message.acceptLink}\">Accept the invitation</a></p>" ++
+  s!"<p>The invitation expires at {message.expiresAt.epochSeconds} (epoch seconds). " ++
+  "If you were not expecting it, you can ignore this message.</p>"
+
 structure EmailTemplates where
   signIn : SignInDetails → RenderedEmail
+  invitation : InvitationDetails → RenderedEmail
 
 namespace EmailTemplates
 
@@ -118,6 +139,10 @@ def standard : EmailTemplates where
     { subject := s!"Sign in to {message.tenantName}"
       textBody := standardText message
       htmlBody := some (standardHtml message) }
+  invitation message :=
+    { subject := s!"You have been invited to {message.tenantName}"
+      textBody := standardInvitationText message
+      htmlBody := some (standardInvitationHtml message) }
 
 instance : Inhabited EmailTemplates := ⟨standard⟩
 

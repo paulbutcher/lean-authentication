@@ -14,13 +14,13 @@ import Authentication.Store
 /-!
 The interpreter at the edge (AUTH-3.1).
 
-Every decision is taken by `Attempt.step`; this module only mints credentials, reads and writes
-through the store, and performs the effects the state machine asked for. Nothing here decides
-whether a sign-in may proceed.
+Every decision about the sign-in flow is taken by `Attempt.step`; this module mints credentials,
+reads and writes through the store, and performs the effects the state machine asked for.
 
-Signup policy is not consulted yet: an address that completes an attempt gets an account.
-Wiring AUTH-7 and invitations in is the next stage, and the place it goes is `issueSession`
-below, where the account is created.
+The one decision taken here is signup policy, because AUTH-7.6 evaluates it at account creation
+and account creation is here. Deciding it at `begin` would be worse than misplaced: it would
+tell an unauthenticated caller whether an address may sign up, which is what AUTH-14.2 exists to
+prevent. By the time `issueSession` runs, whoever is asking has proven control of the address.
 -/
 
 namespace Authentication.Service
@@ -34,6 +34,18 @@ structure Ports (m : Type → Type) where
   responsePolicy : SignInResponsePolicy m
   peppers : Crypto.PepperRing
 
+/--
+What an account creation tells the client. Both fields exist because the library owns identity
+and nothing else (§13): with no roles here, `firstInTenant` is the only thing that can make a
+tenant's first account privileged (AUTH-13.6), and the metadata is the client's own payload
+handed back unread (AUTH-8.7, AUTH-13.3).
+-/
+structure AccountAdmitted (tenant : TenantId) where
+  account : AccountId tenant
+  firstInTenant : Bool
+  invitationMetadata : Option InvitationMetadata := none
+  deriving DecidableEq, Repr
+
 /-- What the caller has to act on: the pages to show, the cookies to set, and the session
 credential, if one was issued. The HTTP layer that turns these into a response arrives with the
 integration target. -/
@@ -43,6 +55,9 @@ structure Outcome (tenant : TenantId) where
   clearCookies : List (String × String) := []
   session : Option CredentialValue := none
   sent : List SentMessageId := []
+  /-- Present only when this outcome created an account, not on every sign-in. -/
+  admitted : Option (AccountAdmitted tenant) := none
+  refused : Option SignupRejection := none
   deriving Inhabited
 
 private def randomValue {m : Type → Type} [Monad m] [RandomBytes m] (bytes : Nat) :
@@ -119,31 +134,82 @@ private def signInEmail {tenant : TenantId} (config : TenantConfig tenant)
     replyTo := config.sendingIdentity.replyTo
     idempotencyKey := s!"attempt:{message.attempt.value}" }
 
+/-- What issuing produced, so that a refusal can be told apart from a failure to draw random
+bytes, and so the client learns about an account only when one was made. -/
+private structure Issued (tenant : TenantId) where
+  session : Option CredentialValue := none
+  admitted : Option (AccountAdmitted tenant) := none
+  refused : Option SignupRejection := none
+
+/-- Spends the invitation the attempt was begun with, under compare-and-set so that two requests
+racing to accept one invitation produce one account (AUTH-8.5). Returns what it granted; a
+grant that loses the race grants nothing. -/
+private def spendInvitation {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (now : Timestamp) (id : InvitationId tenant) : m (Option (InvitationGrant tenant)) := do
+  match ← ports.store.invitationById tenant id with
+  | none => pure none
+  | some invitation =>
+    if invitation.state != .pending then pure none
+    else if invitation.expiresAt ≤ now then pure none
+    else if ← ports.store.commitInvitation tenant invitation (Invitation.markConsumed now invitation) then
+      ports.store.appendAudit tenant ⟨now, .anonymous, .invitationConsumed id⟩
+      pure (some
+        { invitation := id, address := invitation.address, metadata := invitation.metadata })
+    else pure none
+
 private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
-    (subject : SessionSubject tenant) : m (Option CredentialValue) := do
+    (subject : SessionSubject tenant) : m (Issued tenant) := do
   let identity := subject.address.normalise
   let existing ← ports.store.accountByIdentity tenant identity
-  let account ←
+  -- The invitation is spent whether or not an account had to be created, because AUTH-8.8 says
+  -- an invitation for an address that already has an account signs that account in and is
+  -- consumed, rather than creating a duplicate.
+  let grant ← match subject.invitation with
+    | some id => spendInvitation ports now id
+    | none => pure none
+  let (accountId, admitted, refused) ←
     match existing with
-    | some account => pure (some account.id)
+    | some account =>
+      -- Policy is evaluated at account creation only, so tightening one never locks out an
+      -- account that already exists (AUTH-7.6).
+      pure (some account.id, none, none)
     | none =>
-      match ← randomValue 12 with
-      | .error _ => pure none
-      | .ok generated =>
-        let account : Account tenant :=
-          { id := ⟨generated.encoded⟩
-            identity
-            primaryEmail := subject.address
-            createdAt := now }
-        match ← ports.store.createAccount tenant account with
-        | .ok created => pure (some created.account.id)
-        | .error _ => pure ((← ports.store.accountByIdentity tenant identity).map (·.id))
-  match account with
-  | none => pure none
+      match config.signupPolicy.evaluate subject.address grant.isSome
+          config.invitationOverridesAllowlist with
+      | .rejected reason => pure (none, none, some reason)
+      | .permitted =>
+        match ← randomValue 12 with
+        | .error _ => pure (none, none, none)
+        | .ok generated =>
+          let account : Account tenant :=
+            { id := ⟨generated.encoded⟩
+              identity
+              primaryEmail := subject.address
+              createdAt := now }
+          match ← ports.store.createAccount tenant account with
+          | .ok created =>
+            pure (some created.account.id,
+              some { account := created.account.id
+                     firstInTenant := created.firstInTenant
+                     invitationMetadata := grant.map (·.metadata) },
+              none)
+          | .error _ =>
+            pure ((← ports.store.accountByIdentity tenant identity).map (·.id), none, none)
+  match accountId with
+  | none =>
+    -- The true reason is recorded whatever the person is shown (AUTH-7.7).
+    match refused with
+    | some reason =>
+      ports.store.appendAudit tenant ⟨now, .anonymous,
+        .signInRejected (match reason with
+          | .notInvited => .notInvited
+          | .domainNotAllowed => .domainNotAllowed)⟩
+      pure { refused }
+    | none => pure {}
   | some accountId =>
     match ← randomValue 16 with
-    | .error _ => pure none
+    | .error _ => pure { admitted }
     | .ok credential =>
       -- A new identifier at every sign-in; an existing session is never promoted (AUTH-9.3).
       ports.store.createSession tenant
@@ -154,7 +220,7 @@ private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
           lastSeenAt := now
           idleExpiresAt := now.advance config.sessionIdleTimeout
           absoluteExpiresAt := now.advance config.sessionAbsoluteLifetime }
-      pure (some credential)
+      pure { session := some credential, admitted }
 
 private def perform {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
@@ -170,14 +236,29 @@ private def perform {m : Type → Type} [Monad m] [RandomBytes m] {tenant : Tena
   | .clearAttemptCookie name path =>
     pure { outcome with clearCookies := outcome.clearCookies ++ [(name, path)] }
   | .issueSession subject => do
-    let session ← issueSession ports config now subject
-    pure { outcome with session }
+    let issued ← issueSession ports config now subject
+    pure
+      { outcome with
+        session := issued.session
+        admitted := issued.admitted
+        refused := issued.refused }
   | .present view => pure { outcome with views := outcome.views ++ [view] }
+
+/-- A refusal arrives after the state machine has already asked for `signedIn` to be shown,
+because the state machine does not know about policy. Rather than teach it, the view it asked
+for is replaced here, in the one place that knows the account was not made. -/
+private def settle {tenant : TenantId} (outcome : Outcome tenant) : Outcome tenant :=
+  match outcome.refused with
+  | none => outcome
+  | some reason =>
+    { outcome with
+      views := outcome.views.filter (· != .signedIn) ++ [.signupRefused reason]
+      session := none }
 
 private def performAll {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
     (effects : List (Effect tenant)) : m (Outcome tenant) :=
-  effects.foldlM (fun outcome effect => perform ports config now outcome effect) {}
+  settle <$> effects.foldlM (fun outcome effect => perform ports config now outcome effect) {}
 
 /--
 Begins a sign-in. The response comes from the policy rather than from what happened, and every
@@ -256,6 +337,146 @@ def submitEmailedCode {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
     (typed : String) (cookie : CredentialValue) : m (Except AuthError (Outcome tenant)) :=
   advance ports config attempt
     (.emailedCodeSubmitted (ports.peppers.present cookie) (ports.peppers.present ⟨typed⟩))
+
+/-! ## Invitations
+
+None of these check a permission, and that is the design rather than an omission. The library
+owns identity and nothing about authorisation, so it has no basis on which to decide who may
+invite; the client calls them only when it has decided (AUTH-13.2).
+-/
+
+def acceptLink {tenant : TenantId} (config : TenantConfig tenant) (invitation : InvitationId tenant)
+    (token : CredentialValue) : Url :=
+  config.baseUrl.url tenant
+    ("/invitation/accept?invitation=" ++ invitation.value ++ "&token=" ++ token.encoded)
+
+private def invitationEmail {tenant : TenantId} (config : TenantConfig tenant)
+    (invitation : Invitation tenant) (link : Url) : OutboundEmail :=
+  let rendered := config.templates.invitation
+    { tenantName := config.displayName
+      recipient := invitation.address
+      acceptLink := link.value
+      expiresAt := invitation.expiresAt }
+  { «from» := config.sendingIdentity
+    to := invitation.address
+    subject := rendered.subject
+    textBody := rendered.textBody
+    htmlBody := rendered.htmlBody
+    replyTo := config.sendingIdentity.replyTo
+    -- The token rather than the invitation, so that a resend is a different message: AUTH-8.5
+    -- rotates the token, and suppressing the second send as a duplicate would strand the person
+    -- with a link that no longer works.
+    idempotencyKey := s!"invitation:{invitation.id.value}:{invitation.tokenDigest.bytes.length}" }
+
+/-- Creates an invitation for exactly one address in one tenant and mails the link. The token is
+returned as well, because a client that sends its own mail still needs it. -/
+def createInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (config : TenantConfig tenant) (address : EmailAddress)
+    (metadata : InvitationMetadata) (createdBy : Actor := .anonymous) :
+    m (Option (Invitation tenant × CredentialValue)) := do
+  let now ← Clock.now
+  match ← randomValue 12, ← randomValue 16 with
+  | .error _, _ => pure none
+  | _, .error _ => pure none
+  | .ok generated, .ok token =>
+    let invitation : Invitation tenant :=
+      { id := ⟨generated.encoded⟩
+        address
+        tokenDigest := ports.peppers.current.digest token
+        metadata
+        expiresAt := now.advance config.invitationLifetime
+        createdBy }
+    ports.store.createInvitation tenant invitation
+    let _ ← ports.transport.send
+      (invitationEmail config invitation (acceptLink config invitation.id token))
+    pure (some (invitation, token))
+
+/-- Rotating the token is what invalidates the old link, which is what AUTH-8.5 requires of a
+resend: the person who was sent one twice can use either message and only the newer works. -/
+def resendInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (config : TenantConfig tenant) (id : InvitationId tenant) :
+    m (Option CredentialValue) := do
+  let now ← Clock.now
+  match ← ports.store.invitationById tenant id with
+  | none => pure none
+  | some invitation =>
+    if invitation.state != .pending then pure none
+    else
+      match ← randomValue 16 with
+      | .error _ => pure none
+      | .ok token =>
+        let rotated :=
+          { invitation with
+            tokenDigest := ports.peppers.current.digest token
+            expiresAt := now.advance config.invitationLifetime }
+        if ← ports.store.commitInvitation tenant invitation rotated then
+          let _ ← ports.transport.send
+            (invitationEmail config rotated (acceptLink config id token))
+          pure (some token)
+        else pure none
+
+def revokeInvitation {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (id : InvitationId tenant) : m Bool := do
+  match ← ports.store.invitationById tenant id with
+  | none => pure false
+  | some invitation =>
+    if invitation.state != .pending then pure false
+    else ports.store.commitInvitation tenant invitation { invitation with state := .revoked }
+
+/-- Expiry is not a stored state, so listing derives it rather than depending on a sweeper
+having run (AUTH-8.9, AUTH-15.4.3). -/
+inductive InvitationStanding where
+  | pending
+  | accepted
+  | expired
+  | revoked
+  deriving DecidableEq, Repr, Inhabited
+
+def standing {tenant : TenantId} (now : Timestamp) (invitation : Invitation tenant) :
+    InvitationStanding :=
+  match invitation.state with
+  | .accepted => .accepted
+  | .revoked => .revoked
+  | .pending => if invitation.expiresAt ≤ now then .expired else .pending
+
+def invitations {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m) :
+    m (List (Invitation tenant × InvitationStanding)) := do
+  let now ← Clock.now
+  pure ((← ports.store.invitationsForTenant tenant).map fun i => (i, standing now i))
+
+/--
+Accepting. The token is checked here and the invitation is not spent yet; what it authorises is
+an attempt for the invited address, which then runs the whole of §5 including the cross-device
+code, so a link opened on a phone signs nobody in on that phone (AUTH-8.4).
+
+The address comes from the invitation record. There is no parameter for one, which is what makes
+AUTH-8.3 unbreakable here rather than merely unbroken.
+-/
+def acceptInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (config : TenantConfig tenant) (id : InvitationId tenant)
+    (token : CredentialValue) (requester : RequestContext) :
+    m (Except AuthError (Outcome tenant)) := do
+  let now ← Clock.now
+  match ← ports.store.invitationById tenant id with
+  | none => pure (.error .invitationNotPending)
+  | some invitation =>
+    match Invitation.verify now invitation (ports.peppers.present token) with
+    | .error e => pure (.error e)
+    | .ok grant =>
+      match ← mintSecrets ports.peppers config with
+      | .error _ => pure (.error .attemptNotLive)
+      | .ok secrets =>
+        match ← randomValue 12 with
+        | .error _ => pure (.error .attemptNotLive)
+        | .ok generated =>
+          let attemptId : AttemptId tenant := ⟨generated.encoded⟩
+          let (state, effects) :=
+            Attempt.begin config now attemptId grant.address secrets requester (some id)
+          let superseded ← ports.store.startAttempt tenant state
+          for abandoned in superseded do
+            ports.store.appendAudit tenant
+              ⟨now, .anonymous, .attemptAbandoned abandoned .superseded⟩
+          .ok <$> performAll ports config now effects
 
 /-- Identity and tenant, and nothing else (AUTH-9.7). -/
 def identify {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)

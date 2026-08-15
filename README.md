@@ -8,10 +8,11 @@ falls short of it and why.
 
 ## State of the implementation
 
-Stages 1 to 3 of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
+Stages 1 to 5 of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
 with the theorems of AUTH-16.1, then the `AuthStore` port, its conformance suite, the SQLite
 backend, and the cross-device flow running end to end with no server, then one SQL
-implementation shared by both backends, with Postgres and SQLite each passing the suite.
+implementation shared by both backends, with Postgres and SQLite each passing the suite, then
+the Postmark transport, then signup policy and invitations.
 
 - `Authentication/Attempt.lean` is the centre. `begin` and `step` decide a sign-in from an
   explicit state and an event, and return the next state together with the effects the edge is
@@ -35,9 +36,8 @@ implementation shared by both backends, with Postgres and SQLite each passing th
 Identifiers are indexed by the tenant they belong to (`AccountId tenant`), so an expression
 that crosses tenants does not typecheck.
 
-Still to come, in the order REQUIREMENTS §19 gives: signup policy and invitations wired through,
-OIDC, and the session management surface. Rate limiting is required and is not in any stage; see
-`KNOWN_ISSUES.md`.
+Still to come, in the order REQUIREMENTS §19 gives: OIDC, and the session management surface.
+Rate limiting is required and is not in any stage; see `KNOWN_ISSUES.md`.
 
 ## Sending domain DNS
 

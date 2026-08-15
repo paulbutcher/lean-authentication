@@ -8,6 +8,7 @@ import Authentication.Config
 import Authentication.Digest
 import Authentication.Email
 import Authentication.Error
+import Authentication.Invitation
 
 /-!
 The magic link flow as a pure function over an explicit state (AUTH-3.1, §5).
@@ -42,6 +43,10 @@ structure AttemptState (tenant : TenantId) where
   failedCodeEntries : Nat
   expiresAt : Timestamp
   requester : RequestContext
+  /-- The invitation this attempt is accepting, if it is one. Carried on the attempt rather than
+  supplied at completion, so the address an acceptance creates an account for comes from the
+  invitation record and from nowhere else (AUTH-8.3). -/
+  invitation : Option (InvitationId tenant) := none
   deriving DecidableEq, Repr
 
 inductive AttemptEvent where
@@ -58,6 +63,9 @@ inductive View where
   | showVerificationCode
   | codeRejected (remaining : Nat)
   | signedIn
+  /-- Signup was refused after the address was proven. Emitted by the service rather than by
+  `step`, because policy is evaluated where the account is created (AUTH-7.6). -/
+  | signupRefused (reason : SignupRejection)
   deriving DecidableEq, Repr, Inhabited
 
 /-- What the mailer is given. No field can carry anything the requester typed, which is how
@@ -74,6 +82,7 @@ structure SignInEmail (tenant : TenantId) where
 structure SessionSubject (tenant : TenantId) where
   attempt : AttemptId tenant
   address : EmailAddress
+  invitation : Option (InvitationId tenant) := none
   deriving DecidableEq, Repr
 
 inductive Effect (tenant : TenantId) where
@@ -111,7 +120,8 @@ def cookieValue {tenant : TenantId} (attempt : AttemptId tenant) (nonce : Creden
 
 def begin {tenant : TenantId} (config : TenantConfig tenant) (now : Timestamp)
     (attempt : AttemptId tenant) (address : EmailAddress) (secrets : MintedSecrets)
-    (requester : RequestContext) : AttemptState tenant × List (Effect tenant) :=
+    (requester : RequestContext) (invitation : Option (InvitationId tenant) := none) :
+    AttemptState tenant × List (Effect tenant) :=
   let expiresAt := now.advance config.attemptLifetime.duration
   let state : AttemptState tenant :=
     { id := attempt
@@ -123,7 +133,8 @@ def begin {tenant : TenantId} (config : TenantConfig tenant) (now : Timestamp)
       bindingNonce := secrets.bindingNonce.digest
       failedCodeEntries := 0
       expiresAt
-      requester }
+      requester
+      invitation }
   (state,
     [ .audit ⟨now, .anonymous, .attemptCreated attempt⟩,
       .setAttemptCookie
@@ -141,7 +152,7 @@ private def complete {tenant : TenantId} (now : Timestamp) (state : AttemptState
     AttemptState tenant × List (Effect tenant) :=
   ({ state with phase := .completed },
     [ .audit ⟨now, .anonymous, .sessionIssued state.id⟩,
-      .issueSession ⟨state.id, state.address⟩,
+      .issueSession ⟨state.id, state.address, state.invitation⟩,
       .clearAttemptCookie "auth_attempt" (BaseUrl.tenantPath tenant),
       .present .signedIn ])
 

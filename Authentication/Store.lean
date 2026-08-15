@@ -71,7 +71,8 @@ structure AuthStore (m : Type → Type) where
   createInvitation : (tenant : TenantId) → Invitation tenant → m Unit
   invitationById : (tenant : TenantId) → InvitationId tenant → m (Option (Invitation tenant))
   /-- Compare and set on the invitation's state, so an invitation is single use however many
-  requests race to accept it (AUTH-8.5). -/
+  requests race to accept it (AUTH-8.5). It writes the token digest and expiry too, which is
+  what lets a resend rotate the token and invalidate the old one in the same operation. -/
   commitInvitation : (tenant : TenantId) → (expected next : Invitation tenant) → m Bool
   invitationsForTenant : (tenant : TenantId) → m (List (Invitation tenant))
   /-- Append only. The port offers no update and no delete, which is how AUTH-15.4.5 is kept:

@@ -229,7 +229,7 @@ private def createAccount [Monad m] (c : Ctx m) (tenant : TenantId) (account : A
 private def attemptSelect : Statement :=
   sql!"SELECT id, address_local, address_domain, phase, magic_key, magic_bytes, code_key,
          code_bytes, emailed_key, emailed_bytes, nonce_key, nonce_bytes, failed_entries,
-         expires_at, requester_ip, requester_agent, requester_location
+         expires_at, requester_ip, requester_agent, requester_location, invitation_id
        FROM {attempts}"
 
 private def readAttempt {tenant : TenantId} (row : SqlRow) : AttemptState tenant :=
@@ -248,7 +248,8 @@ private def readAttempt {tenant : TenantId} (row : SqlRow) : AttemptState tenant
     requester :=
       { ip := row.text? 14
         userAgent := row.text? 15
-        approximateLocation := row.text? 16 } }
+        approximateLocation := row.text? 16 }
+    invitation := (row.text? 17).map fun value => ⟨value⟩ }
 
 private def attemptById [Monad m] (c : Ctx m) (tenant : TenantId) (id : AttemptId tenant) :
     m (Option (AttemptState tenant)) := do
@@ -275,7 +276,7 @@ private def startAttempt [Monad m] (c : Ctx m) (tenant : TenantId)
              (tenant, id, address_local, address_domain, identity_local, identity_domain, phase,
               magic_key, magic_bytes, code_key, code_bytes, emailed_key, emailed_bytes,
               nonce_key, nonce_bytes, failed_entries, expires_at, requester_ip, requester_agent,
-              requester_location)
+              requester_location, invitation_id)
            VALUES ({tenant.value}, {attempt.id.value}, {attempt.address.localPart},
              {domainText attempt.address.domain}, {identity.localPart},
              {domainText identity.domain}, {phaseText attempt.phase},
@@ -286,7 +287,7 @@ private def startAttempt [Monad m] (c : Ctx m) (tenant : TenantId)
              {attempt.bindingNonce.keyId.value}, {digestBytesText attempt.bindingNonce},
              {attempt.failedCodeEntries}, {timeText attempt.expiresAt},
              {attempt.requester.ip}, {attempt.requester.userAgent},
-             {attempt.requester.approximateLocation})"
+             {attempt.requester.approximateLocation}, {attempt.invitation.map (·.value)})"
     pure ((live.map fun r => (⟨r.text 0⟩ : AttemptId tenant)).toList)
 
 /-- The condition names the phase and the failed-entry count the caller believed it was acting
@@ -405,7 +406,10 @@ private def commitInvitation [Monad m] (c : Ctx m) (tenant : TenantId)
   let affected ← c.affected
     sql!"UPDATE {invitations}
          SET state = {invitationStateText next.state},
-           consumed_at = {next.consumedAt.map timeText}
+           consumed_at = {next.consumedAt.map timeText},
+           token_key = {next.tokenDigest.keyId.value},
+           token_bytes = {digestBytesText next.tokenDigest},
+           expires_at = {timeText next.expiresAt}
          WHERE tenant = {tenant.value} AND id = {expected.id.value}
            AND state = {invitationStateText expected.state}"
   pure (affected == 1)

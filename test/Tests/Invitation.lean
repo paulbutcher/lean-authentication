@@ -11,37 +11,35 @@ variable {tenant : TenantId} {now : Timestamp} {invitation : Authentication.Invi
   {presented : PresentedSecret}
 
 /--
-AUTH-16.1: consuming an invitation yields the invitation's own address, for every input. The
-tenant travels with the type, so the second half of AUTH-8.3 is not a theorem here but a
-typing rule: `InvitationGrant tenant` cannot name an account in another tenant.
+AUTH-16.1: an invitation grants its own address, for every input. The tenant travels with the
+type, so the second half of AUTH-8.3 is not a theorem here but a typing rule:
+`InvitationGrant tenant` cannot name an account in another tenant.
+
+This is stated on `verify` rather than on `consume` because `verify` is what the service calls,
+and it is the function with no address parameter to get wrong.
 -/
-theorem grant_address_is_invitation_address
-    {next : Authentication.Invitation tenant} {grant : InvitationGrant tenant}
-    (h : Authentication.Invitation.consume now invitation presented = .ok (next, grant)) :
+theorem grant_address_is_invitation_address {grant : InvitationGrant tenant}
+    (h : Authentication.Invitation.verify now invitation presented = .ok grant) :
     grant.address = invitation.address := by
-  simp only [Authentication.Invitation.consume] at h
+  simp only [Authentication.Invitation.verify] at h
   split at h
   · simp at h
   · split at h
     · simp at h
     · split at h
       · simp at h
-      · simp only [Except.ok.injEq, Prod.mk.injEq] at h
-        simp [← h.2]
+      · simp only [Except.ok.injEq] at h
+        simp [← h]
 
 /-- Single use: what acceptance leaves behind is no longer pending (AUTH-8.5). -/
 theorem consumed_is_not_pending
     {next : Authentication.Invitation tenant} {grant : InvitationGrant tenant}
     (h : Authentication.Invitation.consume now invitation presented = .ok (next, grant)) :
     next.state = .accepted := by
-  simp only [Authentication.Invitation.consume] at h
+  simp only [Authentication.Invitation.consume, Except.map] at h
   split at h
   · simp at h
-  · split at h
-    · simp at h
-    · split at h
-      · simp at h
-      · simp only [Except.ok.injEq, Prod.mk.injEq] at h
-        simp [← h.1]
+  · simp only [Except.ok.injEq, Prod.mk.injEq] at h
+    simp [← h.1, Authentication.Invitation.markConsumed]
 
 end Tests.Invitation

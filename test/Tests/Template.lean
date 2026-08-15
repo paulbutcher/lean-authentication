@@ -36,8 +36,9 @@ def checks : List (String × Bool) :=
   let rendered := EmailTemplates.standard.signIn details
   let attacked := EmailTemplates.standard.signIn hostile
   let overridden :=
-    ({ signIn := fun d => { subject := s!"Hello from {d.tenantName}", textBody := "brief" } } :
-      EmailTemplates).signIn details
+    { EmailTemplates.standard with
+      signIn := fun d => { subject := s!"Hello from {d.tenantName}", textBody := "brief" } }
+      |>.signIn details
   [ ("template: the subject names the tenant", rendered.subject == "Sign in to Acme"),
     ("template: the text part carries the link and the code",
       occurs details.magicLink rendered.textBody && occurs "ABCD-EFGH" rendered.textBody),

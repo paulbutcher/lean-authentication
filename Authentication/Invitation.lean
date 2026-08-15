@@ -46,22 +46,38 @@ structure InvitationGrant (tenant : TenantId) where
 namespace Invitation
 
 /--
-Single use: acceptance moves the invitation to `accepted`, and a second attempt finds it no
-longer pending (AUTH-8.5).
+Says what an invitation grants, without spending it.
 
 There is deliberately no address parameter. An accept form that submitted one would be the
 whole vulnerability of AUTH-8.3, so the signature does not admit one.
+
+Checking and spending are separate because they happen at different moments. The token is
+presented when the link is opened, and the invitation is only spent once an account actually
+exists, so an acceptance that is begun and abandoned does not burn it (AUTH-8.4, AUTH-8.5).
 -/
-def consume {tenant : TenantId} (now : Timestamp) (invitation : Invitation tenant)
-    (presented : PresentedSecret) :
-    Except AuthError (Invitation tenant × InvitationGrant tenant) :=
+def verify {tenant : TenantId} (now : Timestamp) (invitation : Invitation tenant)
+    (presented : PresentedSecret) : Except AuthError (InvitationGrant tenant) :=
   if invitation.state != .pending then .error .invitationNotPending
   else if invitation.expiresAt ≤ now then .error .invitationExpired
   else if !invitation.tokenDigest.accepts presented then .error .unknownToken
   else
-    .ok ({ invitation with state := .accepted, consumedAt := some now },
-      { invitation := invitation.id, address := invitation.address,
-        metadata := invitation.metadata })
+    .ok
+      { invitation := invitation.id
+        address := invitation.address
+        metadata := invitation.metadata }
+
+/-- What spending one leaves behind. Written under compare-and-set, so two requests racing to
+accept one invitation produce one account (AUTH-8.5). -/
+def markConsumed {tenant : TenantId} (now : Timestamp) (invitation : Invitation tenant) :
+    Invitation tenant :=
+  { invitation with state := .accepted, consumedAt := some now }
+
+/-- Single use: acceptance moves the invitation to `accepted`, and a second attempt finds it no
+longer pending (AUTH-8.5). -/
+def consume {tenant : TenantId} (now : Timestamp) (invitation : Invitation tenant)
+    (presented : PresentedSecret) :
+    Except AuthError (Invitation tenant × InvitationGrant tenant) :=
+  (verify now invitation presented).map fun grant => (markConsumed now invitation, grant)
 
 end Invitation
 

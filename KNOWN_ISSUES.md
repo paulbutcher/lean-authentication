@@ -78,6 +78,25 @@ The residue is that a change to how leancurl is called would pass the suite and 
 production. The metadata length check in `test/Tests/Postmark.lean` guards the one case where
 that would otherwise be silent.
 
+## Neither backend has migrations (AUTH-15.7.1)
+
+Each backend ships a `createSchemaSql` that is a `CREATE TABLE IF NOT EXISTS` script run at
+startup. It creates; it does not migrate. `IF NOT EXISTS` does nothing to a table that already
+exists, so a column added in a later release is silently absent from every database created
+before it, and the failure appears when a statement first names the column rather than when the
+schema is applied. Neither backend records which version of the schema it is at, so nothing can
+detect the mismatch either.
+
+This was found the way it will always be found: adding `attempts.invitation_id` passed against a
+fresh SQLite database and failed against a Postgres database an earlier stage had created.
+
+The current answer is that the schema has no deployments to preserve, so a change to it means
+recreating the database. That answer expires at the first release.
+
+AUTH-15.7.1 requires Postgres migrations to ship with the backend via `leanmigrate`, which exists
+(`paulbutcher/leanmigrate`, `v0.3.1`) and was not adopted in stage 3. It should be adopted before
+a schema change has to preserve anything, and the next stage adds tables for federated identity.
+
 ## Rate limiting is not enforced (AUTH-14.1.1)
 
 Nothing limits how often a sign-in may be begun, and there is no `RateLimiter` port yet.

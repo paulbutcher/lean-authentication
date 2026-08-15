@@ -68,6 +68,7 @@ def createSchemaSql : String := "
       requester_ip TEXT,
       requester_agent TEXT,
       requester_location TEXT,
+      invitation_id TEXT,
       PRIMARY KEY (tenant, id)
     );
     CREATE UNIQUE INDEX IF NOT EXISTS auth_attempts_live

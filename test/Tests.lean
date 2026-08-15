@@ -14,5 +14,6 @@ import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres
 import Tests.Response
+import Tests.Signup
 import Tests.Sql
 import Tests.Template

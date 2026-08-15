@@ -29,8 +29,12 @@ def dialect : Dialect where
   table name := "auth." ++ name
 
 /--
-The initial migration. It is idempotent so that a client running it at startup, rather than
-through a migration tool, gets the same result as one that does not.
+The schema. Idempotent, so a client running it at startup gets the same result as one that runs
+it through a migration tool.
+
+It creates; it does not migrate. A database created by an earlier version keeps that version's
+columns, because `IF NOT EXISTS` does nothing to a table that already exists. That is survivable
+only while the schema has no deployments to preserve; see `KNOWN_ISSUES.md`.
 -/
 def createSchemaSql : String := "
   CREATE SCHEMA IF NOT EXISTS auth;
@@ -74,6 +78,7 @@ def createSchemaSql : String := "
     requester_ip text,
     requester_agent text,
     requester_location text,
+    invitation_id text,
     PRIMARY KEY (tenant, id)
   );
   CREATE UNIQUE INDEX IF NOT EXISTS attempts_live
