@@ -1,0 +1,476 @@
+/-
+Copyright (c) 2026 Paul Butcher. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+-/
+import Authentication
+import AuthenticationSql.Connection
+
+/-!
+One implementation of `AuthStore` for every SQL backend (AUTH-15.2.2).
+
+The statements live here rather than in each backend because compare-and-set is where a bug is
+a vulnerability, and two independent implementations would be two independent chances to get it
+wrong. What a backend still owns is its schema and migrations (AUTH-15.7.1), its dialect, and
+the driver adapter; none of those can change what a conditional update tests.
+
+Timestamps are epoch integers throughout, which removes a dialect difference rather than
+abstracting one (AUTH-15.7.4).
+-/
+
+namespace Authentication.Sql
+
+private def accounts : TableName := ⟨"accounts"⟩
+private def accountEmails : TableName := ⟨"account_emails"⟩
+private def attempts : TableName := ⟨"attempts"⟩
+private def sessions : TableName := ⟨"sessions"⟩
+private def invitations : TableName := ⟨"invitations"⟩
+private def audit : TableName := ⟨"audit"⟩
+
+/-- The tables these statements read and write, as the bare names `Dialect.table` qualifies. A
+backend's schema has to create all of them and nothing here depends on what it calls them. -/
+def tableNames : List String :=
+  [accounts.value, accountEmails.value, attempts.value, sessions.value, invitations.value,
+    audit.value]
+
+/-! ## Encoding between domain values and columns -/
+
+private def domainText (d : Domain) : String := d.render
+
+/-- The stored text is what `Domain.render` produced, and a rendered domain has no empty label,
+so splitting on the separator recovers the labels it was built from. -/
+private def domainOfText (text : String) : Domain := ⟨text.splitOn "."⟩
+
+private def digestBytesText (d : Digest) : String := Codec.Base64Url.encodeString d.bytes
+
+private def digestOf (keyId : String) (bytes : String) : Digest :=
+  ⟨⟨keyId⟩, (Codec.Base64Url.decodeString bytes).getD []⟩
+
+private def timeOf (i : Int) : Timestamp := ⟨i⟩
+
+private def timeText (t : Timestamp) : Int := t.epochSeconds
+
+private def phaseText : AttemptPhase → String
+  | .pending => "pending"
+  | .revealed => "revealed"
+  | .completed => "completed"
+  | .expired => "expired"
+  | .abandoned => "abandoned"
+
+private def phaseOf : String → AttemptPhase
+  | "revealed" => .revealed
+  | "completed" => .completed
+  | "expired" => .expired
+  | "abandoned" => .abandoned
+  | _ => .pending
+
+private def statusText : AccountStatus → String
+  | .active => "active"
+  | .deactivated => "deactivated"
+
+private def statusOf (text : String) : AccountStatus :=
+  if text == "deactivated" then .deactivated else .active
+
+private def invitationStateText : InvitationState → String
+  | .pending => "pending"
+  | .accepted => "accepted"
+  | .revoked => "revoked"
+
+private def invitationStateOf : String → InvitationState
+  | "accepted" => .accepted
+  | "revoked" => .revoked
+  | _ => .pending
+
+private def actorRef : Actor → Option String
+  | .anonymous => none
+  | .client reference => some reference
+
+private def actorOf : Option String → Actor
+  | none => .anonymous
+  | some reference => .client reference
+
+/-! ## Audit events
+
+An audit event is stored as a kind, the identifier it concerns, and a detail. Decoding is
+partial only in the sense that a row written by a different version of this table would not be
+recognised; every row this implementation writes reads back. -/
+
+private def auditColumns {tenant : TenantId} : AuditEvent tenant → String × String × String
+  | .attemptCreated attempt => ("attempt-created", attempt.value, "")
+  | .linkOpened attempt device =>
+    ("link-opened", attempt.value, match device with | .same => "same" | .cross => "cross")
+  | .codeEntered attempt outcome =>
+    ("code-entered", attempt.value,
+      match outcome with
+      | .accepted => "accepted"
+      | .rejected => "rejected"
+      | .budgetExhausted => "budget-exhausted")
+  | .attemptAbandoned attempt reason =>
+    ("attempt-abandoned", attempt.value,
+      match reason with
+      | .superseded => "superseded"
+      | .codeBudgetExhausted => "code-budget-exhausted")
+  | .sessionIssued attempt => ("session-issued", attempt.value, "")
+  | .invitationConsumed invitation => ("invitation-consumed", invitation.value, "")
+  | .signInRejected outcome =>
+    ("sign-in-rejected", "",
+      match outcome with
+      | .linkSent => "link-sent"
+      | .unknownAddress => "unknown-address"
+      | .notInvited => "not-invited"
+      | .domainNotAllowed => "domain-not-allowed"
+      | .addressSuppressed => "address-suppressed"
+      | .throttled => "throttled"
+      | .malformedAddress => "malformed-address")
+
+private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
+    Option (AuditEvent tenant) :=
+  match kind with
+  | "attempt-created" => some (.attemptCreated ⟨subject⟩)
+  | "link-opened" => some (.linkOpened ⟨subject⟩ (if detail == "same" then .same else .cross))
+  | "code-entered" =>
+    some (.codeEntered ⟨subject⟩
+      (if detail == "accepted" then .accepted
+        else if detail == "budget-exhausted" then .budgetExhausted
+        else .rejected))
+  | "attempt-abandoned" =>
+    some (.attemptAbandoned ⟨subject⟩
+      (if detail == "superseded" then .superseded else .codeBudgetExhausted))
+  | "session-issued" => some (.sessionIssued ⟨subject⟩)
+  | "invitation-consumed" => some (.invitationConsumed ⟨subject⟩)
+  | "sign-in-rejected" =>
+    some (.signInRejected
+      (if detail == "link-sent" then .linkSent
+        else if detail == "unknown-address" then .unknownAddress
+        else if detail == "not-invited" then .notInvited
+        else if detail == "domain-not-allowed" then .domainNotAllowed
+        else if detail == "address-suppressed" then .addressSuppressed
+        else if detail == "throttled" then .throttled
+        else .malformedAddress))
+  | _ => none
+
+/-! ## Running statements -/
+
+variable {m : Type → Type}
+
+private structure Ctx (m : Type → Type) where
+  dialect : Dialect
+  conn : SqlConnection m
+
+private def Ctx.rows [Monad m] (c : Ctx m) (s : Statement) : m (Array SqlRow) :=
+  c.conn.rows c.dialect s
+
+private def Ctx.first [Monad m] (c : Ctx m) (s : Statement) : m (Option SqlRow) :=
+  c.conn.first c.dialect s
+
+private def Ctx.affected [Monad m] (c : Ctx m) (s : Statement) : m Nat :=
+  c.conn.affected c.dialect s
+
+private def Ctx.run [Monad m] (c : Ctx m) (s : Statement) : m Unit := do
+  discard (c.affected s)
+
+/-! ## Accounts -/
+
+private def accountSelect : Statement :=
+  sql!"SELECT id, identity_local, identity_domain, sending_local, sending_domain, status,
+         created_at
+       FROM {accounts}"
+
+private def readAccount [Monad m] {tenant : TenantId} (c : Ctx m) (row : SqlRow) :
+    m (Account tenant) := do
+  let id := row.text 0
+  let emails ← c.rows
+    sql!"SELECT local, domain FROM {accountEmails}
+         WHERE tenant = {tenant.value} AND account_id = {id}"
+  pure
+    { id := ⟨id⟩
+      identity := ⟨row.text 1, domainOfText (row.text 2)⟩
+      primaryEmail := ⟨row.text 3, domainOfText (row.text 4)⟩
+      additionalEmails := (emails.map fun e => ⟨e.text 0, domainOfText (e.text 1)⟩).toList
+      status := statusOf (row.text 5)
+      createdAt := timeOf (row.int 6) }
+
+private def accountByIdentity [Monad m] (c : Ctx m) (tenant : TenantId)
+    (identity : NormalisedEmail) : m (Option (Account tenant)) := do
+  let row ← c.first (accountSelect ++
+    sql!" WHERE tenant = {tenant.value} AND identity_local = {identity.localPart}
+            AND identity_domain = {domainText identity.domain}")
+  match row with
+  | none => pure none
+  | some row => some <$> readAccount c row
+
+/-- `ON CONFLICT DO NOTHING` and a row count is how the duplicate is detected, because it is one
+statement: a caller that selects first and inserts second races, and the race is the duplicate
+account (AUTH-15.4.2). -/
+private def createAccount [Monad m] (c : Ctx m) (tenant : TenantId) (account : Account tenant) :
+    m (Except StoreError (AccountCreated tenant)) :=
+  c.conn.transaction do
+    let inserted ← c.affected
+      sql!"INSERT INTO {accounts}
+             (tenant, id, identity_local, identity_domain, sending_local, sending_domain,
+              status, created_at)
+           VALUES ({tenant.value}, {account.id.value}, {account.identity.localPart},
+             {domainText account.identity.domain}, {account.primaryEmail.localPart},
+             {domainText account.primaryEmail.domain}, {statusText account.status},
+             {timeText account.createdAt})
+           ON CONFLICT DO NOTHING"
+    if inserted == 0 then
+      return .error .duplicateAccount
+    for email in account.additionalEmails do
+      c.run
+        sql!"INSERT INTO {accountEmails} (tenant, account_id, local, domain)
+             VALUES ({tenant.value}, {account.id.value}, {email.localPart},
+               {domainText email.domain})
+             ON CONFLICT DO NOTHING"
+    let counted ← c.first sql!"SELECT COUNT(*) FROM {accounts} WHERE tenant = {tenant.value}"
+    pure (.ok { account, firstInTenant := (counted.map (·.int 0)).getD 0 == 1 })
+
+/-! ## Attempts -/
+
+private def attemptSelect : Statement :=
+  sql!"SELECT id, address_local, address_domain, phase, magic_key, magic_bytes, code_key,
+         code_bytes, emailed_key, emailed_bytes, nonce_key, nonce_bytes, failed_entries,
+         expires_at, requester_ip, requester_agent, requester_location
+       FROM {attempts}"
+
+private def readAttempt {tenant : TenantId} (row : SqlRow) : AttemptState tenant :=
+  { id := ⟨row.text 0⟩
+    address := ⟨row.text 1, domainOfText (row.text 2)⟩
+    phase := phaseOf (row.text 3)
+    magicToken := digestOf (row.text 4) (row.text 5)
+    revealedCode := digestOf (row.text 6) (row.text 7)
+    emailedCode :=
+      match row.text? 8, row.text? 9 with
+      | some k, some b => some (digestOf k b)
+      | _, _ => none
+    bindingNonce := digestOf (row.text 10) (row.text 11)
+    failedCodeEntries := row.nat 12
+    expiresAt := timeOf (row.int 13)
+    requester :=
+      { ip := row.text? 14
+        userAgent := row.text? 15
+        approximateLocation := row.text? 16 } }
+
+private def attemptById [Monad m] (c : Ctx m) (tenant : TenantId) (id : AttemptId tenant) :
+    m (Option (AttemptState tenant)) := do
+  let row ← c.first (attemptSelect ++
+    sql!" WHERE tenant = {tenant.value} AND id = {id.value}")
+  pure (row.map readAttempt)
+
+private def startAttempt [Monad m] (c : Ctx m) (tenant : TenantId)
+    (attempt : AttemptState tenant) : m (List (AttemptId tenant)) :=
+  c.conn.transaction do
+    let identity := attempt.address.normalise
+    let live ← c.rows
+      sql!"SELECT id FROM {attempts}
+           WHERE tenant = {tenant.value} AND identity_local = {identity.localPart}
+             AND identity_domain = {domainText identity.domain}
+             AND phase IN ('pending', 'revealed')"
+    c.run
+      sql!"UPDATE {attempts} SET phase = 'abandoned'
+           WHERE tenant = {tenant.value} AND identity_local = {identity.localPart}
+             AND identity_domain = {domainText identity.domain}
+             AND phase IN ('pending', 'revealed')"
+    c.run
+      sql!"INSERT INTO {attempts}
+             (tenant, id, address_local, address_domain, identity_local, identity_domain, phase,
+              magic_key, magic_bytes, code_key, code_bytes, emailed_key, emailed_bytes,
+              nonce_key, nonce_bytes, failed_entries, expires_at, requester_ip, requester_agent,
+              requester_location)
+           VALUES ({tenant.value}, {attempt.id.value}, {attempt.address.localPart},
+             {domainText attempt.address.domain}, {identity.localPart},
+             {domainText identity.domain}, {phaseText attempt.phase},
+             {attempt.magicToken.keyId.value}, {digestBytesText attempt.magicToken},
+             {attempt.revealedCode.keyId.value}, {digestBytesText attempt.revealedCode},
+             {attempt.emailedCode.map (·.keyId.value)},
+             {attempt.emailedCode.map digestBytesText},
+             {attempt.bindingNonce.keyId.value}, {digestBytesText attempt.bindingNonce},
+             {attempt.failedCodeEntries}, {timeText attempt.expiresAt},
+             {attempt.requester.ip}, {attempt.requester.userAgent},
+             {attempt.requester.approximateLocation})"
+    pure ((live.map fun r => (⟨r.text 0⟩ : AttemptId tenant)).toList)
+
+/-- The condition names the phase and the failed-entry count the caller believed it was acting
+on. Anything that changed either of them since the read wins, and this update reports that it
+did not happen (AUTH-15.4.1). -/
+private def commitAttempt [Monad m] (c : Ctx m) (tenant : TenantId)
+    (expected next : AttemptState tenant) : m Bool := do
+  let affected ← c.affected
+    sql!"UPDATE {attempts}
+         SET phase = {phaseText next.phase}, failed_entries = {next.failedCodeEntries}
+         WHERE tenant = {tenant.value} AND id = {expected.id.value}
+           AND phase = {phaseText expected.phase}
+           AND failed_entries = {expected.failedCodeEntries}"
+  pure (affected == 1)
+
+/-! ## Sessions -/
+
+private def sessionSelect : Statement :=
+  sql!"SELECT id, account_id, digest_key, digest_bytes, created_at, last_seen_at,
+         idle_expires_at, absolute_expires_at, user_agent, location, revoked_at
+       FROM {sessions}"
+
+private def readSession {tenant : TenantId} (row : SqlRow) : Session tenant :=
+  { id := ⟨row.text 0⟩
+    account := ⟨row.text 1⟩
+    identifierDigest := digestOf (row.text 2) (row.text 3)
+    createdAt := timeOf (row.int 4)
+    lastSeenAt := timeOf (row.int 5)
+    idleExpiresAt := timeOf (row.int 6)
+    absoluteExpiresAt := timeOf (row.int 7)
+    userAgent := row.text? 8
+    approximateLocation := row.text? 9
+    revokedAt := (row.int? 10).map timeOf }
+
+private def createSession [Monad m] (c : Ctx m) (tenant : TenantId) (session : Session tenant) :
+    m Unit :=
+  c.run
+    sql!"INSERT INTO {sessions}
+           (tenant, id, account_id, digest_key, digest_bytes, created_at, last_seen_at,
+            idle_expires_at, absolute_expires_at, user_agent, location, revoked_at)
+         VALUES ({tenant.value}, {session.id.value}, {session.account.value},
+           {session.identifierDigest.keyId.value}, {digestBytesText session.identifierDigest},
+           {timeText session.createdAt}, {timeText session.lastSeenAt},
+           {timeText session.idleExpiresAt}, {timeText session.absoluteExpiresAt},
+           {session.userAgent}, {session.approximateLocation},
+           {session.revokedAt.map timeText})"
+
+/-- Expiry and revocation are tested in the statement, so correctness does not depend on a
+sweeper having run (AUTH-15.4.3). -/
+private def liveSession (now : Timestamp) : Statement :=
+  sql!" AND revoked_at IS NULL AND idle_expires_at > {timeText now}
+        AND absolute_expires_at > {timeText now}"
+
+private def sessionByDigest [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
+    (digest : Digest) : m (Option (Session tenant)) := do
+  let row ← c.first (sessionSelect ++
+    sql!" WHERE tenant = {tenant.value} AND digest_key = {digest.keyId.value}
+            AND digest_bytes = {digestBytesText digest}" ++ liveSession now)
+  pure (row.map readSession)
+
+private def sessionsForAccount [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
+    (account : AccountId tenant) : m (List (Session tenant)) := do
+  let rows ← c.rows (sessionSelect ++
+    sql!" WHERE tenant = {tenant.value} AND account_id = {account.value}" ++ liveSession now)
+  pure (rows.map readSession).toList
+
+private def revokeSession [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
+    (id : SessionId tenant) : m Unit :=
+  c.run
+    sql!"UPDATE {sessions} SET revoked_at = {timeText now}
+         WHERE tenant = {tenant.value} AND id = {id.value} AND revoked_at IS NULL"
+
+private def revokeSessionsForAccount [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
+    (account : AccountId tenant) : m Unit :=
+  c.run
+    sql!"UPDATE {sessions} SET revoked_at = {timeText now}
+         WHERE tenant = {tenant.value} AND account_id = {account.value} AND revoked_at IS NULL"
+
+/-! ## Invitations -/
+
+private def invitationSelect : Statement :=
+  sql!"SELECT id, address_local, address_domain, token_key, token_bytes, metadata, state,
+         expires_at, created_by, consumed_at
+       FROM {invitations}"
+
+private def readInvitation {tenant : TenantId} (row : SqlRow) : Invitation tenant :=
+  { id := ⟨row.text 0⟩
+    address := ⟨row.text 1, domainOfText (row.text 2)⟩
+    tokenDigest := digestOf (row.text 3) (row.text 4)
+    metadata := ⟨row.text 5⟩
+    state := invitationStateOf (row.text 6)
+    expiresAt := timeOf (row.int 7)
+    createdBy := actorOf (row.text? 8)
+    consumedAt := (row.int? 9).map timeOf }
+
+private def createInvitation [Monad m] (c : Ctx m) (tenant : TenantId)
+    (invitation : Invitation tenant) : m Unit :=
+  c.run
+    sql!"INSERT INTO {invitations}
+           (tenant, id, address_local, address_domain, token_key, token_bytes, metadata, state,
+            expires_at, created_by, consumed_at)
+         VALUES ({tenant.value}, {invitation.id.value}, {invitation.address.localPart},
+           {domainText invitation.address.domain}, {invitation.tokenDigest.keyId.value},
+           {digestBytesText invitation.tokenDigest}, {invitation.metadata.payload},
+           {invitationStateText invitation.state}, {timeText invitation.expiresAt},
+           {actorRef invitation.createdBy}, {invitation.consumedAt.map timeText})"
+
+private def invitationById [Monad m] (c : Ctx m) (tenant : TenantId) (id : InvitationId tenant) :
+    m (Option (Invitation tenant)) := do
+  let row ← c.first (invitationSelect ++
+    sql!" WHERE tenant = {tenant.value} AND id = {id.value}")
+  pure (row.map readInvitation)
+
+private def commitInvitation [Monad m] (c : Ctx m) (tenant : TenantId)
+    (expected next : Invitation tenant) : m Bool := do
+  let affected ← c.affected
+    sql!"UPDATE {invitations}
+         SET state = {invitationStateText next.state},
+           consumed_at = {next.consumedAt.map timeText}
+         WHERE tenant = {tenant.value} AND id = {expected.id.value}
+           AND state = {invitationStateText expected.state}"
+  pure (affected == 1)
+
+private def invitationsForTenant [Monad m] (c : Ctx m) (tenant : TenantId) :
+    m (List (Invitation tenant)) := do
+  let rows ← c.rows (invitationSelect ++ sql!" WHERE tenant = {tenant.value}")
+  pure (rows.map readInvitation).toList
+
+/-! ## Audit -/
+
+private def appendAudit [Monad m] (c : Ctx m) (tenant : TenantId) (entry : AuditEntry tenant) :
+    m Unit :=
+  let (kind, subject, detail) := auditColumns entry.event
+  c.run
+    sql!"INSERT INTO {audit} (tenant, occurred_at, actor_ref, kind, subject, detail)
+         VALUES ({tenant.value}, {timeText entry.occurredAt}, {actorRef entry.actor}, {kind},
+           {subject}, {detail})"
+
+private def auditEntries [Monad m] (c : Ctx m) (tenant : TenantId) :
+    m (List (AuditEntry tenant)) := do
+  let rows ← c.rows
+    sql!"SELECT occurred_at, actor_ref, kind, subject, detail
+         FROM {audit} WHERE tenant = {tenant.value} ORDER BY seq"
+  pure (rows.toList.filterMap fun row =>
+    (auditEventOf tenant (row.text 2) (row.text 3) (row.text 4)).map fun event =>
+      { occurredAt := timeOf (row.int 0), actor := actorOf (row.text? 1), event })
+
+private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
+  c.conn.transaction do
+    c.run sql!"DELETE FROM {accountEmails} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {accounts} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {attempts} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {sessions} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {invitations} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {audit} WHERE tenant = {tenant.value}"
+
+/-- The port, for any dialect and any driver that can bind parameters and report rows affected
+(AUTH-15.2.2). -/
+def sqlAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : AuthStore m :=
+  let c : Ctx m := { dialect, conn }
+  { accountByIdentity := accountByIdentity c
+    createAccount := createAccount c
+    startAttempt := startAttempt c
+    attemptById := attemptById c
+    commitAttempt := commitAttempt c
+    createSession := createSession c
+    sessionByDigest := sessionByDigest c
+    sessionsForAccount := sessionsForAccount c
+    revokeSession := revokeSession c
+    revokeSessionsForAccount := revokeSessionsForAccount c
+    createInvitation := createInvitation c
+    invitationById := invitationById c
+    commitInvitation := commitInvitation c
+    invitationsForTenant := invitationsForTenant c
+    appendAudit := appendAudit c
+    auditEntries := auditEntries c
+    deleteTenant := deleteTenant c }
+
+/-- The transactional capability (AUTH-15.3), for a driver whose `transaction` nests or whose
+backend does not need it to. The block runs against the same connection, which is the price
+AUTH-15.3.5 requires be stated: the library's tables live in the client's own database. -/
+def sqlTransactionalStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) :
+    TransactionalStore m :=
+  { store := sqlAuthStore dialect conn
+    runInTx := fun action => conn.transaction (action (sqlAuthStore dialect conn)) }
+
+end Authentication.Sql

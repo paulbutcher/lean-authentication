@@ -9,6 +9,29 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    # The reference backend has to pass the conformance suite, so the suite needs a server.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: leanauthentication
+          POSTGRES_PASSWORD: leanauthentication
+          POSTGRES_DB: leanauthentication
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      AUTHENTICATION_POSTGRES: >-
+        host=localhost port=5432 dbname=leanauthentication
+        user=leanauthentication password=leanauthentication
+
     steps:
       - uses: actions/checkout@v5
+      - name: Install libpq
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev
       - uses: leanprover/lean-action@v1

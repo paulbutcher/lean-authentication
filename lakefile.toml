@@ -8,6 +8,11 @@ name = "leansqlite"
 git = "https://github.com/leanprover/leansqlite"
 rev = "v4.33.0"
 
+[[require]]
+name = "leanpostgres"
+git = "https://github.com/paulbutcher/leanpostgres"
+rev = "v0.4.0"
+
 [leanOptions]
 autoImplicit = false
 relaxedAutoImplicit = false
@@ -17,7 +22,13 @@ warningAsError = true
 name = "Authentication"
 
 [[lean_lib]]
+name = "AuthenticationSql"
+
+[[lean_lib]]
 name = "AuthenticationSqlite"
+
+[[lean_lib]]
+name = "AuthenticationPostgres"
 
 [[lean_lib]]
 name = "Tests"

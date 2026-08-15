@@ -1,5 +1,18 @@
 FROM mcr.microsoft.com/devcontainers/base:resolute
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        cmake \
+        lsb-release \
+        libpq-dev \
+        libxml2-dev \
+        pkg-config \
+        postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 USER vscode
 ENV PATH="/home/vscode/.local/bin:/home/vscode/.elan/bin:${PATH}"
 RUN curl https://elan.lean-lang.org/elan-init.sh -sSf | sh -s -- -y

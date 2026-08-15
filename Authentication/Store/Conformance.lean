@@ -88,6 +88,12 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let person := addressOf "person"
   let other := addressOf "other"
 
+  -- A backend that persists has to start from the same place as one that does not, or the suite
+  -- passes once and then reports uniqueness failures that are its own leftovers.
+  store.deleteTenant alpha
+  store.deleteTenant beta
+  store.deleteTenant doomed
+
   -- Accounts, uniqueness, and the first-account signal.
   let created ← store.createAccount alpha (sampleAccount alpha "account-1" person)
   let firstReported :=
