@@ -12,10 +12,8 @@ while staying in the same database so that enlisting in the client's transaction
 possible (AUTH-15.7.1). Timestamps are `bigint` epoch seconds, matching the `Clock` port
 (AUTH-15.7.4).
 
-There is no connection here. `Authentication.Sql.sqlAuthStore` needs a driver that can bind
-parameters and report rows affected, and no such driver exists for this toolchain; see
-`KNOWN_ISSUES.md`. What this module supplies is everything that does not need one, so that
-adding a driver is an adapter and not a backend.
+There is no connection here, so that everything a client might want without one, the dialect and
+the schema, is reachable without libpq. The driver adapter is in `AuthenticationPostgres.Store`.
 -/
 
 namespace Authentication.Postgres

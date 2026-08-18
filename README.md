@@ -8,7 +8,8 @@ falls short of it and why.
 
 ## State of the implementation
 
-Every stage of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
+Every stage of the delivery order in REQUIREMENTS §19, and the optional HTTP integration target
+of AUTH-13.2: the domain model and pure state machine
 with the theorems of AUTH-16.1, then the `AuthStore` port, its conformance suite, the SQLite
 backend, and the cross-device flow running end to end with no server, then one SQL
 implementation shared by both backends, with Postgres and SQLite each passing the suite, then
@@ -49,12 +50,15 @@ limiting, then the session management surface with bounce ingestion and suppress
   is decided once, in the core, rather than twice in provider vocabulary: a transient failure that
   suppressed would lock people out of their own accounts because a mail server was busy.
 
+- `AuthenticationHttp/` is the optional HTTP integration target: the sign-in routes, and nothing
+  administrative. It has no route that creates an invitation or revokes a session, and cannot
+  have one, because the library owns identity and nothing about permissions, so it has no basis
+  on which to authorise the caller (AUTH-13.2).
+
 Identifiers are indexed by the tenant they belong to (`AccountId tenant`), so an expression
 that crosses tenants does not typecheck.
 
-Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the requirements for it. The
-optional HTTP integration target of AUTH-13.2 is not built, and `KNOWN_ISSUES.md` records what
-that leaves to the client.
+Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the requirements for it.
 
 ## Applying the schema
 
@@ -75,6 +79,37 @@ machinery than the problem justifies.
 
 `Sqlite.openInMemory` applies the schema, because it starts empty every time and the tests run
 against it. `Sqlite.openFile` deliberately does not.
+
+## Mounting the sign-in routes
+
+```lean
+def routes : Std.Http.Server.StatelessHandler :=
+  Authentication.Http.handler
+    { ports, tenant := fun t => pure (myConfigFor t) }
+```
+
+The paths are the ones the mail already points at (`/t/<tenant>/signin`, `/signin/link`,
+`/signin/confirm`, `/signin/code`, `/invitation/accept`), so `BaseUrl` and the routes cannot
+disagree. `Config.pages` replaces the rendering; the defaults are unstyled and semantic.
+
+Wiring them gets three things a client doing its own routing has to build:
+
+- **A response whose shape says nothing.** Every outcome of a sign-in request leaves with the
+  same status, the same headers and one `Set-Cookie`, including the outcomes that did no work and
+  therefore have no cookie to set: those get one drawn the same way and of the same shape
+  (AUTH-14.2.4.1). The service equalised the time; this is the rest of it.
+- **An anti-forgery token bound to the attempt cookie** (AUTH-14.1.4), derived from the binding
+  nonce the cookie carries, so there is no second record to keep and no way to post the form from
+  another origin.
+- **`returnTo` validated** against the tenant's allowlist before anything redirects to it
+  (AUTH-9.8).
+
+Two things are still yours. The source address used for the per-IP rate limit is read from the
+`ForwardedFor` extension and nowhere else, so a deployment behind a proxy installs
+`Middleware.forwardedRemoteAddr` with a header it actually trusts; reading `X-Forwarded-For`
+unconditionally would hand that limit to anyone willing to set a header. And bot mitigation is a
+port, `HumanCheck`, whose default admits everyone: set `humanProofField` to your provider's field
+name and give `Ports.humanCheck` something that asks them.
 
 ## Receiving bounces
 

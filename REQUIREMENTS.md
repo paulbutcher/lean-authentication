@@ -56,8 +56,9 @@ implementation and review can refer to them.
     the ecosystem before depending on it; if nothing suitable does, stop and ask rather than
     writing one here.
   - `lean-telemetry` for tracing and metrics.
-  - `lean-routing`, `lean-html`, `lean-htmx`, `lean-forms`, `lean-middleware` for the optional
-    HTTP integration target only.
+  - `lean-routing`, `lean-html` and `lean-middleware` for the optional HTTP integration target
+    only. `lean-forms` and `lean-htmx` were expected here too and are not used: `Middleware`
+    already decodes a form body, and nothing the sign-in routes do needs a partial page update.
   - `plausible` (leanprover-community) for property tests.
 - **AUTH-2.4** Any cryptography needed (HMAC-SHA256, SHA-256, base64url, constant-time
   comparison, and the AWS Signature Version 4 derivation built on the first two) MUST be
@@ -620,6 +621,11 @@ channel the client did not intend.
   regardless of outcome: identical HTTP status, identical header set, and response latency
   normalised to a fixed floor. Sending mail takes measurably longer than not sending it, so a
   policy choice would otherwise be undone by a timing oracle it never intended to open.
+- **AUTH-14.2.4.1** "Identical header set" includes `Set-Cookie`. An outcome that begins no
+  attempt has no attempt cookie to set, so the integration target MUST set one anyway, drawn the
+  same way and of the same shape, or its absence reports the outcome the rest of the response was
+  equalised to hide. A credential submitted against such a cookie MUST fail exactly as one
+  submitted against an attempt that has expired.
 - **AUTH-14.2.5** The policy MUST NOT be able to disable rate limiting, bypass suppression, or
   suppress audit logging. It chooses what is said, not what is done.
 - **AUTH-14.2.6** The audit log and telemetry MUST always record the true outcome, whatever the

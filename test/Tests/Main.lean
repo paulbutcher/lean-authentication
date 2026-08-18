@@ -19,6 +19,8 @@ def main : IO UInt32 := do
     ++ (← Tests.RateLimit.serviceChecks) ++ (← Tests.RateLimit.floorChecks) ++ (← Tests.Session.checks) ++ (← Tests.Session.lifetimeChecks)
     ++ (← Tests.Session.accountChecks) ++ Tests.Session.returnToChecks
     ++ Tests.Suppression.parserChecks ++ (← Tests.Suppression.checks)
+    ++ (← Tests.Http.checks) ++ (← Tests.Http.equalisationChecks) ++ (← Tests.Http.returnToChecks)
+    ++ (← Tests.Http.humanCheckChecks)
     ++ (← Tests.Ses.flowChecks) ++ (← Tests.Postgres.conformanceChecks)
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do

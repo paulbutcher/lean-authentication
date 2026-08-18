@@ -1,0 +1,364 @@
+/-
+Copyright (c) 2026 Paul Butcher. All rights reserved.
+Released under Apache 2.0 license as described in the file LICENSE.
+-/
+import AuthenticationHttp.Pages
+import Middleware
+import Routing
+
+/-!
+The sign-in routes (AUTH-13.2).
+
+Only the sign-in routes. There is no route here that creates an invitation, revokes a session,
+changes a policy or clears a suppression, and there cannot be: the library owns identity and
+nothing about permissions, so it has no basis on which to decide who may call one. Those stay
+plain service functions the client calls once it has decided (§13).
+
+Two things the service cannot do on its own are done here, because both are properties of an
+HTTP response and the service has none:
+
+- The mechanical shape of the answer to a sign-in request is equalised (AUTH-14.2.4). Every
+  outcome leaves with the same status, the same headers, and one `Set-Cookie`, which means the
+  refusals set a cookie too. The service already equalised the time.
+- The redirect target is validated against the tenant's allowlist before anything is sent to it
+  (AUTH-9.8).
+-/
+
+namespace Authentication.Http
+
+open Std Http
+open Std.Async
+open Std.Http.Server
+open Authentication.Service
+
+/-! ## Configuration -/
+
+structure Config where
+  ports : Ports IO
+  /-- The client's own lookup. A tenant it does not recognise is a 404, decided by the client
+  because the library holds nothing about a tenant beyond its identifier (AUTH-4.1.3). -/
+  tenant : (t : TenantId) → IO (Option (TenantConfig t))
+  pages : Pages := .standard
+  /-- The form field a bot-mitigation challenge writes its answer into, if one is configured
+  (AUTH-14.1.8). The name is the provider's (`cf-turnstile-response`, `h-captcha-response`,
+  `g-recaptcha-response`), which is why it is a setting and not a constant. Leaving it unset
+  reads no field, which is right only alongside the default `HumanCheck` that admits everyone.
+  The field itself belongs to whatever the client's page put in the form. -/
+  humanProofField : Option String := none
+
+/-! ## Reading the request -/
+
+private def formBody (request : Request Body.Stream) : ContextAsync URI.Query := do
+  let declared :=
+    match request.line.headers.get? Header.Name.contentType with
+    | some value =>
+      value.value.trimAscii.toString.toLower.startsWith "application/x-www-form-urlencoded"
+    | none => false
+  if declared then
+    pure (Middleware.ContentType.FormUrlEncoded.parse (← request.body.readAll (α := String)))
+  else pure .empty
+
+private def queryOf (request : Request Body.Stream) : URI.Query := request.line.uri.query
+
+private def cookieNamed (request : Request Body.Stream) (name : String) : Option String :=
+  match request.line.headers.get? Middleware.Header.Name.cookie with
+  | none => none
+  | some value => (Middleware.parseCookieHeader value.value).lookup name
+
+/--
+What the request says about whoever made it. The address is taken from the `ForwardedFor`
+extension a client installs `Middleware.forwardedRemoteAddr` to establish, and from nowhere
+else: reading `X-Forwarded-For` here unconditionally would hand the source-address rate limit
+scope (AUTH-14.1.1) to anyone willing to set a header. Its absence is a proxy that did not say,
+which the limiter already treats as a request that still counts against every other scope.
+-/
+private def requesterOf (request : Request Body.Stream) : RequestContext :=
+  { ip := (request.extensions.get Middleware.ForwardedFor).map (·.addr)
+    userAgent := (request.line.headers.get? (Header.Name.mk "user-agent")).map (·.value) }
+
+/-! ## Writing the response -/
+
+private def headerValue (text : String) : Header.Value :=
+  (Header.Value.ofString? text).getD default
+
+private def setCookieName : Header.Name := Middleware.Header.Name.setCookie
+
+/-- The attributes are the `CookieSpec`'s, which the core fixed and no caller can weaken
+(AUTH-9.2). The lifetime travels as `Max-Age` rather than `Expires` so that nothing here depends
+on a date format. -/
+private def setCookie (now : Timestamp) (spec : CookieSpec) : Header.Value :=
+  (Middleware.SetCookie.serialize
+    { name := spec.name
+      value := spec.value
+      attrs :=
+        { path := some spec.path
+          maxAge := some (spec.expiresAt.epochSeconds - now.epochSeconds)
+          secure := spec.secure
+          httpOnly := spec.httpOnly
+          sameSite := some (match spec.sameSite with
+            | .lax => .lax
+            | .strict => .strict
+            | .none => .none) } }).2
+
+private def clearCookie (name : String) (path : String) : Header.Value :=
+  (Middleware.SetCookie.serialize
+    { name
+      value := ""
+      attrs := { path := some path, maxAge := some 0, httpOnly := true, secure := true } }).2
+
+/--
+Every response these routes produce, so that the header set does not vary with the outcome and
+an authentication page is never framed (AUTH-14.1.5, AUTH-14.2.4). `no-store` is here because a
+page showing a verification code has no business in a shared cache or a back button.
+-/
+private def finish (status : Status) (body : String) (cookies : List Header.Value)
+    (location : Option String := none) : ContextAsync (Response Body.Any) := do
+  let response ← Response.withStatus status |>.html body
+  let headers := response.line.headers
+    |>.insert (Header.Name.mk "x-frame-options") (headerValue "DENY")
+    |>.insert (Header.Name.mk "x-content-type-options") (headerValue "nosniff")
+    |>.insert (Header.Name.mk "referrer-policy") (headerValue "no-referrer")
+    |>.insert (Header.Name.mk "cache-control") (headerValue "no-store")
+  let headers := cookies.foldl (fun hs value => hs.insert setCookieName value) headers
+  let headers := match location with
+    | none => headers
+    | some target => headers.insert (Header.Name.mk "location") (headerValue target)
+  pure { response with line := { response.line with headers } }
+
+/-! ## The attempt cookie, and the token bound to it -/
+
+private def cookieParts {tenant : TenantId} (value : String) :
+    Option (AttemptId tenant × CredentialValue) :=
+  match value.splitOn ":" with
+  | [attempt, nonce] => some (⟨attempt⟩, ⟨nonce⟩)
+  | _ => none
+
+/--
+The anti-forgery token (AUTH-14.1.4). Derived from the binding nonce in the attempt cookie under
+the current pepper, so it is bound to that cookie by construction rather than by a second record
+somebody has to keep: a form posted from another origin cannot carry the right one, because the
+origin that would have to read the cookie cannot.
+-/
+private def formToken (peppers : PepperRing) (nonce : CredentialValue) : String :=
+  Codec.Base64Url.encodeString (peppers.current.derive "form-token" nonce)
+
+private def tokenAccepted (peppers : PepperRing) (nonce : CredentialValue)
+    (offered : Option String) : Bool :=
+  match offered with
+  | none => false
+  | some offered => Crypto.bytesEqual offered.toUTF8 (formToken peppers nonce).toUTF8
+
+/-! ## Handlers -/
+
+private def notFoundPage (config : Config) : ContextAsync (Response Body.Any) :=
+  finish .notFound config.pages.unknown []
+
+private def signInPath (tenant : TenantId) : String :=
+  BaseUrl.tenantPath tenant ++ "/signin"
+
+private def codePath (tenant : TenantId) : String :=
+  BaseUrl.tenantPath tenant ++ "/signin/code"
+
+private def confirmPath (tenant : TenantId) : String :=
+  BaseUrl.tenantPath tenant ++ "/signin/confirm"
+
+/-- Resolves the tenant, or answers the way an unrouted path would. A tenant the client does not
+recognise must be indistinguishable from one that does not exist. -/
+private def withTenant (config : Config) (raw : String)
+    (body : (t : TenantId) → TenantConfig t → ContextAsync (Response Body.Any)) :
+    ContextAsync (Response Body.Any) := do
+  let tenant : TenantId := ⟨raw⟩
+  match ← (config.tenant tenant : IO _) with
+  | none => notFoundPage config
+  | some tenantConfig => body tenant tenantConfig
+
+private def signInForm (config : Config) (raw : String) : Routing.Result := fun request =>
+  withTenant config raw fun tenant tenantConfig => do
+    finish .ok
+      (config.pages.signIn
+        { tenantName := tenantConfig.displayName
+          action := signInPath tenant
+          returnTo := (queryOf request).get "returnTo" })
+      []
+
+/--
+Beginning a sign-in. Every path out of here answers `200`, with the same headers and exactly one
+`Set-Cookie`, whatever happened (AUTH-14.2.4).
+
+That last part is why a refusal sets a cookie at all. `begin` produces no attempt for an address
+it will not send to, so there is no cookie to set and the missing header would say so; the
+decoy is drawn the same way a real one is and is the same shape, and a code typed against it
+fails the way a code typed against an expired attempt fails.
+-/
+private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+  withTenant config raw fun tenant tenantConfig => do
+    let form ← formBody request
+    let returnTo := (form.get "returnTo").orElse fun _ => (queryOf request).get "returnTo"
+    let requester := requesterOf request
+    let now ← (Clock.now : IO Timestamp)
+    let (outcome, response) ← (do
+      match EmailAddress.parse ((form.get "email").getD "") with
+      | .error _ =>
+        -- The address never reaches `begin`, which takes a parsed one. It is still the policy
+        -- that decides what is said, so that a client which chose silence keeps it.
+        let response ← config.ports.responsePolicy.respond tenant .malformedAddress
+        pure (({} : Outcome tenant), response)
+      | .ok address =>
+        Service.begin config.ports tenantConfig address requester
+          (config.humanProofField.bind form.get) : IO _)
+    let cookie ← match outcome.setCookies.head? with
+      | some spec => pure spec
+      | none => (do
+        let attempt ← RandomBytes.draw 12
+        let nonce ← RandomBytes.draw 16
+        let value := match attempt, nonce with
+          | .ok attempt, .ok nonce =>
+            Codec.Base64Url.encodeString attempt ++ ":" ++ Codec.Base64Url.encodeString nonce
+          | _, _ => ":"
+        pure (CookieSpec.forAttempt tenant value
+          (now.advance tenantConfig.attemptLifetime.duration)) : IO _)
+    let token := (cookieParts (tenant := tenant) cookie.value).map fun parts =>
+      formToken config.ports.peppers parts.2
+    finish .ok
+      (config.pages.sent
+        { tenantName := tenantConfig.displayName
+          action := codePath tenant
+          token
+          returnTo }
+        response.message)
+      [setCookie now cookie]
+
+/-- Opening the magic link: a `GET` that issues nothing and consumes nothing (AUTH-5.2.1). The
+code the cross-device page shows is derived from the token the link carried, which is why it can
+be shown again without ever having been stored (AUTH-5.2.2). -/
+private def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+  withTenant config raw fun tenant tenantConfig => do
+    let query := queryOf request
+    let attempt : AttemptId tenant := ⟨(query.get "attempt").getD ""⟩
+    let token : CredentialValue := ⟨(query.get "token").getD ""⟩
+    let held := (cookieNamed request "auth_attempt").bind (cookieParts (tenant := tenant))
+    match ← (Service.openLink config.ports tenantConfig attempt token (held.map (·.2)) : IO _) with
+    | .error _ => notFoundPage config
+    | .ok outcome =>
+      let context : PageContext :=
+        { tenantName := tenantConfig.displayName
+          action := confirmPath tenant
+          token := held.map fun parts => formToken config.ports.peppers parts.2 }
+      if outcome.views.contains .confirmSignIn then
+        finish .ok (config.pages.confirm context) []
+      else if outcome.views.contains .showVerificationCode then
+        finish .ok
+          (config.pages.code context (displayCode (revealedCode config.ports.peppers token))) []
+      else notFoundPage config
+
+/-- What a completed attempt turns into: the session cookie the service built, the attempt
+cookie cleared, and a redirect to a target the tenant allowed (AUTH-9.8). -/
+private def settled (config : Config) (tenant : TenantId) (tenantConfig : TenantConfig tenant)
+    (now : Timestamp) (outcome : Outcome tenant) (returnTo : Option String)
+    (context : PageContext) : ContextAsync (Response Body.Any) :=
+  match outcome.session with
+  | some _ =>
+    finish .seeOther ""
+      (outcome.setCookies.map (setCookie now)
+        ++ outcome.clearCookies.map fun (name, path) => clearCookie name path)
+      (some (tenantConfig.returnTo returnTo))
+  | none =>
+    match outcome.refused with
+    | some reason => finish .ok (config.pages.refused context reason) []
+    | none =>
+      match outcome.views.filterMap (fun view =>
+        match view with | .codeRejected remaining => some remaining | _ => none) with
+      | remaining :: _ => finish .ok (config.pages.codeRejected context remaining) []
+      | [] => notFoundPage config
+
+/-- The same-device `POST` (AUTH-5.2.1). The attempt comes from the cookie rather than the form,
+so a request that does not hold the cookie has no attempt to name. -/
+private def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+  withTenant config raw fun tenant tenantConfig => do
+    let form ← formBody request
+    match (cookieNamed request "auth_attempt").bind (cookieParts (tenant := tenant)) with
+    | none => notFoundPage config
+    | some (attempt, nonce) =>
+      if !tokenAccepted config.ports.peppers nonce (form.get "token") then
+        finish .forbidden config.pages.unknown []
+      else
+        let now ← (Clock.now : IO Timestamp)
+        match ← (Service.confirmSignIn config.ports tenantConfig attempt nonce : IO _) with
+        | .error _ => notFoundPage config
+        | .ok outcome =>
+          settled config tenant tenantConfig now outcome (form.get "returnTo")
+            { tenantName := tenantConfig.displayName
+              action := confirmPath tenant
+              token := some (formToken config.ports.peppers nonce) }
+
+/-- The code typed back into the browser the flow began in. -/
+private def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+  withTenant config raw fun tenant tenantConfig => do
+    let form ← formBody request
+    match (cookieNamed request "auth_attempt").bind (cookieParts (tenant := tenant)) with
+    | none => notFoundPage config
+    | some (attempt, nonce) =>
+      if !tokenAccepted config.ports.peppers nonce (form.get "token") then
+        finish .forbidden config.pages.unknown []
+      else
+        let now ← (Clock.now : IO Timestamp)
+        let returnTo := form.get "returnTo"
+        let typed := (form.get "code").getD ""
+        let requester := requesterOf request
+        let context : PageContext :=
+          { tenantName := tenantConfig.displayName
+            action := codePath tenant
+            token := some (formToken config.ports.peppers nonce)
+            returnTo }
+        match ← (Service.submitCode config.ports tenantConfig attempt typed nonce requester :
+            IO _) with
+        | .error _ => finish .ok (config.pages.codeRejected context 0) []
+        | .ok outcome => settled config tenant tenantConfig now outcome returnTo context
+
+/-- Accepting an invitation begins an attempt for the invited address and runs the whole of §5,
+so a link opened on a phone signs nobody in on that phone (AUTH-8.4). -/
+private def acceptInvitation [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+  withTenant config raw fun tenant tenantConfig => do
+    let query := queryOf request
+    let invitation : InvitationId tenant := ⟨(query.get "invitation").getD ""⟩
+    let token : CredentialValue := ⟨(query.get "token").getD ""⟩
+    let now ← (Clock.now : IO Timestamp)
+    match ← (Service.acceptInvitation config.ports tenantConfig invitation token
+        (requesterOf request) : IO _) with
+    | .error _ => notFoundPage config
+    | .ok outcome =>
+      let cookie := outcome.setCookies.head?
+      let token := (cookie.bind fun spec => cookieParts (tenant := tenant) spec.value).map
+        fun parts => formToken config.ports.peppers parts.2
+      finish .ok
+        (config.pages.sent
+          { tenantName := tenantConfig.displayName, action := codePath tenant, token }
+          .checkYourMail)
+        (cookie.toList.map (setCookie now))
+
+/-! ## The table -/
+
+route_table SignIn [
+  form := "/t/:tenant:String/signin",
+  link := "/t/:tenant:String/signin/link",
+  confirm := "/t/:tenant:String/signin/confirm",
+  code := "/t/:tenant:String/signin/code",
+  accept := "/t/:tenant:String/invitation/accept"
+]
+
+/-- The paths are the ones `BaseUrl.url` builds, because the mail has to arrive somewhere these
+routes answer (AUTH-4.3.2). -/
+def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route Routing.Result) :=
+  [ .get SignIn.patterns.form (signInForm config),
+    .post SignIn.patterns.form (beginSignIn config),
+    .get SignIn.patterns.link (openLink config),
+    .post SignIn.patterns.confirm (confirmSignIn config),
+    .post SignIn.patterns.code (submitCode config),
+    .get SignIn.patterns.accept (acceptInvitation config) ]
+
+/-- Mount this wherever the application's own router is. Nothing here is a `Middleware`: these
+are routes, and what wraps them is the client's. -/
+def handler [Clock IO] [RandomBytes IO] (config : Config) : StatelessHandler :=
+  Routing.toHandler (routes config) (fun _ => notFoundPage config)
+
+end Authentication.Http

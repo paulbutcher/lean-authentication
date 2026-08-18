@@ -127,6 +127,7 @@ def serviceChecks : IO (List (String × Bool)) := do
       responsePolicy := SignInResponsePolicy.silent IO
       limiter := Sql.rateLimiter Sqlite.dialect (Sqlite.connection db)
       responseFloor := ResponseFloor.immediate IO
+      humanCheck := HumanCheck.unchecked IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
                                 secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
   let person := address "person@example.com"
@@ -168,6 +169,7 @@ def floorChecks : IO (List (String × Bool)) := do
       responsePolicy := SignInResponsePolicy.silent IO
       limiter := Sql.rateLimiter Sqlite.dialect (Sqlite.connection db)
       responseFloor := recording floored
+      humanCheck := HumanCheck.unchecked IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
                                 secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
   let person := address "person.com"

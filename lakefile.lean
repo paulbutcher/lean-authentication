@@ -27,6 +27,20 @@ require leancrypto from git
 require leanaws from git
   "https://github.com/paulbutcher/lean-aws" @ "v0.1.0"
 
+/-
+The HTTP integration target's dependencies, and only its (AUTH-2.3). `lean-forms` and `lean-htmx`
+are not among them: `Middleware.params` already decodes a form body, and nothing these routes do
+needs a partial page update.
+-/
+require routing from git
+  "https://github.com/paulbutcher/lean-routing" @ "v0.6.0"
+
+require html from git
+  "https://github.com/paulbutcher/lean-html" @ "v0.6.0"
+
+require middleware from git
+  "https://github.com/paulbutcher/lean-middleware" @ "v0.5.0"
+
 @[default_target]
 lean_lib Authentication
 
@@ -44,6 +58,9 @@ lean_lib AuthenticationPostmark
 
 @[default_target]
 lean_lib AuthenticationSes
+
+@[default_target]
+lean_lib AuthenticationHttp
 
 /--
 Tests live in the `test/` subproject rather than here, so that a project depending on this one is

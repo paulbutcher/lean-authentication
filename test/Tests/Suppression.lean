@@ -155,6 +155,7 @@ private def portsOn (db : SQLite) : Ports IO :=
     responsePolicy := SignInResponsePolicy.silent IO
     limiter := RateLimiter.unlimited IO
     responseFloor := ResponseFloor.immediate IO
+    humanCheck := HumanCheck.unchecked IO
     peppers }
 
 private def config : TenantConfig tenant :=

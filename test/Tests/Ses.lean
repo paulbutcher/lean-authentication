@@ -175,6 +175,7 @@ def flowChecks : IO (List (String × Bool)) := do
       responsePolicy := SignInResponsePolicy.silent IO
       limiter := RateLimiter.unlimited IO
       responseFloor := ResponseFloor.immediate IO
+      humanCheck := HumanCheck.unchecked IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
                                 secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
   let _ ← begin ports tenantConfig (address "person@example.com") { ip := some "198.51.100.7" }

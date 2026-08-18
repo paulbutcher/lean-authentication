@@ -95,27 +95,37 @@ comparing the ids this library ships against the ones recorded. That was weighed
 machinery than the problem justifies while a loud, if late, failure is the alternative. It should
 be revisited if the schema starts changing often enough that clients fall behind in practice.
 
-## The response is equalised in time but not in shape (AUTH-14.2.4)
+## The response is equalised only for a client that uses the shipped routes (AUTH-14.2.4)
 
-Beginning a sign-in now leaves through a configurable floor, so the outcome that sent mail and the
-outcome that did nothing take the same time to answer. That closes the half of AUTH-14.2.4 this
-library can close on its own.
+`AuthenticationHttp` answers every outcome of a sign-in request with the same status, the same
+headers and one `Set-Cookie`, and `begin` already equalised the time. A client that mounts those
+routes has AUTH-14.2.4.
 
-The other half, an identical HTTP status and an identical header set whatever the outcome, belongs
-to the layer that turns an `Outcome` into a response, and that layer does not exist yet: the
-optional HTTP integration target of AUTH-13.2 is not built. A client wiring its own routes today
-can undo the response policy by answering one outcome with a 200 and another with a 404, and
-nothing here would notice.
+A client that wires its own routes against the service does not, and nothing here would notice:
+it can answer one outcome with a 200 and another with a 404, or set a cookie on the outcomes that
+made an attempt and not on the ones that did not. `TenantConfig.returnTo` (AUTH-9.8) is offered
+the same way. The service returns what a correct response needs and cannot make anything use it.
 
-The same absence leaves two other things offered rather than enforced. `TenantConfig.returnTo`
-validates a redirect target against the tenant's allowlist (AUTH-9.8), and the session cookie
-arrives in `Outcome.setCookies` with the attributes AUTH-9.2 fixes, but nothing makes a client
-call the first or set the second. Both are the shape they are so that using them is easier than
-not, which is as far as a library with no route layer can go.
+That is inherent rather than pending. The alternative is a library that owns the response, which
+would mean owning the framework, and AUTH-2.2 rules that out for good reasons of its own.
 
 The floor is also only on `begin`. A code submission takes a different amount of time against a
 live attempt than against one that has expired, which is a smaller oracle against a much smaller
 budget, but it is one.
+
+## Bot mitigation is a port with no implementation (AUTH-14.1.8)
+
+`HumanCheck` is asked on the send endpoint before anything else happens, and the default
+implementation admits everyone. That is the honest default: a library that shipped a check would
+be shipping a provider, and AUTH-2.4 says such a choice is not this library's to make.
+
+A deployment that configures nothing has not met AUTH-14.1.8. What stands between it and a flood
+is the rate limiter, which is real but blunt: the limits of AUTH-14.1.1 bound how much mail a
+flood produces, not how much traffic reaches the endpoint.
+
+Closing it is a client writing about ten lines against whichever provider it uses: the answer
+arrives in a form field the route is told the name of, and the port hands it to the client's
+`verify`. Nothing in the library needs to change.
 
 ## Delivery events are parsed but not authenticated (AUTH-12.1.1)
 
@@ -135,8 +145,12 @@ URL can suppress any address in that tenant, which is a denial of sign-in that l
 that simply never arrives. `README.md` says so where a client wiring the endpoint will read it,
 and the module comments say so where a client reading the parser will.
 
-What would close it is the HTTP integration target of AUTH-13.2 shipping the two endpoints with
-their verification, at which point the client would have nothing to skip.
+What would close it is the integration target shipping the two endpoints with their verification.
+It ships the sign-in routes and not these, because the two providers need different things and
+only one of them is reachable today: Postmark's check is a credential comparison, but SNS signs
+each post with RSA over a certificate the receiver fetches, and no RSA verification exists for
+this toolchain. Adding one is a question about `leancrypto` rather than a change here, and it has
+not been asked.
 
 ## Client-initiated sends are not rate limited (AUTH-14.1.1)
 

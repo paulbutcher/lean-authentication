@@ -6,6 +6,7 @@ import Authentication.Attempt
 import Authentication.Pepper
 import Authentication.Port.Clock
 import Authentication.Port.Email
+import Authentication.Port.HumanCheck
 import Authentication.Port.Latency
 import Authentication.Port.RateLimiter
 import Authentication.Response
@@ -36,6 +37,7 @@ structure Ports (m : Type → Type) where
   responsePolicy : SignInResponsePolicy m
   limiter : RateLimiter m
   responseFloor : ResponseFloor m
+  humanCheck : HumanCheck m
   peppers : PepperRing
 
 /--
@@ -314,10 +316,18 @@ undone by a difference in shape (AUTH-14.2).
 -/
 def begin {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (address : EmailAddress)
-    (requester : RequestContext) : m (Outcome tenant × SignInResponse) :=
+    (requester : RequestContext) (humanProof : Option String := none) :
+    m (Outcome tenant × SignInResponse) :=
   -- Every outcome leaves through the same floor, including the ones that did no work at all.
   ports.responseFloor.normalise do
   let now ← Clock.now
+  -- Ahead of the limiter, and deliberately: a request that fails the challenge spends none of
+  -- the address's send budget. The other order would let anyone deny a person their own sign-in
+  -- by failing challenges against their address all day (AUTH-14.1.8).
+  if !(← ports.humanCheck.verify requester humanProof) then
+    ports.store.appendAudit tenant ⟨now, .anonymous, .signInRejected .throttled⟩
+    let response ← ports.responsePolicy.respond tenant .throttled
+    return ({}, response)
   if !(← ports.limiter.admit .send now (limitScopes tenant address requester)) then
     -- The true outcome is recorded whatever the person was told (AUTH-14.2.6), and the policy
     -- chooses only what is said: it cannot decline to be limited (AUTH-14.2.5).

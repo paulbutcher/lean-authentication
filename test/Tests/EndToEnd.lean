@@ -88,6 +88,7 @@ def checks : IO (List (String × Bool)) := do
       responsePolicy := SignInResponsePolicy.silent IO
       limiter := RateLimiter.unlimited IO
       responseFloor := ResponseFloor.immediate IO
+      humanCheck := HumanCheck.unchecked IO
       peppers }
   let person := addressOf "person@example.com"
 
