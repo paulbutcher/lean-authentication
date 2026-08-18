@@ -24,13 +24,14 @@ private def accountEmails : TableName := ⟨"account_emails"⟩
 private def attempts : TableName := ⟨"attempts"⟩
 private def sessions : TableName := ⟨"sessions"⟩
 private def invitations : TableName := ⟨"invitations"⟩
+private def deliveryRecords : TableName := ⟨"delivery_records"⟩
 private def audit : TableName := ⟨"audit"⟩
 
 /-- The tables these statements read and write, as the bare names `Dialect.table` qualifies. A
 backend's schema has to create all of them and nothing here depends on what it calls them. -/
 def tableNames : List String :=
   [accounts.value, accountEmails.value, attempts.value, sessions.value, invitations.value,
-    audit.value]
+    deliveryRecords.value, audit.value]
 
 /-! ## Encoding between domain values and columns -/
 
@@ -88,6 +89,24 @@ private def actorOf : Option String → Actor
   | none => .anonymous
   | some reference => .client reference
 
+private def suppressionText : SuppressionReason → String
+  | .hardBounce => "hard-bounce"
+  | .spamComplaint => "spam-complaint"
+  | .client => "client"
+
+private def suppressionOf : String → SuppressionReason
+  | "spam-complaint" => .spamComplaint
+  | "client" => .client
+  | _ => .hardBounce
+
+private def normalisedText (address : NormalisedEmail) : String :=
+  address.localPart ++ "@" ++ domainText address.domain
+
+/-- A normalised address is already folded and its local part keeps whatever quoting it had, so
+what `normalisedText` wrote is what the parser accepts back. -/
+private def normalisedOf (text : String) : Option NormalisedEmail :=
+  (EmailAddress.parse text).toOption.map (·.normalise)
+
 /-! ## Audit events
 
 An audit event is stored as a kind, the identifier it concerns, and a detail. Decoding is
@@ -119,8 +138,25 @@ private def auditColumns {tenant : TenantId} : AuditEvent tenant → String × S
       | .notInvited => "not-invited"
       | .domainNotAllowed => "domain-not-allowed"
       | .addressSuppressed => "address-suppressed"
+      | .accountDeactivated => "account-deactivated"
       | .throttled => "throttled"
       | .malformedAddress => "malformed-address")
+  | .sessionRevoked session => ("session-revoked", session.value, "")
+  | .accountSessionsRevoked account reason =>
+    ("account-sessions-revoked", account.value,
+      match reason with
+      | .requested => "requested"
+      | .primaryEmailChanged => "primary-email-changed"
+      | .accountDeactivated => "account-deactivated"
+      | .recovery => "recovery")
+  | .primaryEmailChanged account => ("primary-email-changed", account.value, "")
+  | .accountDeactivated account => ("account-deactivated", account.value, "")
+  | .accountReactivated account => ("account-reactivated", account.value, "")
+  | .addressSuppressed address reason =>
+    ("address-suppressed", normalisedText address,
+      suppressionText reason)
+  | .suppressionCleared address =>
+    ("suppression-cleared", normalisedText address, "")
 
 private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
     Option (AuditEvent tenant) :=
@@ -144,8 +180,22 @@ private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
         else if detail == "not-invited" then .notInvited
         else if detail == "domain-not-allowed" then .domainNotAllowed
         else if detail == "address-suppressed" then .addressSuppressed
+        else if detail == "account-deactivated" then .accountDeactivated
         else if detail == "throttled" then .throttled
         else .malformedAddress))
+  | "session-revoked" => some (.sessionRevoked ⟨subject⟩)
+  | "account-sessions-revoked" =>
+    some (.accountSessionsRevoked ⟨subject⟩
+      (if detail == "primary-email-changed" then .primaryEmailChanged
+        else if detail == "account-deactivated" then .accountDeactivated
+        else if detail == "recovery" then .recovery
+        else .requested))
+  | "primary-email-changed" => some (.primaryEmailChanged ⟨subject⟩)
+  | "account-deactivated" => some (.accountDeactivated ⟨subject⟩)
+  | "account-reactivated" => some (.accountReactivated ⟨subject⟩)
+  | "address-suppressed" =>
+    (normalisedOf subject).map fun address => .addressSuppressed address (suppressionOf detail)
+  | "suppression-cleared" => (normalisedOf subject).map (.suppressionCleared ·)
   | _ => none
 
 /-! ## Running statements -/
@@ -197,6 +247,44 @@ private def accountByIdentity [Monad m] (c : Ctx m) (tenant : TenantId)
   match row with
   | none => pure none
   | some row => some <$> readAccount c row
+
+private def accountById [Monad m] (c : Ctx m) (tenant : TenantId) (id : AccountId tenant) :
+    m (Option (Account tenant)) := do
+  let row ← c.first (accountSelect ++ sql!" WHERE tenant = {tenant.value} AND id = {id.value}")
+  match row with
+  | none => pure none
+  | some row => some <$> readAccount c row
+
+/-- An `UPDATE` cannot say `ON CONFLICT`, so the collision is looked for first and inside the
+transaction. The unique index is still what enforces uniqueness; the lookup is what turns the
+case a client will actually hit into a typed error rather than a driver exception. -/
+private def setPrimaryEmail [Monad m] (c : Ctx m) (tenant : TenantId) (id : AccountId tenant)
+    (address : EmailAddress) : m (Except StoreError Unit) :=
+  c.conn.transaction do
+    let identity := address.normalise
+    let holder ← c.first
+      sql!"SELECT id FROM {accounts}
+           WHERE tenant = {tenant.value} AND identity_local = {identity.localPart}
+             AND identity_domain = {domainText identity.domain}"
+    match holder.map (·.text 0) with
+    | some existing =>
+      if existing != id.value then return .error .duplicateAccount
+    | none => pure ()
+    let affected ← c.affected
+      sql!"UPDATE {accounts}
+           SET identity_local = {identity.localPart},
+             identity_domain = {domainText identity.domain},
+             sending_local = {address.localPart},
+             sending_domain = {domainText address.domain}
+           WHERE tenant = {tenant.value} AND id = {id.value}"
+    pure (if affected == 1 then .ok () else .error .unknownAccount)
+
+private def setAccountStatus [Monad m] (c : Ctx m) (tenant : TenantId) (id : AccountId tenant)
+    (status : AccountStatus) : m (Except StoreError Unit) := do
+  let affected ← c.affected
+    sql!"UPDATE {accounts} SET status = {statusText status}
+         WHERE tenant = {tenant.value} AND id = {id.value}"
+  pure (if affected == 1 then .ok () else .error .unknownAccount)
 
 /-- `ON CONFLICT DO NOTHING` and a row count is how the duplicate is detected, because it is one
 statement: a caller that selects first and inserts second races, and the race is the duplicate
@@ -354,6 +442,17 @@ private def sessionsForAccount [Monad m] (c : Ctx m) (tenant : TenantId) (now : 
     sql!" WHERE tenant = {tenant.value} AND account_id = {account.value}" ++ liveSession now)
   pure (rows.map readSession).toList
 
+/-- The absolute expiry is not touched, and the statement will not resurrect a session that has
+already gone: a revoked or expired row is not one this can move. -/
+private def touchSession [Monad m] (c : Ctx m) (tenant : TenantId) (id : SessionId tenant)
+    (lastSeenAt idleExpiresAt : Timestamp) : m Unit :=
+  c.run
+    sql!"UPDATE {sessions}
+         SET last_seen_at = {timeText lastSeenAt}, idle_expires_at = {timeText idleExpiresAt}
+         WHERE tenant = {tenant.value} AND id = {id.value} AND revoked_at IS NULL
+           AND idle_expires_at > {timeText lastSeenAt}
+           AND absolute_expires_at > {timeText lastSeenAt}"
+
 private def revokeSession [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
     (id : SessionId tenant) : m Unit :=
   c.run
@@ -419,6 +518,80 @@ private def invitationsForTenant [Monad m] (c : Ctx m) (tenant : TenantId) :
   let rows ← c.rows (invitationSelect ++ sql!" WHERE tenant = {tenant.value}")
   pure (rows.map readInvitation).toList
 
+/-! ## Delivery history and suppression -/
+
+private def deliverySelect : Statement :=
+  sql!"SELECT identity_local, identity_domain, suppressed_by, failures, first_failure_at,
+         last_failure_at, detail
+       FROM {deliveryRecords}"
+
+private def readDelivery {tenant : TenantId} (row : SqlRow) : DeliveryRecord tenant :=
+  { address := ⟨row.text 0, domainOfText (row.text 1)⟩
+    suppressedBy := (row.text? 2).map suppressionOf
+    failures := row.nat 3
+    firstFailureAt := timeOf (row.int 4)
+    lastFailureAt := timeOf (row.int 5)
+    detail := row.text 6 }
+
+private def deliveryRecord [Monad m] (c : Ctx m) (tenant : TenantId)
+    (address : NormalisedEmail) : m (Option (DeliveryRecord tenant)) := do
+  let row ← c.first (deliverySelect ++
+    sql!" WHERE tenant = {tenant.value} AND identity_local = {address.localPart}
+            AND identity_domain = {domainText address.domain}")
+  pure (row.map readDelivery)
+
+/-- Counting and suppressing in one statement, because two bounces arriving together would
+otherwise be counted as one, and the count is what the report of AUTH-12.5 is made of. A
+suppression already in force is kept: `COALESCE` takes the stored reason when the new failure
+supplies none, which is what makes a later soft bounce unable to lift a hard one. -/
+private def recordDeliveryFailure [Monad m] (c : Ctx m) (tenant : TenantId)
+    (address : NormalisedEmail) (failure : DeliveryFailure) (now : Timestamp) (detail : String) :
+    m (DeliveryRecord tenant) :=
+  c.conn.transaction do
+    let reason := failure.suppression.map suppressionText
+    c.run
+      sql!"INSERT INTO {deliveryRecords}
+             (tenant, identity_local, identity_domain, suppressed_by, failures,
+              first_failure_at, last_failure_at, detail)
+           VALUES ({tenant.value}, {address.localPart}, {domainText address.domain}, {reason},
+             1, {timeText now}, {timeText now}, {detail})
+           ON CONFLICT (tenant, identity_local, identity_domain) DO UPDATE
+             SET suppressed_by =
+                   COALESCE(EXCLUDED.suppressed_by, {deliveryRecords}.suppressed_by),
+               failures = {deliveryRecords}.failures + 1,
+               last_failure_at = {timeText now},
+               detail = {detail}"
+    let stored ← deliveryRecord c tenant address
+    pure (stored.getD (DeliveryRecord.first address failure now detail))
+
+private def suppressAddress [Monad m] (c : Ctx m) (tenant : TenantId) (address : NormalisedEmail)
+    (now : Timestamp) (detail : String) : m (DeliveryRecord tenant) :=
+  c.conn.transaction do
+    c.run
+      sql!"INSERT INTO {deliveryRecords}
+             (tenant, identity_local, identity_domain, suppressed_by, failures,
+              first_failure_at, last_failure_at, detail)
+           VALUES ({tenant.value}, {address.localPart}, {domainText address.domain}, 'client',
+             0, {timeText now}, {timeText now}, {detail})
+           ON CONFLICT (tenant, identity_local, identity_domain) DO UPDATE
+             SET suppressed_by = 'client', last_failure_at = {timeText now}, detail = {detail}"
+    let stored ← deliveryRecord c tenant address
+    pure (stored.getD
+      { address, suppressedBy := some .client, failures := 0, firstFailureAt := now,
+        lastFailureAt := now, detail })
+
+private def allDeliveryRecords [Monad m] (c : Ctx m) (tenant : TenantId) :
+    m (List (DeliveryRecord tenant)) := do
+  let rows ← c.rows (deliverySelect ++ sql!" WHERE tenant = {tenant.value}")
+  pure (rows.map readDelivery).toList
+
+private def clearSuppression [Monad m] (c : Ctx m) (tenant : TenantId)
+    (address : NormalisedEmail) : m Unit :=
+  c.run
+    sql!"DELETE FROM {deliveryRecords}
+         WHERE tenant = {tenant.value} AND identity_local = {address.localPart}
+           AND identity_domain = {domainText address.domain}"
+
 /-! ## Audit -/
 
 private def appendAudit [Monad m] (c : Ctx m) (tenant : TenantId) (entry : AuditEntry tenant) :
@@ -445,6 +618,7 @@ private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
     c.run sql!"DELETE FROM {attempts} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {sessions} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {invitations} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {deliveryRecords} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {audit} WHERE tenant = {tenant.value}"
 
 /-- The port, for any dialect and any driver that can bind parameters and report rows affected
@@ -453,18 +627,27 @@ def sqlAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : AuthSt
   let c : Ctx m := { dialect, conn }
   { accountByIdentity := accountByIdentity c
     createAccount := createAccount c
+    accountById := accountById c
+    setPrimaryEmail := setPrimaryEmail c
+    setAccountStatus := setAccountStatus c
     startAttempt := startAttempt c
     attemptById := attemptById c
     commitAttempt := commitAttempt c
     createSession := createSession c
     sessionByDigest := sessionByDigest c
     sessionsForAccount := sessionsForAccount c
+    touchSession := touchSession c
     revokeSession := revokeSession c
     revokeSessionsForAccount := revokeSessionsForAccount c
     createInvitation := createInvitation c
     invitationById := invitationById c
     commitInvitation := commitInvitation c
     invitationsForTenant := invitationsForTenant c
+    recordDeliveryFailure := recordDeliveryFailure c
+    suppressAddress := suppressAddress c
+    deliveryRecord := deliveryRecord c
+    deliveryRecords := allDeliveryRecords c
+    clearSuppression := clearSuppression c
     appendAudit := appendAudit c
     auditEntries := auditEntries c
     deleteTenant := deleteTenant c }

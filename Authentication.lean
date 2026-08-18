@@ -19,6 +19,7 @@ import Authentication.Port.RateLimiter
 import Authentication.Response
 import Authentication.Service
 import Authentication.Store
+import Authentication.Suppression
 import Authentication.Store.Conformance
 import Authentication.Template
 import Authentication.Tenant

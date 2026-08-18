@@ -18,6 +18,15 @@ inductive SignupRejection where
   | notInvited
   deriving DecidableEq, Repr, Inhabited
 
+/-- Why an address that has proven itself was not signed in. Signup policy is one reason and a
+deactivated account is the other; they are held apart because only the first is a decision about
+whether an account may be made, and only the second concerns one that already exists
+(AUTH-7.6, AUTH-9.6). -/
+inductive SignInRefusal where
+  | signup (reason : SignupRejection)
+  | accountDeactivated
+  deriving DecidableEq, Repr, Inhabited
+
 inductive SignupDecision where
   | permitted
   | rejected (reason : SignupRejection)

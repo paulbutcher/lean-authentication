@@ -74,7 +74,55 @@ def forAttempt (tenant : TenantId) (value : String) (expiresAt : Timestamp) : Co
     httpOnly := true
     sameSite := .lax }
 
+/-- The attributes AUTH-9.2 fixes, fixed here for the same reason `forAttempt` fixes its own: no
+caller can weaken them because no caller supplies them. The path is the tenant's, so one
+tenant's cookie is never offered to another's routes (AUTH-4.3.3). -/
+def forSession (tenant : TenantId) (value : String) (expiresAt : Timestamp) : CookieSpec :=
+  { name := "auth_session"
+    value
+    path := BaseUrl.tenantPath tenant
+    expiresAt
+    secure := true
+    httpOnly := true
+    sameSite := .lax }
+
 end CookieSpec
+
+/-!
+## Post-sign-in redirect targets (AUTH-9.8)
+
+An unvalidated `returnTo` is an open redirect, and an open redirect is worth more to a phisher
+than the sign-in page it hangs off: the link really does come from the tenant's own domain.
+-/
+
+namespace ReturnTo
+
+/-- What an allowlist entry is matched against: everything before a query or a fragment. What
+follows is carried through, so an allowlisted page keeps the parameters it was asked for. -/
+def base (target : String) : String :=
+  String.ofList (target.toList.takeWhile fun c => c != '?' && c != '#')
+
+/-- `//evil.example` is another origin wearing a path's clothing, and a backslash is one after a
+browser has normalised it. -/
+def isLocalPath (target : String) : Bool :=
+  target.startsWith "/" && !target.startsWith "//" && !target.toList.contains '\\'
+
+/--
+An entry beginning with `/` is a path and matches only itself. Any other entry is an origin and
+matches itself or anything below it, with the separator part of what is compared: without it an
+allowlist naming `https://app.example.com` admits `https://app.example.com.evil.test`.
+-/
+def permits (allowlist : List String) (target : String) : Bool :=
+  let candidate := base target
+  if isLocalPath target then allowlist.contains candidate
+  else allowlist.any fun entry =>
+    !entry.startsWith "/" && (candidate == entry || candidate.startsWith (entry ++ "/"))
+
+def resolve (allowlist : List String) (fallback : String) : Option String → String
+  | some target => if permits allowlist target then target else fallback
+  | none => fallback
+
+end ReturnTo
 
 /-- Configurable per tenant within a bounded range (AUTH-5.2.8). The bounds are carried as
 proofs so an out-of-range lifetime cannot be constructed at all. -/
@@ -110,8 +158,20 @@ structure TenantConfig (tenant : TenantId) where
   sessionAbsoluteLifetime : Duration := Duration.days 90
   invitationLifetime : Duration := Duration.days 7
   returnToAllowlist : List String := []
+  /-- Where a sign-in lands when it asked for nowhere, or asked for somewhere it may not go. -/
+  defaultReturnTo : String := "/"
+  /-- How stale the last-seen time may become before validating a session writes it back. The
+  idle timeout of AUTH-9.4 has to slide or it is merely a shorter absolute lifetime, but sliding
+  it on every request makes a write out of every read; this is what that costs. -/
+  sessionTouchInterval : Duration := Duration.minutes 5
   /-- Overridable per tenant, which is what AUTH-10.7 asks for: a client supplies its own
   renderer rather than filling in holes in one this library dictates. -/
   templates : EmailTemplates := .standard
+
+/-- A target that is not allowed is not an error: it becomes the tenant's default, so a stale
+bookmark lands somewhere rather than nowhere. -/
+def TenantConfig.returnTo {tenant : TenantId} (config : TenantConfig tenant)
+    (requested : Option String) : String :=
+  ReturnTo.resolve config.returnToAllowlist config.defaultReturnTo requested
 
 end Authentication

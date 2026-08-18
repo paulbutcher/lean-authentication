@@ -108,6 +108,23 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     | .ok result => result.firstInTenant
     | .error _ => true
   let crossTenantAccount ← store.accountByIdentity beta person.normalise
+  let byId ← store.accountById alpha ⟨"account-1"⟩
+  let crossTenantById ← store.accountById beta ⟨"account-1"⟩
+
+  -- Changing the identifying address, and the uniqueness that still applies to it.
+  let moved := addressOf "moved"
+  let renamed ← store.setPrimaryEmail alpha ⟨"account-1"⟩ moved
+  let underNewAddress ← store.accountByIdentity alpha moved.normalise
+  let underOldAddress ← store.accountByIdentity alpha person.normalise
+  let collided ← store.setPrimaryEmail alpha ⟨"account-3"⟩ moved
+  let missing ← store.setPrimaryEmail alpha ⟨"account-absent"⟩ (addressOf "nobody")
+  let restored ← store.setPrimaryEmail alpha ⟨"account-1"⟩ person
+
+  -- Deactivation is a state, not a deletion.
+  let deactivated ← store.setAccountStatus alpha ⟨"account-3"⟩ .deactivated
+  let afterDeactivation ← store.accountById alpha ⟨"account-3"⟩
+  let statusOfMissing ← store.setAccountStatus alpha ⟨"account-absent"⟩ .deactivated
+  let _ ← store.setAccountStatus alpha ⟨"account-3"⟩ .active
 
   -- Attempts: at most one live per address, and compare-and-set on commit.
   let first := sampleAttempt alpha "attempt-1" person soon
@@ -145,6 +162,16 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   store.revokeSession alpha soon ⟨"session-revoked"⟩
   let foundRevoked ← store.sessionByDigest alpha soon revokedDigest
   let crossTenantSession ← store.sessionByDigest beta soon liveDigest
+  -- Touching slides the idle timeout (AUTH-9.4): this one is past its idle expiry at `soon` and
+  -- live again once touched. The one already past its absolute lifetime is touched with the
+  -- same later expiry, which a backend must not honour: the absolute lifetime is a ceiling.
+  let touchDigest := digestOf [14]
+  store.createSession alpha (sampleSession alpha "session-touch" account touchDigest soon later)
+  let beforeTouch ← store.sessionByDigest alpha soon touchDigest
+  store.touchSession alpha ⟨"session-touch"⟩ epoch later
+  let afterTouch ← store.sessionByDigest alpha soon touchDigest
+  store.touchSession alpha ⟨"session-stale"⟩ soon later
+  let touchedStale ← store.sessionByDigest alpha soon staleDigest
   let ownSessions ← store.sessionsForAccount alpha soon account
   store.revokeSessionsForAccount alpha soon account
   let afterMassRevoke ← store.sessionsForAccount alpha soon account
@@ -164,6 +191,21 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
       pure (some (wonFirst, wonSecond))
     | _, _ => pure none
 
+  -- Delivery history: transient failures counted, permanent ones suppressing, and neither
+  -- visible from another tenant (AUTH-12.2).
+  let bouncing := addressOf "bouncing"
+  let flaky := addressOf "flaky"
+  let softOnce ← store.recordDeliveryFailure alpha flaky.normalise .softBounce epoch "full"
+  let softTwice ← store.recordDeliveryFailure alpha flaky.normalise .softBounce soon "full"
+  let hard ← store.recordDeliveryFailure alpha bouncing.normalise .hardBounce epoch "no such user"
+  let softAfterHard ←
+    store.recordDeliveryFailure alpha bouncing.normalise .softBounce soon "full"
+  let crossTenantRecord ← store.deliveryRecord beta bouncing.normalise
+  let allRecords ← store.deliveryRecords alpha
+  store.clearSuppression alpha bouncing.normalise
+  let afterClearing ← store.deliveryRecord alpha bouncing.normalise
+  let byClient ← store.suppressAddress alpha flaky.normalise later "asked us to stop"
+
   -- The audit log, and that it stays inside its tenant.
   store.appendAudit alpha ⟨soon, .anonymous, .attemptCreated ⟨"attempt-3"⟩⟩
   store.appendAudit beta ⟨soon, .anonymous, .attemptCreated ⟨"attempt-elsewhere"⟩⟩
@@ -177,12 +219,14 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     (sampleSession doomed "session-doomed" ⟨"account-doomed"⟩ (digestOf [20]) later later)
   store.createInvitation doomed (sampleInvitation doomed "invitation-doomed" person)
   store.appendAudit doomed ⟨soon, .anonymous, .attemptCreated ⟨"attempt-doomed"⟩⟩
+  let _ ← store.recordDeliveryFailure doomed person.normalise .hardBounce epoch "gone"
   store.deleteTenant doomed
   let doomedAccount ← store.accountByIdentity doomed person.normalise
   let doomedAttempt ← store.attemptById doomed ⟨"attempt-doomed"⟩
   let doomedSession ← store.sessionByDigest doomed soon (digestOf [20])
   let doomedInvitation ← store.invitationById doomed ⟨"invitation-doomed"⟩
   let doomedAudit ← store.auditEntries doomed
+  let doomedRecord ← store.deliveryRecord doomed person.normalise
   let survivingAccount ← store.accountByIdentity alpha person.normalise
 
   pure
@@ -196,6 +240,24 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := duplicate matches .error _ }
     , { name := "an account is invisible from another tenant (AUTH-15.4.4)"
         passed := crossTenantAccount.isNone }
+    , { name := "an account is readable by its identifier"
+        passed := (byId.map (·.identity)) == some person.normalise }
+    , { name := "an account identifier does not resolve in another tenant"
+        passed := crossTenantById.isNone }
+    , { name := "changing the primary address moves the account to it (AUTH-9.6)"
+        passed := renamed matches .ok _ && (underNewAddress.map (·.id.value)) == some "account-1"
+          && underOldAddress.isNone }
+    , { name := "an address another account already holds is refused (AUTH-15.4.2)"
+        passed := collided matches .error .duplicateAccount }
+    , { name := "changing the address of an account that does not exist is refused"
+        passed := missing matches .error .unknownAccount }
+    , { name := "the address can be changed back"
+        passed := restored matches .ok _ }
+    , { name := "deactivation is recorded on the account, which still exists"
+        passed := deactivated matches .ok _
+          && (afterDeactivation.map (·.status)) == some .deactivated }
+    , { name := "deactivating an account that does not exist is refused"
+        passed := statusOfMissing matches .error .unknownAccount }
     , { name := "starting an attempt reports the one it superseded (AUTH-5.2.9)"
         passed := superseded.map (·.value) == [first.id.value] }
     , { name := "the superseded attempt is left abandoned"
@@ -216,12 +278,32 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := foundRevoked.isNone }
     , { name := "a session is invisible from another tenant"
         passed := crossTenantSession.isNone }
-    , { name := "an account's live sessions are listed"
-        passed := ownSessions.length == 1 }
+    , { name := "a session past its idle timeout is live again once touched (AUTH-9.4)"
+        passed := beforeTouch.isNone && (afterTouch.map (·.id.value)) == some "session-touch" }
+    , { name := "touching does not reach past the absolute lifetime"
+        passed := touchedStale.isNone }
+    , { name := "an account's live sessions are listed, and only those"
+        passed := ownSessions.length == 2 }
     , { name := "revoking an account's sessions revokes all of them (AUTH-9.6)"
         passed := afterMassRevoke.isEmpty }
     , { name := "an invitation can be accepted only once (AUTH-8.5)"
         passed := invitationCommits == some (true, false) }
+    , { name := "a transient failure is counted and does not suppress (AUTH-12.5)"
+        passed := !softOnce.suppressed && !softTwice.suppressed && softTwice.failures == 2
+          && softOnce.firstFailureAt == softTwice.firstFailureAt }
+    , { name := "a hard bounce suppresses the address (AUTH-12.1)"
+        passed := hard.suppressedBy == some .hardBounce }
+    , { name := "a later transient failure does not lift a suppression"
+        passed := softAfterHard.suppressedBy == some .hardBounce
+          && softAfterHard.failures == 2 }
+    , { name := "delivery history does not cross tenants (AUTH-12.2)"
+        passed := crossTenantRecord.isNone }
+    , { name := "the tenant's delivery history is listed"
+        passed := allRecords.length == 2 }
+    , { name := "clearing a suppression clears the history with it (AUTH-12.4)"
+        passed := afterClearing.isNone }
+    , { name := "the client can suppress an address itself"
+        passed := byClient.suppressedBy == some .client }
     , { name := "audit entries are readable in the tenant they were written for"
         passed := alphaAudit.length == 1 }
     , { name := "audit entries do not leak across tenants"
@@ -236,6 +318,8 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := doomedInvitation.isNone }
     , { name := "deleting a tenant removes its audit records"
         passed := doomedAudit.isEmpty }
+    , { name := "deleting a tenant removes its delivery history"
+        passed := doomedRecord.isNone }
     , { name := "deleting a tenant leaves other tenants alone"
         passed := survivingAccount.isSome } ]
 

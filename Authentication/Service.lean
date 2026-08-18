@@ -61,7 +61,7 @@ structure Outcome (tenant : TenantId) where
   sent : List SentMessageId := []
   /-- Present only when this outcome created an account, not on every sign-in. -/
   admitted : Option (AccountAdmitted tenant) := none
-  refused : Option SignupRejection := none
+  refused : Option SignInRefusal := none
   deriving Inhabited
 
 private def randomValue {m : Type → Type} [Monad m] [RandomBytes m] (bytes : Nat) :
@@ -143,7 +143,7 @@ bytes, and so the client learns about an account only when one was made. -/
 private structure Issued (tenant : TenantId) where
   session : Option CredentialValue := none
   admitted : Option (AccountAdmitted tenant) := none
-  refused : Option SignupRejection := none
+  refused : Option SignInRefusal := none
 
 /-- Spends the invitation the attempt was begun with, under compare-and-set so that two requests
 racing to accept one invitation produce one account (AUTH-8.5). Returns what it granted; a
@@ -176,12 +176,14 @@ private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
     match existing with
     | some account =>
       -- Policy is evaluated at account creation only, so tightening one never locks out an
-      -- account that already exists (AUTH-7.6).
-      pure (some account.id, none, none)
+      -- account that already exists (AUTH-7.6). Deactivation is the exception, and has to be:
+      -- revoking an account's sessions means nothing if the next magic link issues another.
+      if account.status == .deactivated then pure (none, none, some .accountDeactivated)
+      else pure (some account.id, none, none)
     | none =>
       match config.signupPolicy.evaluate subject.address grant.isSome
           config.invitationOverridesAllowlist with
-      | .rejected reason => pure (none, none, some reason)
+      | .rejected reason => pure (none, none, some (.signup reason))
       | .permitted =>
         match ← randomValue 12 with
         | .error _ => pure (none, none, none)
@@ -207,8 +209,9 @@ private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
     | some reason =>
       ports.store.appendAudit tenant ⟨now, .anonymous,
         .signInRejected (match reason with
-          | .notInvited => .notInvited
-          | .domainNotAllowed => .domainNotAllowed)⟩
+          | .signup .notInvited => .notInvited
+          | .signup .domainNotAllowed => .domainNotAllowed
+          | .accountDeactivated => .accountDeactivated)⟩
       pure { refused }
     | none => pure {}
   | some accountId =>
@@ -223,8 +226,23 @@ private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
           createdAt := now
           lastSeenAt := now
           idleExpiresAt := now.advance config.sessionIdleTimeout
-          absoluteExpiresAt := now.advance config.sessionAbsoluteLifetime }
+          absoluteExpiresAt := now.advance config.sessionAbsoluteLifetime
+          userAgent := subject.requester.userAgent
+          approximateLocation := subject.requester.approximateLocation }
       pure { session := some credential, admitted }
+
+/--
+Every message this library sends leaves through here, so an address the provider has already
+refused is refused again without another attempt on it (AUTH-12.3). The transport is not asked,
+because asking is exactly what spends the sending domain's reputation, and what it costs is
+everyone else's mail rather than this one.
+-/
+private def deliver {m : Type → Type} [Monad m] (tenant : TenantId) (ports : Ports m)
+    (mail : OutboundEmail) : m (Except SendError SentMessageId) := do
+  match ← ports.store.deliveryRecord tenant mail.to.normalise with
+  | some record =>
+    if record.suppressed then pure (.error .addressSuppressed) else ports.transport.send mail
+  | none => ports.transport.send mail
 
 private def perform {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
@@ -233,7 +251,7 @@ private def perform {m : Type → Type} [Monad m] [RandomBytes m] {tenant : Tena
     ports.store.appendAudit tenant entry
     pure outcome
   | .sendSignInEmail message => do
-    match ← ports.transport.send (signInEmail config message) with
+    match ← deliver tenant ports (signInEmail config message) with
     | .ok id => pure { outcome with sent := outcome.sent ++ [id] }
     | .error _ => pure outcome
   | .setAttemptCookie cookie => pure { outcome with setCookies := outcome.setCookies ++ [cookie] }
@@ -241,8 +259,19 @@ private def perform {m : Type → Type} [Monad m] [RandomBytes m] {tenant : Tena
     pure { outcome with clearCookies := outcome.clearCookies ++ [(name, path)] }
   | .issueSession subject => do
     let issued ← issueSession ports config now subject
+    -- The cookie is built here rather than left to the client, so its attributes are the ones
+    -- AUTH-9.2 fixes and not the ones a caller remembered. It expires with the absolute
+    -- lifetime, since a cookie discarded at the idle timeout would end a session the store
+    -- would still have honoured.
+    let cookies := match issued.session with
+      | none => outcome.setCookies
+      | some credential =>
+        outcome.setCookies ++
+          [CookieSpec.forSession tenant credential.encoded
+            (now.advance config.sessionAbsoluteLifetime)]
     pure
       { outcome with
+        setCookies := cookies
         session := issued.session
         admitted := issued.admitted
         refused := issued.refused }
@@ -256,7 +285,7 @@ private def settle {tenant : TenantId} (outcome : Outcome tenant) : Outcome tena
   | none => outcome
   | some reason =>
     { outcome with
-      views := outcome.views.filter (· != .signedIn) ++ [.signupRefused reason]
+      views := outcome.views.filter (· != .signedIn) ++ [.refused reason]
       session := none }
 
 private def performAll {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
@@ -294,6 +323,13 @@ def begin {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : Tena
     -- chooses only what is said: it cannot decline to be limited (AUTH-14.2.5).
     ports.store.appendAudit tenant ⟨now, .anonymous, .signInRejected .throttled⟩
     let response ← ports.responsePolicy.respond tenant .throttled
+    return ({}, response)
+  -- Checked here as well as in `deliver`, so that a suppressed address costs an attempt record
+  -- and a set of credentials rather than only a send that never happens. What the person is told
+  -- is still the policy's to decide (AUTH-12.3).
+  if ((← ports.store.deliveryRecord tenant address.normalise).map (·.suppressed)).getD false then
+    ports.store.appendAudit tenant ⟨now, .anonymous, .signInRejected .addressSuppressed⟩
+    let response ← ports.responsePolicy.respond tenant .addressSuppressed
     return ({}, response)
   match ← mintSecrets ports.peppers config with
   | .error _ =>
@@ -407,12 +443,20 @@ private def invitationEmail {tenant : TenantId} (config : TenantConfig tenant)
     -- with a link that no longer works.
     idempotencyKey := s!"invitation:{invitation.id.value}:{invitation.tokenDigest.bytes.size}" }
 
-/-- Creates an invitation for exactly one address in one tenant and mails the link. The token is
-returned as well, because a client that sends its own mail still needs it. -/
+/-- What an invitation operation produced. The delivery is reported rather than swallowed,
+because a permanent failure is the client's to see: a suppressed address means the invitation
+exists and nobody will ever receive it (AUTH-12.3). The token is here too, since a client that
+sends its own mail still needs it. -/
+structure InvitationIssued (tenant : TenantId) where
+  invitation : Invitation tenant
+  token : CredentialValue
+  delivery : Except SendError SentMessageId
+
+/-- Creates an invitation for exactly one address in one tenant and mails the link. -/
 def createInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (address : EmailAddress)
     (metadata : InvitationMetadata) (createdBy : Actor := .anonymous) :
-    m (Option (Invitation tenant × CredentialValue)) := do
+    m (Option (InvitationIssued tenant)) := do
   let now ← Clock.now
   match ← randomValue 12, ← randomValue 16 with
   | .error _, _ => pure none
@@ -426,15 +470,15 @@ def createInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {te
         expiresAt := now.advance config.invitationLifetime
         createdBy }
     ports.store.createInvitation tenant invitation
-    let _ ← ports.transport.send
+    let delivery ← deliver tenant ports
       (invitationEmail config invitation (acceptLink config invitation.id token))
-    pure (some (invitation, token))
+    pure (some { invitation, token, delivery })
 
 /-- Rotating the token is what invalidates the old link, which is what AUTH-8.5 requires of a
 resend: the person who was sent one twice can use either message and only the newer works. -/
 def resendInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (id : InvitationId tenant) :
-    m (Option CredentialValue) := do
+    m (Option (InvitationIssued tenant)) := do
   let now ← Clock.now
   match ← ports.store.invitationById tenant id with
   | none => pure none
@@ -449,9 +493,9 @@ def resendInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {te
             tokenDigest := ports.peppers.current.digest token
             expiresAt := now.advance config.invitationLifetime }
         if ← ports.store.commitInvitation tenant invitation rotated then
-          let _ ← ports.transport.send
+          let delivery ← deliver tenant ports
             (invitationEmail config rotated (acceptLink config id token))
-          pure (some token)
+          pure (some { invitation := rotated, token, delivery })
         else pure none
 
 def revokeInvitation {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
@@ -517,17 +561,192 @@ def acceptInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {te
               ⟨now, .anonymous, .attemptAbandoned abandoned .superseded⟩
           .ok <$> performAll ports config now effects
 
-/-- Identity and tenant, and nothing else (AUTH-9.7). -/
-def identify {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
-    (credential : CredentialValue) : m (Option (SessionIdentity tenant)) := do
+/-! ## Bounces and suppression
+
+The provider adapters turn a webhook into `DeliveryEvent`s; what happens to one is here, so that
+both providers reach the same store through the same decision.
+-/
+
+/--
+Records one delivery failure and returns what the address's history now says. A permanent
+failure suppresses; a transient one is counted and nothing else, because a mailbox that was full
+this morning is not an address nobody may write to again (AUTH-12.1).
+
+Ingestion is not authenticated by this library. Verifying that the webhook came from the
+provider belongs to the route that received it, which is the layer holding the signing secret,
+and a client that skips it has handed anyone the ability to suppress any address (AUTH-13.2).
+-/
+def ingestDelivery {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (event : DeliveryEvent) : m (DeliveryRecord tenant) := do
   let now ← Clock.now
-  let digests := (ports.peppers.present credential).digests
+  let address := event.address.normalise
+  let before ← ports.store.deliveryRecord tenant address
+  let record ← ports.store.recordDeliveryFailure tenant address event.failure now event.detail
+  -- Audited on the transition, not on every failure that arrives afterwards: the log answers
+  -- when this address stopped receiving mail, and repeating it obscures that.
+  match record.suppressedBy with
+  | some reason =>
+    if (before.bind (·.suppressedBy)).isNone then
+      ports.store.appendAudit tenant ⟨now, .anonymous, .addressSuppressed address reason⟩
+  | none => pure ()
+  pure record
+
+/-- Suppression the client asked for, from something it knows and this library does not. -/
+def suppressAddress {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (address : EmailAddress) (detail : String := "") : m (DeliveryRecord tenant) := do
+  let now ← Clock.now
+  let normalised := address.normalise
+  let record ← ports.store.suppressAddress tenant normalised now detail
+  ports.store.appendAudit tenant ⟨now, .anonymous, .addressSuppressed normalised .client⟩
+  pure record
+
+/-- Whether mail to this address will be refused. -/
+def suppressed {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (address : EmailAddress) : m Bool := do
+  pure (((← ports.store.deliveryRecord tenant address.normalise).map (·.suppressed)).getD false)
+
+/-- Addresses get fixed (AUTH-12.4). -/
+def clearSuppression {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (address : EmailAddress) : m Unit := do
+  let now ← Clock.now
+  let normalised := address.normalise
+  ports.store.clearSuppression tenant normalised
+  ports.store.appendAudit tenant ⟨now, .anonymous, .suppressionCleared normalised⟩
+
+/--
+The addresses failing often enough to be worth telling the client about, worst first (AUTH-12.5).
+Repeated bounces on an account's primary address are the single most common cause of "I cannot
+log in", and it is a report rather than an alert because only the client knows whose address it
+is.
+-/
+def deliveryReport {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (minimumFailures : Nat := 3) : m (List (DeliveryRecord tenant)) := do
+  let records ← ports.store.deliveryRecords tenant
+  let interesting := records.filter fun record =>
+    record.suppressed || minimumFailures ≤ record.failures
+  pure (interesting.mergeSort fun a b => decide (b.failures ≤ a.failures))
+
+/-! ## Sessions
+
+The surface an account holder's own session management is built on (§9). Like the invitation
+operations above, none of these check a permission: the client decides who may revoke whose
+session, and the library has no basis on which to (AUTH-13.2).
+-/
+
+private def sessionByCredential {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (now : Timestamp) (credential : CredentialValue) : m (Option (Session tenant)) :=
   let rec search : List Digest → m (Option (Session tenant))
     | [] => pure none
     | digest :: rest => do
       match ← ports.store.sessionByDigest tenant now digest with
       | some session => pure (some session)
       | none => search rest
-  pure ((← search digests).map fun session => ⟨session.account⟩)
+  -- Every key still in its overlap window, so a rotation does not sign everyone out
+  -- (AUTH-15.7.2).
+  search (ports.peppers.present credential).digests
+
+/--
+Identity and tenant, and nothing else (AUTH-9.7).
+
+Using a session slides its idle timeout, which is what makes the idle timeout of AUTH-9.4
+different from a shorter absolute lifetime. The write happens only once the last-seen time has
+gone stale by the tenant's touch interval, so an idle session is not kept alive by the writes
+that record it being idle.
+-/
+def identify {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (config : TenantConfig tenant) (credential : CredentialValue) :
+    m (Option (SessionIdentity tenant)) := do
+  let now ← Clock.now
+  match ← sessionByCredential ports now credential with
+  | none => pure none
+  | some session =>
+    if session.dueForTouch now config.sessionTouchInterval then
+      ports.store.touchSession tenant session.id now
+        (session.refreshedIdleExpiry now config.sessionIdleTimeout)
+    pure (some ⟨session.account⟩)
+
+/-- The account's live sessions, newest first, with the one that asked marked (AUTH-9.5).
+`presented` is the credential the request arrived with; without it no session is current. -/
+def sessions {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (presented : Option CredentialValue := none) :
+    m (List (SessionSummary tenant)) := do
+  let now ← Clock.now
+  let current ← match presented with
+    | none => pure none
+    | some credential => pure ((← sessionByCredential ports now credential).map (·.id))
+  let live ← ports.store.sessionsForAccount tenant now account
+  pure ((live.mergeSort fun a b => decide (b.createdAt ≤ a.createdAt)).map fun session =>
+    session.summary (current == some session.id))
+
+/--
+Revokes one session, and takes the account it is supposed to belong to rather than the session
+alone. A client that routed a session id straight from a request parameter would otherwise be
+handing whoever asked the ability to sign out anyone; this way the check is in the library and
+the client cannot skip it by forgetting.
+
+Reports whether there was such a live session to revoke.
+-/
+def revokeSession {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (session : SessionId tenant) : m Bool := do
+  let now ← Clock.now
+  let live ← ports.store.sessionsForAccount tenant now account
+  if live.any (·.id == session) then
+    ports.store.revokeSession tenant now session
+    ports.store.appendAudit tenant ⟨now, .anonymous, .sessionRevoked session⟩
+    pure true
+  else pure false
+
+/-- Every session the account has, which is what AUTH-9.6 requires on the occasions
+`RevocationReason` names, and what "sign out everywhere" is. -/
+def revokeAllSessions {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (reason : RevocationReason := .requested) : m Unit := do
+  let now ← Clock.now
+  ports.store.revokeSessionsForAccount tenant now account
+  ports.store.appendAudit tenant ⟨now, .anonymous, .accountSessionsRevoked account reason⟩
+
+/-! ## Account state
+
+The operations AUTH-9.6 names. Each revokes in the same call as it changes, because the two
+being separable is the whole hazard: an address that is no longer the account holder's, or an
+account the client has closed, with a session still answering.
+-/
+
+/-- Changes the address the account is identified by and signs it out everywhere. Sessions go
+because the previous address could have been the one under someone else's control (AUTH-9.6). -/
+def changePrimaryEmail {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (address : EmailAddress) : m (Except StoreError Unit) := do
+  match ← ports.store.setPrimaryEmail tenant account address with
+  | .error e => pure (.error e)
+  | .ok () =>
+    let now ← Clock.now
+    ports.store.revokeSessionsForAccount tenant now account
+    ports.store.appendAudit tenant ⟨now, .anonymous, .primaryEmailChanged account⟩
+    ports.store.appendAudit tenant
+      ⟨now, .anonymous, .accountSessionsRevoked account .primaryEmailChanged⟩
+    pure (.ok ())
+
+/-- Closes an account: its sessions go now, and `issueSession` refuses to make another, so a
+magic link cannot undo this. -/
+def deactivateAccount {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) : m (Except StoreError Unit) := do
+  match ← ports.store.setAccountStatus tenant account .deactivated with
+  | .error e => pure (.error e)
+  | .ok () =>
+    let now ← Clock.now
+    ports.store.revokeSessionsForAccount tenant now account
+    ports.store.appendAudit tenant ⟨now, .anonymous, .accountDeactivated account⟩
+    ports.store.appendAudit tenant
+      ⟨now, .anonymous, .accountSessionsRevoked account .accountDeactivated⟩
+    pure (.ok ())
+
+/-- Reopening grants nothing by itself: the account holder signs in again from the beginning. -/
+def reactivateAccount {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) : m (Except StoreError Unit) := do
+  match ← ports.store.setAccountStatus tenant account .active with
+  | .error e => pure (.error e)
+  | .ok () =>
+    let now ← Clock.now
+    ports.store.appendAudit tenant ⟨now, .anonymous, .accountReactivated account⟩
+    pure (.ok ())
 
 end Authentication.Service

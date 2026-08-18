@@ -8,11 +8,12 @@ falls short of it and why.
 
 ## State of the implementation
 
-Stages 1 to 7 of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
+Every stage of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
 with the theorems of AUTH-16.1, then the `AuthStore` port, its conformance suite, the SQLite
 backend, and the cross-device flow running end to end with no server, then one SQL
 implementation shared by both backends, with Postgres and SQLite each passing the suite, then
-the Postmark transport, then signup policy and invitations, then the SES transport, then rate limiting.
+the Postmark transport, then signup policy and invitations, then the SES transport, then rate
+limiting, then the session management surface with bounce ingestion and suppression.
 
 - `Authentication/Attempt.lean` is the centre. `begin` and `step` decide a sign-in from an
   explicit state and an event, and return the next state together with the effects the edge is
@@ -43,13 +44,17 @@ the Postmark transport, then signup policy and invitations, then the SES transpo
   is what makes the port an abstraction rather than a description of one provider. SES is reached
   through the SESv2 API signed with SigV4 from `leanaws`, rather than through its SMTP endpoint,
   because the API reports its failures in a form the permanent and transient split can read.
+- `Authentication/Suppression.lean` is the delivery history, and each transport has a parser
+  beside it turning that provider's webhook into the one event type. Which failures are permanent
+  is decided once, in the core, rather than twice in provider vocabulary: a transient failure that
+  suppressed would lock people out of their own accounts because a mail server was busy.
 
 Identifiers are indexed by the tenant they belong to (`AccountId tenant`), so an expression
 that crosses tenants does not typecheck.
 
-Still to come, in the order REQUIREMENTS §19 gives: the session management surface, bounce
-ingestion and suppression. Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the
-requirements for it.
+Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the requirements for it. The
+optional HTTP integration target of AUTH-13.2 is not built, and `KNOWN_ISSUES.md` records what
+that leaves to the client.
 
 ## Applying the schema
 
@@ -70,6 +75,20 @@ machinery than the problem justifies.
 
 `Sqlite.openInMemory` applies the schema, because it starts empty every time and the tests run
 against it. `Sqlite.openFile` deliberately does not.
+
+## Receiving bounces
+
+Both transports ship a parser, `Authentication.Postmark.deliveryEvents` and
+`Authentication.Ses.deliveryEvents`, turning a provider payload into `DeliveryEvent`s for
+`Service.ingestDelivery`. A hard bounce or a complaint suppresses the address; a transient
+failure is counted and nothing else. Suppressed addresses are refused before the transport is
+asked, because asking is what spends the sending domain's reputation.
+
+**Establishing that the payload came from the provider is yours.** Postmark authenticates its
+webhooks with credentials on a URL you chose, and SNS signs its posts with a certificate the
+receiver fetches and checks; SNS also asks the endpoint to confirm the subscription before it
+sends anything. This library holds none of those and does none of them, so an endpoint that
+forwards straight to `ingestDelivery` is one by which anyone can suppress any address.
 
 ## Sending domain DNS
 

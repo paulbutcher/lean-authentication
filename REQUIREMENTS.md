@@ -392,8 +392,17 @@ needs no schema rewrite.
   session MUST NOT be promoted in place.
 - **AUTH-9.4** Sessions MUST have both an idle timeout and an absolute lifetime, configurable
   per tenant, defaulting to 14 days idle and 90 days absolute.
+- **AUTH-9.4.1** Validating a session MUST slide its idle expiry, or the idle timeout is only a
+  shorter absolute lifetime. Sliding it MUST NOT carry a session past its absolute lifetime. The
+  write MAY be deferred until the recorded last-seen time is stale by a configurable interval, so
+  that validation is not a write on every request; the consequence, which MUST be documented, is
+  that a session may expire up to that interval earlier than its last use implies.
 - **AUTH-9.5** An account holder MUST be able to list their sessions with user agent, coarse
-  location, creation and last-seen time, and revoke any or all of them.
+  location, creation and last-seen time, and revoke any or all of them. Revocation MUST take the
+  account the session is expected to belong to, not the session alone, so that a client passing an
+  identifier through from a request cannot be made to sign out an account it did not name.
+- **AUTH-9.5.1** Deactivating an account MUST also prevent a new session being issued to it. The
+  revocation AUTH-9.6 requires means nothing if the next magic link signs the account back in.
 - **AUTH-9.6** All sessions for an account MUST be revoked on: primary email change, account
   deactivation, and any recovery action.
 - **AUTH-9.7** Validating a session MUST return the account id and its tenant, and nothing else.
@@ -490,8 +499,16 @@ raw-MIME interchange type would make the first adapter impossible.
 
 ## 12. Bounces and suppression
 
-- **AUTH-12.1** The library MUST ingest delivery events from the provider (Postmark bounce and
-  spam-complaint webhooks) and maintain a suppression list.
+- **AUTH-12.1** The library MUST ingest delivery events from every transport it ships (Postmark's
+  bounce and spam-complaint webhooks, and SES's bounce and complaint notifications as SNS delivers
+  them) and maintain a suppression list. Each adapter MUST normalise its provider's payload into
+  one event type, so that the decision about which failures are permanent is taken once and not
+  per provider.
+- **AUTH-12.1.1** Establishing that a delivery event really came from the provider is the
+  receiving route's, and MUST be documented as such. Postmark authenticates its webhooks with
+  credentials on a URL the client chose, and SNS signs its posts with a certificate the receiver
+  fetches and checks; the library holds neither, and a client that skips the check has published
+  an endpoint by which anyone can suppress any address.
 - **AUTH-12.2** Suppression MUST be keyed per tenant, so that one tenant's bounce history is not
   observable through another tenant's behaviour.
 - **AUTH-12.3** Sending to a hard-bounced or complained address MUST be refused, and the caller
@@ -860,8 +877,12 @@ Unresolved. Each needs an answer before the affected part is built; a recommenda
 but the decision is not the implementer's to make. Ask, do not assume.
 
 - **18.1 Administrator-led recovery.** Self-service recovery is out of scope, so someone who
-  loses mailbox access is restored by the client. What the library must expose to make that
-  possible (change primary address, force-revoke sessions, re-invite) is not yet specified.
+  loses mailbox access is restored by the client. The three operations that were named as
+  probably necessary now exist for their own reasons: changing the primary address and
+  force-revoking sessions came with §9, and resending an invitation with §8. What is still not
+  specified is whether that is the whole of it, and in particular what an administrator is to do
+  about an account whose mailbox is gone but whose new address is not yet proven; every path
+  through §5 begins by mailing the address being claimed.
 
 - **18.2 Per-tenant sending domains.** Deferred, and AUTH-10.2 keeps the retrofit cheap. What is
   not yet decided is whether tenants will eventually sign in at their own hostname as well as

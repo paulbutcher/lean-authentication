@@ -22,6 +22,7 @@ inductive SignInOutcome where
   | notInvited
   | domainNotAllowed
   | addressSuppressed
+  | accountDeactivated
   | throttled
   | malformedAddress
   deriving DecidableEq, Repr, Inhabited
@@ -33,6 +34,10 @@ inductive SignInMessage where
   | domainNotAllowed
   | tryAgainLater
   | addressMalformed
+  /-- For a client that would rather say an account is closed than let someone keep asking a
+  mailbox that will never answer. Saying it confirms the account exists, which is why it is a
+  choice and not the default. -/
+  | accountUnavailable
   deriving DecidableEq, Repr, Inhabited
 
 /-- Mail sent in place of a sign-in link, for a client that would rather explain by mail than

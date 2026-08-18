@@ -105,10 +105,10 @@ private def errorOf {t : TenantId} (result : Except AuthError (Outcome t)) : Opt
 
 /-- Only the identifier and the token are needed downstream, so nothing here needs a default
 `Invitation`, which is not a value this library should have lying around. -/
-private def issuedIds {t : TenantId} (created : Option (Invitation t × CredentialValue)) :
+private def issuedIds {t : TenantId} (created : Option (InvitationIssued t)) :
     InvitationId t × CredentialValue :=
   match created with
-  | some (invitation, token) => (invitation.id, token)
+  | some issued => (issued.invitation.id, issued.token)
   | none => (⟨""⟩, ⟨""⟩)
 
 /-- One sign-in from nothing, under whatever policy the tenant has. -/
@@ -149,10 +149,10 @@ def checks : IO (List (String × Bool)) := do
         (sessionOf allowed).isSome),
       ("signup: a domain that is a suffix without a label boundary is refused (AUTH-7.3.1)",
         (sessionOf refused).isNone
-          && viewsOf refused == [.signupRefused .domainNotAllowed]),
+          && viewsOf refused == [.refused (.signup .domainNotAllowed)]),
       ("signup: invite-only refuses an address with no invitation",
         (sessionOf uninvited).isNone
-          && viewsOf uninvited == [.signupRefused .notInvited]),
+          && viewsOf uninvited == [.refused (.signup .notInvited)]),
       ("signup: a refusal is audited with its true reason (AUTH-7.7)",
         auditOfRefusal.any fun entry =>
           match entry.event with
@@ -188,7 +188,8 @@ def invitationChecks : IO (List (String × Bool)) := do
   let (secondInvitationId, secondToken) := issuedIds second
   let rotated ← resendInvitation ports config secondInvitationId
   let staleAccept ← acceptInvitation ports config secondInvitationId secondToken {}
-  let freshAccept ← acceptInvitation ports config secondInvitationId (rotated.getD ⟨""⟩) {}
+  let rotatedToken := (rotated.map (·.token)).getD ⟨""⟩
+  let freshAccept ← acceptInvitation ports config secondInvitationId rotatedToken {}
 
   let third ← createInvitation ports config (address "third@elsewhere.com") metadata
   let (thirdInvitationId, thirdToken) := issuedIds third
@@ -213,7 +214,7 @@ def invitationChecks : IO (List (String × Bool)) := do
       ("invitation: listing reports what happened to each (AUTH-8.9)",
         (listed.find? fun (i, _) => i.id == invitationId).map (·.2) == some .accepted),
       ("invitation: resending rotates the token and invalidates the old one (AUTH-8.5)",
-        rotated.isSome && rotated != some secondToken
+        rotated.isSome && rotatedToken != secondToken
           && errorOf staleAccept == some .unknownToken && (errorOf freshAccept).isNone),
       ("invitation: a revoked invitation cannot be accepted",
         revoked && errorOf revokedAccept == some .invitationNotPending) ]
@@ -239,10 +240,10 @@ def existingAccountChecks : IO (List (String × Bool)) := do
     | .error _ => pure (.error .invitationNotPending)
 
   let firstAccount ← match sessionOf first with
-    | some credential => identify (tenant := tenant) ports credential
+    | some credential => identify (tenant := tenant) ports config credential
     | none => pure none
   let secondAccount ← match sessionOf second with
-    | some credential => identify (tenant := tenant) ports credential
+    | some credential => identify (tenant := tenant) ports config credential
     | none => pure none
   let listed ← invitations (tenant := tenant) ports
 

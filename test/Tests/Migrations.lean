@@ -18,6 +18,9 @@ and interleaving that with the rest of the run would trade a real check for a fr
 namespace Tests.Migrations
 open Authentication
 
+private def suppressionDown : String :=
+  include_str "../../migrations/sqlite/20260818140000_authentication_suppression.down.sql"
+
 private def rateCountersDown : String :=
   include_str "../../migrations/sqlite/20260818130000_authentication_rate_counters.down.sql"
 
@@ -26,7 +29,7 @@ private def initialDown : String :=
 
 /-- Newest first, which is the order a rollback undoes them in. Applying them the other way round
 would leave whatever a later migration added. -/
-private def down : String := rateCountersDown ++ initialDown
+private def down : String := suppressionDown ++ rateCountersDown ++ initialDown
 
 private def authTables (db : SQLite) : IO Nat := do
   let stmt ← db.prepare "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'auth%'"

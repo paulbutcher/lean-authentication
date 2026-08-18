@@ -63,9 +63,9 @@ inductive View where
   | showVerificationCode
   | codeRejected (remaining : Nat)
   | signedIn
-  /-- Signup was refused after the address was proven. Emitted by the service rather than by
-  `step`, because policy is evaluated where the account is created (AUTH-7.6). -/
-  | signupRefused (reason : SignupRejection)
+  /-- The address was proven and still no session was issued. Emitted by the service rather than
+  by `step`, because both reasons are decided where the account is reached (AUTH-7.6). -/
+  | refused (reason : SignInRefusal)
   deriving DecidableEq, Repr, Inhabited
 
 /-- What the mailer is given. No field can carry anything the requester typed, which is how
@@ -83,6 +83,10 @@ structure SessionSubject (tenant : TenantId) where
   attempt : AttemptId tenant
   address : EmailAddress
   invitation : Option (InvitationId tenant) := none
+  /-- The browser the flow began in, which is the one the session is issued to: every completion
+  path checks the binding nonce, so no other browser can reach this point. It is what a session
+  listing shows the account holder about the session (AUTH-9.5). -/
+  requester : RequestContext
   deriving DecidableEq, Repr
 
 inductive Effect (tenant : TenantId) where
@@ -152,7 +156,7 @@ private def complete {tenant : TenantId} (now : Timestamp) (state : AttemptState
     AttemptState tenant × List (Effect tenant) :=
   ({ state with phase := .completed },
     [ .audit ⟨now, .anonymous, .sessionIssued state.id⟩,
-      .issueSession ⟨state.id, state.address, state.invitation⟩,
+      .issueSession ⟨state.id, state.address, state.invitation, state.requester⟩,
       .clearAttemptCookie "auth_attempt" (BaseUrl.tenantPath tenant),
       .present .signedIn ])
 

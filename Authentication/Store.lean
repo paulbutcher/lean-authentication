@@ -6,6 +6,7 @@ import Authentication.Account
 import Authentication.Attempt
 import Authentication.Audit
 import Authentication.Invitation
+import Authentication.Suppression
 
 /-!
 The storage port (AUTH-15.2).
@@ -48,6 +49,16 @@ structure AuthStore (m : Type → Type) where
   caller that looks first and inserts second has a race, and the race creates the duplicate
   account (AUTH-15.4.2). -/
   createAccount : (tenant : TenantId) → Account tenant → m (Except StoreError (AccountCreated tenant))
+  accountById : (tenant : TenantId) → AccountId tenant → m (Option (Account tenant))
+  /-- Changing the address an account is identified by, which is the same uniqueness question
+  creation asks and gets the same answer from the store rather than from the caller
+  (AUTH-15.4.2). -/
+  setPrimaryEmail : (tenant : TenantId) → AccountId tenant → EmailAddress →
+    m (Except StoreError Unit)
+  /-- Deactivation is a stored state rather than a deletion, because an account nobody can sign
+  in to still owns the audit record of everything it did. -/
+  setAccountStatus : (tenant : TenantId) → AccountId tenant → AccountStatus →
+    m (Except StoreError Unit)
   /-- Inserts the attempt and abandons any attempt already live for the same address in one
   step, returning what it abandoned so the caller can record it. Doing this in two calls would
   leave a window in which two attempts are live, and an attacker who can farm concurrent
@@ -65,6 +76,11 @@ structure AuthStore (m : Type → Type) where
   failing its first validation is indistinguishable from a broken sign-in (AUTH-15.4.6). -/
   sessionByDigest : (tenant : TenantId) → Timestamp → Digest → m (Option (Session tenant))
   sessionsForAccount : (tenant : TenantId) → Timestamp → AccountId tenant → m (List (Session tenant))
+  /-- Slides the idle timeout of AUTH-9.4 and records that the session was used. It is given the
+  new expiry rather than the timeout, so the ceiling of the absolute lifetime is applied once,
+  where the session is known, instead of by every backend. -/
+  touchSession : (tenant : TenantId) → SessionId tenant → (lastSeenAt idleExpiresAt : Timestamp) →
+    m Unit
   revokeSession : (tenant : TenantId) → Timestamp → SessionId tenant → m Unit
   /-- Used on primary email change, deactivation, and any recovery action (AUTH-9.6). -/
   revokeSessionsForAccount : (tenant : TenantId) → Timestamp → AccountId tenant → m Unit
@@ -75,12 +91,27 @@ structure AuthStore (m : Type → Type) where
   what lets a resend rotate the token and invalidate the old one in the same operation. -/
   commitInvitation : (tenant : TenantId) → (expected next : Invitation tenant) → m Bool
   invitationsForTenant : (tenant : TenantId) → m (List (Invitation tenant))
+  /-- Counts one failure against the address and returns what the history now says. It is one
+  operation rather than a read and a write because two bounces arriving together would otherwise
+  count as one, and the count is what AUTH-12.5 reports on. -/
+  recordDeliveryFailure : (tenant : TenantId) → NormalisedEmail → DeliveryFailure → Timestamp →
+    (detail : String) → m (DeliveryRecord tenant)
+  /-- Suppression by the client, for an address it knows about from somewhere this library
+  cannot see (AUTH-12.1). -/
+  suppressAddress : (tenant : TenantId) → NormalisedEmail → Timestamp → (detail : String) →
+    m (DeliveryRecord tenant)
+  deliveryRecord : (tenant : TenantId) → NormalisedEmail → m (Option (DeliveryRecord tenant))
+  deliveryRecords : (tenant : TenantId) → m (List (DeliveryRecord tenant))
+  /-- Addresses get fixed, so suppression has to be liftable (AUTH-12.4). It removes the history
+  as well as the suppression: an address that has been repaired starts from no failures, or the
+  count that reported it stays high for ever. -/
+  clearSuppression : (tenant : TenantId) → NormalisedEmail → m Unit
   /-- Append only. The port offers no update and no delete, which is how AUTH-15.4.5 is kept:
   not by a rule a backend is asked to follow but by an operation it is not given. -/
   appendAudit : (tenant : TenantId) → AuditEntry tenant → m Unit
   auditEntries : (tenant : TenantId) → m (List (AuditEntry tenant))
-  /-- Removes the tenant's accounts, sessions, invitations, attempts and audit records, with no
-  orphans (AUTH-4.2.5). -/
+  /-- Removes the tenant's accounts, sessions, invitations, attempts, delivery history and audit
+  records, with no orphans (AUTH-4.2.5). -/
   deleteTenant : (tenant : TenantId) → m Unit
 
 /--

@@ -65,6 +65,22 @@ structure SessionIdentity (tenant : TenantId) where
   account : AccountId tenant
   deriving DecidableEq, Repr
 
+/-- What an account holder is shown about a session of theirs (AUTH-9.5). The identifier digest
+is not among the fields: nothing outside the store has a use for it, and a listing that carried
+it would put it in logs. -/
+structure SessionSummary (tenant : TenantId) where
+  id : SessionId tenant
+  createdAt : Timestamp
+  lastSeenAt : Timestamp
+  idleExpiresAt : Timestamp
+  absoluteExpiresAt : Timestamp
+  userAgent : Option String
+  approximateLocation : Option String
+  /-- Whether this is the session that asked. Without it, "sign out everywhere else" is a
+  button the client cannot build. -/
+  current : Bool
+  deriving DecidableEq, Repr
+
 namespace Session
 
 /-- Expiry is enforced on read, so correctness does not depend on a sweeper having run
@@ -75,6 +91,29 @@ def identify {tenant : TenantId} (s : Session tenant) (now : Timestamp) :
   else if s.idleExpiresAt ≤ now then none
   else if s.absoluteExpiresAt ≤ now then none
   else some ⟨s.account⟩
+
+/-- Where the idle timeout moves to when the session is used. The absolute lifetime is a
+ceiling, not a suggestion: a session used every day for a year would otherwise never end
+(AUTH-9.4). -/
+def refreshedIdleExpiry {tenant : TenantId} (s : Session tenant) (now : Timestamp)
+    (idleTimeout : Duration) : Timestamp :=
+  let extended := now.advance idleTimeout
+  if s.absoluteExpiresAt ≤ extended then s.absoluteExpiresAt else extended
+
+/-- Whether the last-seen time has gone stale enough to be worth a write. -/
+def dueForTouch {tenant : TenantId} (s : Session tenant) (now : Timestamp)
+    (interval : Duration) : Bool :=
+  s.lastSeenAt.advance interval ≤ now
+
+def summary {tenant : TenantId} (s : Session tenant) (current : Bool) : SessionSummary tenant :=
+  { id := s.id
+    createdAt := s.createdAt
+    lastSeenAt := s.lastSeenAt
+    idleExpiresAt := s.idleExpiresAt
+    absoluteExpiresAt := s.absoluteExpiresAt
+    userAgent := s.userAgent
+    approximateLocation := s.approximateLocation
+    current }
 
 end Session
 

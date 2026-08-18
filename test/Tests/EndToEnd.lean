@@ -116,7 +116,7 @@ def checks : IO (List (String × Bool)) := do
     | none => pure (.error .notOriginatingBrowser)
   let session := sessionOf completed
   let identified ← match session with
-    | some credential => identify (tenant := tenant) ports credential
+    | some credential => identify (tenant := tenant) ports config credential
     | none => pure none
 
   -- The same attempt cannot be completed twice.
@@ -144,7 +144,7 @@ def checks : IO (List (String × Bool)) := do
 
   -- The first flow's session survives the second sign-in, and both belong to one account.
   let stillValid ← match session with
-    | some credential => identify (tenant := tenant) ports credential
+    | some credential => identify (tenant := tenant) ports config credential
     | none => pure none
 
   pure
@@ -185,7 +185,7 @@ def checks : IO (List (String × Bool)) := do
       ("flow: the first session is still valid after the second sign-in", stillValid.isSome),
       ("flow: both sessions belong to the same account",
         (← match sessionOf confirmed with
-          | some credential => identify (tenant := tenant) ports credential
+          | some credential => identify (tenant := tenant) ports config credential
           | none => pure none).map (·.account.value)
           == identified.map (·.account.value)) ]
 

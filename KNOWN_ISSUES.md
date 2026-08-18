@@ -56,6 +56,13 @@ The residue is that a change to how leancurl is called would pass the suite and 
 production. The metadata length check in `test/Tests/Postmark.lean` guards the one case where
 that would otherwise be silent.
 
+The webhook parsers have the same standing as the payloads they were written against, which is
+documentation rather than capture. Postmark's bounce and spam-complaint bodies and the SES
+notifications inside their SNS envelope are transcribed from the providers' published examples,
+so a field either provider has since renamed would pass the suite and drop every bounce in
+production, silently: an address that should have been suppressed simply is not. The first live
+bounce is the test, and it is worth watching for.
+
 The SES adapter has never been run against SES at all, not even by hand, so its standing is weaker
 again: the request it builds is checked against what SigV4 says a signed request should look like,
 and `leanaws` is checked against AWS's published cases, but no signature this adapter produced has
@@ -100,9 +107,36 @@ optional HTTP integration target of AUTH-13.2 is not built. A client wiring its 
 can undo the response policy by answering one outcome with a 200 and another with a 404, and
 nothing here would notice.
 
+The same absence leaves two other things offered rather than enforced. `TenantConfig.returnTo`
+validates a redirect target against the tenant's allowlist (AUTH-9.8), and the session cookie
+arrives in `Outcome.setCookies` with the attributes AUTH-9.2 fixes, but nothing makes a client
+call the first or set the second. Both are the shape they are so that using them is easier than
+not, which is as far as a library with no route layer can go.
+
 The floor is also only on `begin`. A code submission takes a different amount of time against a
 live attempt than against one that has expired, which is a smaller oracle against a much smaller
 budget, but it is one.
+
+## Delivery events are parsed but not authenticated (AUTH-12.1.1)
+
+`Postmark.deliveryEvents` and `Ses.deliveryEvents` read a payload. Neither establishes that the
+payload came from the provider, and `Service.ingestDelivery` trusts what it is handed.
+
+That is placement rather than oversight, and the requirement says so: the credential that would
+answer the question belongs to the route. Postmark authenticates its webhooks with HTTP basic
+auth on a URL the client chose, which this library never sees. SNS signs each post with a
+certificate the receiver fetches from a URL in the message and validates against the signing
+key, and it also posts a `SubscriptionConfirmation` that has to be answered before any
+notification arrives at all. Neither is reachable from a function that is given a string.
+
+The consequence is worth stating plainly because it is the whole of the exposure: an endpoint
+that forwards its body to `ingestDelivery` without checking is one by which anyone who finds the
+URL can suppress any address in that tenant, which is a denial of sign-in that looks like mail
+that simply never arrives. `README.md` says so where a client wiring the endpoint will read it,
+and the module comments say so where a client reading the parser will.
+
+What would close it is the HTTP integration target of AUTH-13.2 shipping the two endpoints with
+their verification, at which point the client would have nothing to skip.
 
 ## Client-initiated sends are not rate limited (AUTH-14.1.1)
 

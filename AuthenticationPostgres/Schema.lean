@@ -43,6 +43,9 @@ private def initialSql : String :=
 private def rateCountersSql : String :=
   include_str "../migrations/postgres/20260818130000_authentication_rate_counters.up.sql"
 
-def createSchemaSql : String := initialSql ++ rateCountersSql
+private def suppressionSql : String :=
+  include_str "../migrations/postgres/20260818140000_authentication_suppression.up.sql"
+
+def createSchemaSql : String := initialSql ++ rateCountersSql ++ suppressionSql
 
 end Authentication.Postgres

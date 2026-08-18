@@ -39,7 +39,10 @@ private def initialSql : String :=
 private def rateCountersSql : String :=
   include_str "../migrations/sqlite/20260818130000_authentication_rate_counters.up.sql"
 
-def createSchemaSql : String := initialSql ++ rateCountersSql
+private def suppressionSql : String :=
+  include_str "../migrations/sqlite/20260818140000_authentication_suppression.up.sql"
+
+def createSchemaSql : String := initialSql ++ rateCountersSql ++ suppressionSql
 
 def createSchema (db : SQLite) : IO Unit := db.exec createSchemaSql
 
