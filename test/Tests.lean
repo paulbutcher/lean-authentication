@@ -12,6 +12,7 @@ import Tests.Migrations
 import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres
+import Tests.RateLimit
 import Tests.Response
 import Tests.Ses
 import Tests.Signup

@@ -8,11 +8,11 @@ falls short of it and why.
 
 ## State of the implementation
 
-Stages 1 to 6 of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
+Stages 1 to 7 of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
 with the theorems of AUTH-16.1, then the `AuthStore` port, its conformance suite, the SQLite
 backend, and the cross-device flow running end to end with no server, then one SQL
 implementation shared by both backends, with Postgres and SQLite each passing the suite, then
-the Postmark transport, then signup policy and invitations, then the SES transport.
+the Postmark transport, then signup policy and invitations, then the SES transport, then rate limiting.
 
 - `Authentication/Attempt.lean` is the centre. `begin` and `step` decide a sign-in from an
   explicit state and an event, and return the next state together with the effects the edge is
@@ -33,6 +33,11 @@ the Postmark transport, then signup policy and invitations, then the SES transpo
   a value reaches the SQL text. What a backend supplies is a dialect, a schema, and an adapter.
 - `AuthenticationSqlite/` and `AuthenticationPostgres/` are those backends, each in its own
   target because the core library depends on no driver.
+- `Authentication/Port/RateLimiter.lean` is the limiter port and the window it counts in;
+  `AuthenticationSql/RateLimiter.lean` is the reference implementation over the same backends.
+  Five scopes are counted for every request, and the one that is not tenant qualified is the point
+  of the exercise: without it one address sprayed across many tenants multiplies the send budget by
+  the number of tenants and mail-bombs someone who never used this library.
 - `AuthenticationPostmark/` and `AuthenticationSes/` are the two outbound transports, each in its
   own target for the same reason. Nothing provider-specific appears outside them, and two of them
   is what makes the port an abstraction rather than a description of one provider. SES is reached
@@ -42,8 +47,8 @@ the Postmark transport, then signup policy and invitations, then the SES transpo
 Identifiers are indexed by the tenant they belong to (`AccountId tenant`), so an expression
 that crosses tenants does not typecheck.
 
-Still to come, in the order REQUIREMENTS §19 gives: rate limiting, and the session management
-surface. Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the
+Still to come, in the order REQUIREMENTS §19 gives: the session management surface, bounce
+ingestion and suppression. Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the
 requirements for it.
 
 ## Applying the schema

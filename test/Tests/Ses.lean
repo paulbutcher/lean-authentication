@@ -173,6 +173,8 @@ def flowChecks : IO (List (String × Bool)) := do
       transport := Ses.transportWith (stub (answering 200 "{\"MessageId\":\"ses-1\"}") recorded)
         config
       responsePolicy := SignInResponsePolicy.silent IO
+      limiter := RateLimiter.unlimited IO
+      responseFloor := ResponseFloor.immediate IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
                                 secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
   let _ ← begin ports tenantConfig (address "person@example.com") { ip := some "198.51.100.7" }

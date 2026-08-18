@@ -155,6 +155,8 @@ def flowChecks : IO (List (String × Bool)) := do
     { store := Sqlite.store db
       transport := Postmark.transportWith (stub (ok 200 accepted) recorded) config
       responsePolicy := SignInResponsePolicy.silent IO
+      limiter := RateLimiter.unlimited IO
+      responseFloor := ResponseFloor.immediate IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
                                 secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
   let _ ← begin ports tenantConfig (address "person@example.com") { ip := some "198.51.100.7" }

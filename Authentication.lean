@@ -14,6 +14,8 @@ import Authentication.Pepper
 import Authentication.Policy
 import Authentication.Port.Clock
 import Authentication.Port.Email
+import Authentication.Port.Latency
+import Authentication.Port.RateLimiter
 import Authentication.Response
 import Authentication.Service
 import Authentication.Store

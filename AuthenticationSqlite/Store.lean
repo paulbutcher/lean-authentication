@@ -33,8 +33,13 @@ there is one copy of it rather than two that can drift. Applying it to a databas
 outlive the process is the client's (AUTH-15.7.1); what this serves is `openInMemory`, which
 starts empty every time.
 -/
-def createSchemaSql : String :=
+private def initialSql : String :=
   include_str "../migrations/sqlite/20260818120000_authentication_initial.up.sql"
+
+private def rateCountersSql : String :=
+  include_str "../migrations/sqlite/20260818130000_authentication_rate_counters.up.sql"
+
+def createSchemaSql : String := initialSql ++ rateCountersSql
 
 def createSchema (db : SQLite) : IO Unit := db.exec createSchemaSql
 

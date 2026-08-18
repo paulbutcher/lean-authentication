@@ -6,6 +6,8 @@ import Authentication.Attempt
 import Authentication.Pepper
 import Authentication.Port.Clock
 import Authentication.Port.Email
+import Authentication.Port.Latency
+import Authentication.Port.RateLimiter
 import Authentication.Response
 import Authentication.Store
 import Codec.Base32
@@ -32,6 +34,8 @@ structure Ports (m : Type → Type) where
   store : AuthStore m
   transport : EmailTransport m
   responsePolicy : SignInResponsePolicy m
+  limiter : RateLimiter m
+  responseFloor : ResponseFloor m
   peppers : PepperRing
 
 /--
@@ -261,14 +265,36 @@ private def performAll {m : Type → Type} [Monad m] [RandomBytes m] {tenant : T
   settle <$> effects.foldlM (fun outcome effect => perform ports config now outcome effect) {}
 
 /--
+The five scopes of AUTH-14.1.1, for one address and one request. The address scope is not tenant
+qualified, which is the whole of its point: without it an attacker spraying one address across
+many tenants multiplies the budget by the tenant count.
+
+A request with no source address contributes to the other four rather than being waved through;
+an absent IP is a proxy that did not say, not a caller who did nothing.
+-/
+def limitScopes (tenant : TenantId) (address : EmailAddress) (requester : RequestContext) :
+    List LimitScope :=
+  let normalised := address.normalise
+  [ .tenantAddress tenant normalised, .address normalised, .tenant tenant, .global ]
+    ++ (match requester.ip with | some ip => [.sourceIp ip] | none => [])
+
+/--
 Begins a sign-in. The response comes from the policy rather than from what happened, and every
 outcome takes the same path through this function, so what the client chose to say cannot be
 undone by a difference in shape (AUTH-14.2).
 -/
 def begin {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (address : EmailAddress)
-    (requester : RequestContext) : m (Outcome tenant × SignInResponse) := do
+    (requester : RequestContext) : m (Outcome tenant × SignInResponse) :=
+  -- Every outcome leaves through the same floor, including the ones that did no work at all.
+  ports.responseFloor.normalise do
   let now ← Clock.now
+  if !(← ports.limiter.admit .send now (limitScopes tenant address requester)) then
+    -- The true outcome is recorded whatever the person was told (AUTH-14.2.6), and the policy
+    -- chooses only what is said: it cannot decline to be limited (AUTH-14.2.5).
+    ports.store.appendAudit tenant ⟨now, .anonymous, .signInRejected .throttled⟩
+    let response ← ports.responsePolicy.respond tenant .throttled
+    return ({}, response)
   match ← mintSecrets ports.peppers config with
   | .error _ =>
     let response ← ports.responsePolicy.respond tenant .throttled
@@ -294,11 +320,22 @@ under compare-and-set before performing anything. A commit that lost changes not
 performs nothing. -/
 private def advance {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (attempt : AttemptId tenant)
-    (event : AttemptEvent) : m (Except AuthError (Outcome tenant)) := do
+    (submission : Option RequestContext) (event : AttemptEvent) :
+    m (Except AuthError (Outcome tenant)) := do
   let now ← Clock.now
   match ← ports.store.attemptById tenant attempt with
   | none => pure (.error .attemptNotLive)
   | some state =>
+    -- The attempt is read before the limit is applied, because the address the budget belongs to
+    -- is on the attempt and the caller supplied only an id. One indexed read ahead of the check
+    -- is the price of not letting a caller choose which budget it is charged to.
+    let permitted ← match submission with
+      | none => pure true
+      | some requester =>
+        ports.limiter.admit .codeSubmission now (limitScopes tenant state.address requester)
+    if !permitted then
+      ports.store.appendAudit tenant ⟨now, .anonymous, .signInRejected .throttled⟩
+      return .error .throttled
     match Attempt.step config now state event with
     | .error e => pure (.error e)
     | .ok (next, effects) =>
@@ -312,30 +349,32 @@ def openLink {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : T
     (ports : Ports m) (config : TenantConfig tenant) (attempt : AttemptId tenant)
     (token : CredentialValue) (cookie : Option CredentialValue) :
     m (Except AuthError (Outcome tenant)) :=
-  advance ports config attempt
+  advance ports config attempt none
     (.linkOpened (ports.peppers.present token) (cookie.map ports.peppers.present))
 
 /-- The `POST` from the same-device landing page (AUTH-5.2.1). -/
 def confirmSignIn {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (attempt : AttemptId tenant)
     (cookie : CredentialValue) : m (Except AuthError (Outcome tenant)) :=
-  advance ports config attempt (.completionRequested (ports.peppers.present cookie))
+  advance ports config attempt none (.completionRequested (ports.peppers.present cookie))
 
 /-- The code typed into the browser the flow began in. -/
 def submitCode {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (attempt : AttemptId tenant)
-    (typed : String) (cookie : CredentialValue) : m (Except AuthError (Outcome tenant)) :=
+    (typed : String) (cookie : CredentialValue) (requester : RequestContext) :
+    m (Except AuthError (Outcome tenant)) :=
   match canonicalCode typed with
   | none => pure (.error .notOriginatingBrowser)
   | some code =>
-    advance ports config attempt
+    advance ports config attempt (some requester)
       (.revealedCodeSubmitted (ports.peppers.present cookie) (ports.peppers.present code))
 
 /-- The optional typed code from the mail body (AUTH-5.4). -/
 def submitEmailedCode {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (attempt : AttemptId tenant)
-    (typed : String) (cookie : CredentialValue) : m (Except AuthError (Outcome tenant)) :=
-  advance ports config attempt
+    (typed : String) (cookie : CredentialValue) (requester : RequestContext) :
+    m (Except AuthError (Outcome tenant)) :=
+  advance ports config attempt (some requester)
     (.emailedCodeSubmitted (ports.peppers.present cookie) (ports.peppers.present ⟨typed⟩))
 
 /-! ## Invitations

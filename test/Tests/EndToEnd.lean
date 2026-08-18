@@ -86,11 +86,14 @@ def checks : IO (List (String × Bool)) := do
     { store := Sqlite.store db
       transport := capturingTransport
       responsePolicy := SignInResponsePolicy.silent IO
+      limiter := RateLimiter.unlimited IO
+      responseFloor := ResponseFloor.immediate IO
       peppers }
   let person := addressOf "person@example.com"
 
   -- Browser A asks for a link.
-  let (begun, response) ← begin ports config person { ip := some "198.51.100.7" }
+  let requester : RequestContext := { ip := some "198.51.100.7" }
+  let (begun, response) ← begin ports config person requester
   let mail := (← sentRef.get)[0]?
   let body := (mail.map (·.textBody)).getD ""
   let attemptId := (parameterFrom body "attempt").getD ""
@@ -103,13 +106,13 @@ def checks : IO (List (String × Bool)) := do
   let shownCode := displayCode (revealedCode peppers ⟨token⟩)
 
   -- A guess from a browser holding no attempt cookie.
-  let guessed ← submitCode ports config ⟨attemptId⟩ shownCode ⟨"not-the-nonce"⟩
+  let guessed ← submitCode ports config ⟨attemptId⟩ shownCode ⟨"not-the-nonce"⟩ requester
 
   -- The code is typed back into browser A, in lower case and without the grouping hyphen.
   let typed := String.ofList ((shownCode.toList.filter (· != '-')).map Char.toLower)
   let completed ←
     match cookie with
-    | some (_, nonce) => submitCode ports config ⟨attemptId⟩ typed ⟨nonce⟩
+    | some (_, nonce) => submitCode ports config ⟨attemptId⟩ typed ⟨nonce⟩ requester
     | none => pure (.error .notOriginatingBrowser)
   let session := sessionOf completed
   let identified ← match session with
@@ -119,7 +122,7 @@ def checks : IO (List (String × Bool)) := do
   -- The same attempt cannot be completed twice.
   let replayed ←
     match cookie with
-    | some (_, nonce) => submitCode ports config ⟨attemptId⟩ typed ⟨nonce⟩
+    | some (_, nonce) => submitCode ports config ⟨attemptId⟩ typed ⟨nonce⟩ requester
     | none => pure (.error .notOriginatingBrowser)
 
   let audit ← ports.store.auditEntries tenant

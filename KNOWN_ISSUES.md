@@ -88,14 +88,30 @@ comparing the ids this library ships against the ones recorded. That was weighed
 machinery than the problem justifies while a loud, if late, failure is the alternative. It should
 be revisited if the schema starts changing often enough that clients fall behind in practice.
 
-## Rate limiting is not enforced (AUTH-14.1.1)
+## The response is equalised in time but not in shape (AUTH-14.2.4)
 
-Nothing limits how often a sign-in may be begun, and there is no `RateLimiter` port yet.
-AUTH-14.1.1 requires limits at five scopes, and the cross-tenant per-address limit in
-particular is what stops an attacker spraying one address across many tenants and mail-bombing
-a third party through the library.
+Beginning a sign-in now leaves through a configurable floor, so the outcome that sent mail and the
+outcome that did nothing take the same time to answer. That closes the half of AUTH-14.2.4 this
+library can close on its own.
 
-This is not a deferred stage: the delivery order in REQUIREMENTS §19 does not assign rate
-limiting to any stage, so it would otherwise be delivered by nobody. It needs its own port per
-AUTH-15.6, and it should land before anything is deployed, because AUTH-14.2.8 records that
-rate limiting does more work than wording does in protecting against enumeration.
+The other half, an identical HTTP status and an identical header set whatever the outcome, belongs
+to the layer that turns an `Outcome` into a response, and that layer does not exist yet: the
+optional HTTP integration target of AUTH-13.2 is not built. A client wiring its own routes today
+can undo the response policy by answering one outcome with a 200 and another with a 404, and
+nothing here would notice.
+
+The floor is also only on `begin`. A code submission takes a different amount of time against a
+live attempt than against one that has expired, which is a smaller oracle against a much smaller
+budget, but it is one.
+
+## Client-initiated sends are not rate limited (AUTH-14.1.1)
+
+The limiter covers beginning a sign-in and submitting a code. Creating and resending an invitation
+send mail too, and are not counted.
+
+That is deliberate rather than overlooked: both are privileged operations the client calls only
+when it has decided who may call them (AUTH-13.2), so they are not reachable by whoever is
+knocking on the sign-in page. It stops being true the moment a client exposes resend to an
+unauthenticated route, which is the failure worth naming here because nothing in the types will
+prevent it.
+

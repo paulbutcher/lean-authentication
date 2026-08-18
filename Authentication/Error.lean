@@ -19,6 +19,9 @@ inductive AuthError where
   | emailedCodeNotEnabled
   | invitationNotPending
   | invitationExpired
+  /-- Refused by the rate limiter (AUTH-14.1.1). Distinct from the others because nothing about
+  the request was wrong; it is the rate that was. -/
+  | throttled
   deriving DecidableEq, Repr, Inhabited
 
 end Authentication

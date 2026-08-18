@@ -37,7 +37,12 @@ Applying it is the client's: the library neither runs migrations nor records tha
 its migration tool, and for the tests. On an empty database it is every migration in order, which
 is all there is while there is only one.
 -/
-def createSchemaSql : String :=
+private def initialSql : String :=
   include_str "../migrations/postgres/20260818120000_authentication_initial.up.sql"
+
+private def rateCountersSql : String :=
+  include_str "../migrations/postgres/20260818130000_authentication_rate_counters.up.sql"
+
+def createSchemaSql : String := initialSql ++ rateCountersSql
 
 end Authentication.Postgres
