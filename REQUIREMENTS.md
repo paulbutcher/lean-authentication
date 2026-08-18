@@ -15,16 +15,18 @@ implementation and review can refer to them.
 
 - Email-based sign-in using a magic link, with a cross-device verification code.
 - Optional classic email one-time codes.
-- Federated sign-in over OAuth 2.0 / OpenID Connect (Google, Apple, and others).
 - Per-tenant signup policy: open, domain-restricted, or invitation-only.
 - Session issue, inspection, and revocation.
-- A pluggable outbound email transport, with Postmark as the first implementation.
+- A pluggable outbound email transport, with Postmark and Amazon SES as the first
+  implementations.
 - Pluggable storage, with Postgres and SQLite as the first implementations.
 
 ### 1.1 Non-goals for the first version
 
 - Passwords, in any form. There is no password field, no reset flow, no hashing of secrets
   the user chose.
+- Federated sign-in over OAuth 2.0 / OpenID Connect. Deferred; see §6, which remains specified
+  against the day it is built.
 - Authorisation. The library says who someone is, not what they may do. See §13, which is a
   requirement rather than a note: the boundary shapes the API.
 - Self-service account recovery. Someone who loses access to their mailbox is recovered by
@@ -43,7 +45,9 @@ implementation and review can refer to them.
   database driver. Framework and driver bindings live in separate `lean_lib` targets so that
   the core is usable with either and requires neither.
 - **AUTH-2.3** Expected dependencies, all from `github.com/paulbutcher` unless noted:
-  - `leancurl` for outbound HTTPS (Postmark API, OIDC discovery, token exchange, JWKS).
+  - `leancurl` for outbound HTTPS (the Postmark and SES APIs).
+  - `leancrypto` for SHA-256, HMAC-SHA256, hex, base64url, Crockford base32, and the byte
+    comparison of AUTH-5.3.4.
   - `leanpostgres` and `leanmigrate` for the Postgres storage backend.
   - A SQLite driver, for both the SQLite backend and the test backend (AUTH-16.5), which makes
     it a dependency of `lake test` and not only of one optional target. Confirm what exists in
@@ -53,10 +57,14 @@ implementation and review can refer to them.
   - `lean-routing`, `lean-html`, `lean-htmx`, `lean-forms`, `lean-middleware` for the optional
     HTTP integration target only.
   - `plausible` (leanprover-community) for property tests.
-- **AUTH-2.4** Any cryptography needed (HMAC-SHA256, SHA-256, ES256 and RS256 signature
-  verification, base64url, constant-time comparison) MUST be surveyed against the existing
-  ecosystem before being written here. If it does not exist, stop and ask whether it belongs in
-  a new shared library rather than in `lean-auth`. Do not vendor a copy.
+- **AUTH-2.4** Any cryptography needed (HMAC-SHA256, SHA-256, base64url, constant-time
+  comparison, and the AWS Signature Version 4 derivation built on the first two) MUST be
+  surveyed against the existing ecosystem before being written here. If it does not exist, stop
+  and ask whether it belongs in a new shared library rather than in `lean-auth`. Do not vendor a
+  copy. The survey was done and found nothing usable, so `leancrypto` was created to hold these
+  and this library depends on it; a further consumer needing the same primitives extends that
+  library rather than reopening the question. ES256 and RS256 signature verification are deferred
+  with §6.
 
 ---
 
@@ -258,6 +266,19 @@ before implementing any of it.
 
 ## 6. Federated sign-in (OAuth 2.0 / OIDC)
 
+Deferred out of the first version. The section is retained in full, both so that later
+requirement numbers stay stable and because the requirements below were written while the
+reasoning behind them was fresh; AUTH-6.7 in particular is the account takeover that is easy to
+reintroduce from a blank page.
+
+Requirements elsewhere that presuppose federated sign-in are deferred with it: AUTH-6.10,
+AUTH-8.6, AUTH-14.2.7, AUTH-15.7.3, the OAuth state record of §15.1, and the
+unverified-provider-email case of AUTH-16.7. What is not deferred
+is the provision made for it, which is cheap now and expensive to retrofit: the `SignInOutcome`
+type of AUTH-14.2.1 and the response policy of §14.2 are shared surfaces that a federated path
+must join rather than duplicate, and AUTH-4.4.2 keeps `Credential` open so that a linked identity
+needs no schema rewrite.
+
 - **AUTH-6.1** The Authorization Code flow with PKCE (`S256`) MUST be used, including for
   confidential clients. The implicit and hybrid flows MUST NOT be implemented.
 - **AUTH-6.2** `state` MUST be a random value bound to a server-side record holding the tenant,
@@ -419,6 +440,36 @@ before implementing any of it.
 - **AUTH-10.8** Deployment documentation MUST state the DNS requirements: SPF, DKIM, and DMARC
   on the sending domain, and either a real MX or an explicit null MX (RFC 7505) on the sending
   subdomain, so that receivers do not penalise a `From` domain that cannot receive mail.
+- **AUTH-10.9** An Amazon SES adapter MUST be built in the first version, in its own target,
+  and the core library MUST compile without either it or Postmark. The reasoning is AUTH-15.8.2's
+  applied to this port: an abstraction with one implementation is not an abstraction, and the
+  provider assumptions that have leaked into `OutboundEmail` are not visible until a second
+  transport has to satisfy it.
+- **AUTH-10.10** Both adapters MUST classify provider failures into the permanent and transient
+  cases of AUTH-10.3 from the provider's own error vocabulary, not from the HTTP status alone.
+  A failure an operator must fix, such as an unverified sending identity or an account still in
+  the SES sandbox, is transient in this sense: it resolves without the person who asked for the
+  link doing anything, and telling them their address was rejected would be false.
+- **AUTH-10.11** The idempotency key of AUTH-10.4 MUST reach the provider by whatever channel
+  that provider echoes back on its delivery and bounce notifications, so that the key preventing
+  a double send is the key identifying the attempt when the bounce arrives (§12). It MUST NOT be
+  dropped by an adapter whose provider has no idempotency header of its own.
+- **AUTH-10.12** SES credentials MUST be supplied by configuration per AUTH-14.1.6, and the
+  design MUST accommodate short-lived credentials carrying a session token, since an IAM role is
+  the normal way to hold them and a long-lived access key is the thing deployment guidance
+  should be able to discourage.
+- **AUTH-10.13** SES MUST be reached through the SESv2 `SendEmail` API over HTTPS, signed with
+  AWS Signature Version 4, rather than through its SMTP endpoint. The API gives the structured
+  per-request errors AUTH-10.10 needs, carries email tags for AUTH-10.11, needs no SMTP client,
+  and reaches the network through the same seam the Postmark adapter is tested through. The cost
+  is request signing, which AUTH-10.14 places outside this library.
+- **AUTH-10.14** SigV4 request signing MUST come from a separate shared library rather than being
+  written in this repository. It is general-purpose AWS code with no connection to
+  authentication, which is what AUTH-2.4 and AUTH-17.5 are about; a survey of the ecosystem found
+  no Lean 4 implementation of it, and the nearest thing that exists, `paulbutcher/lean-aws-lambda`,
+  wraps an application so it can run on Lambda rather than call an AWS API. Signing is a pure
+  total function over a request and a timestamp, so it is testable against AWS's published
+  vectors without a network and without this library.
 
 ---
 
@@ -743,7 +794,9 @@ why the `plausible` tactic is unusable and properties must be written as explici
     every input.
   - The default response policy is constant: `respond t o₁ = respond t o₂` for all outcomes and
     all tenants. This is the formal statement of AUTH-14.2.3 and is provable by case analysis.
-  - Base32 and base64url encode/decode round-trip.
+  - Base32 and base64url encode/decode round-trip. These are discharged by `leancrypto`, which
+    carries them beside the definitions; nothing is owed here beyond depending on a version that
+    has them.
 - **AUTH-16.2** Tenant isolation SHOULD be enforced by types rather than tested (AUTH-4.2.4). If
   a type-level guarantee proves impractical, record why in a comment and rely on the conformance
   suite instead.
@@ -822,8 +875,6 @@ but the decision is not the implementer's to make. Ask, do not assume.
 - **18.8 Localisation.** Are emails single-language? Locale selection has to be threaded from
   the request through to template rendering, which is easier to design in than to retrofit.
 
----
-
 ## 19. Suggested delivery order
 
 Each stage should build, test, and be reviewable on its own.
@@ -837,5 +888,10 @@ Each stage should build, test, and be reviewable on its own.
 4. Postmark outbound transport; the email flow working end to end.
 5. Signup policies and invitations, including the metadata payload and the first-in-tenant
    signal.
-6. OIDC, with Google first and Apple second, since Apple is where the sharp edges are.
-7. Session management surface, bounce ingestion, suppression.
+6. The SES transport (AUTH-10.9), with both adapters satisfying one port.
+7. Rate limiting, behind the port of AUTH-15.6 and at the five scopes of AUTH-14.1.1. It is
+   listed as a stage because it was previously assigned to none, and so would have been
+   delivered by nobody.
+8. Session management surface, bounce ingestion, suppression.
+
+Federated sign-in was stage 6 and is deferred; see §6.

@@ -25,7 +25,7 @@ structure Check where
 
 private def key : KeyId := ⟨"conformance"⟩
 
-private def digestOf (bytes : List UInt8) : Digest := ⟨key, bytes⟩
+private def digestOf (bytes : List UInt8) : Digest := ⟨key, ⟨bytes.toArray⟩⟩
 
 private def addressOf (localPart : String) : EmailAddress := ⟨localPart, ⟨["example", "com"]⟩⟩
 

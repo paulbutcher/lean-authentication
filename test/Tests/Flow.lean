@@ -30,9 +30,10 @@ def config : TenantConfig tenant :=
 
 def key : KeyId := ⟨"pepper-1"⟩
 
-def minted (value : String) (bytes : List UInt8) : MintedCredential := ⟨⟨value⟩, ⟨key, bytes⟩⟩
+def minted (value : String) (bytes : List UInt8) : MintedCredential :=
+  ⟨⟨value⟩, ⟨key, ⟨bytes.toArray⟩⟩⟩
 
-def presenting (bytes : List UInt8) : PresentedSecret := ⟨[⟨key, bytes⟩]⟩
+def presenting (bytes : List UInt8) : PresentedSecret := ⟨[⟨key, ⟨bytes.toArray⟩⟩]⟩
 
 def tokenBytes : List UInt8 := [17, 42, 99, 3]
 def codeBytes : List UInt8 := [7, 7, 1]

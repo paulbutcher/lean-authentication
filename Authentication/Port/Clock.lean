@@ -17,7 +17,7 @@ class Clock (m : Type → Type) where
 class RandomBytes (m : Type → Type) where
   /-- Fails rather than falling back to a weaker source: a credential drawn from a source that
   could not deliver is worse than a sign-in that did not happen (AUTH-5.3.1). -/
-  draw : Nat → m (Except String (List UInt8))
+  draw : Nat → m (Except String ByteArray)
 
 export Clock (now)
 

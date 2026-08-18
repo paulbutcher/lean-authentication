@@ -2,6 +2,8 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
+import Codec.Hex
+import Crypto.Compare
 
 namespace Authentication
 
@@ -13,16 +15,14 @@ structure KeyId where
 
 structure Digest where
   keyId : KeyId
-  bytes : List UInt8
-  deriving DecidableEq, Repr, Inhabited
+  bytes : ByteArray
+  deriving DecidableEq, Inhabited
 
-/--
-Compares every byte. `==` on lists stops at the first difference, which reports how long a
-correct prefix a guess had; that is a usable oracle against a credential compared byte by byte
-(AUTH-5.3.4).
--/
-def bytesEqual (a b : List UInt8) : Bool :=
-  a.length == b.length && (List.zipWith (fun x y => x == y) a b).foldl Bool.and true
+/-- Shows four bytes and not the rest, so that a digest reaching a log through one of the derived
+instances downstream cannot be matched against a stored one (AUTH-14.1.3). -/
+instance : Repr Digest where
+  reprPrec d _ :=
+    Std.Format.text s!"Digest({d.keyId.value}, {Codec.Hex.encodeString (d.bytes.extract 0 4)}...)"
 
 /--
 A secret offered by a request, digested under each pepper still inside its overlap window.
@@ -34,11 +34,13 @@ structure PresentedSecret where
   deriving Repr, Inhabited
 
 /-- Accepts when the digest under the same key matches. A secret offered under a key the stored
-digest was not produced with is not a match, however its bytes compare. -/
+digest was not produced with is not a match, however its bytes compare. The comparison is
+`Crypto.bytesEqual` and not `==`, because the latter stops at the first differing byte and so
+reports how long a correct prefix a guess had (AUTH-5.3.4). -/
 def Digest.accepts (stored : Digest) (presented : PresentedSecret) : Bool :=
   match presented.digests.find? (fun d => d.keyId == stored.keyId) with
   | none => false
-  | some d => bytesEqual d.bytes stored.bytes
+  | some d => Crypto.bytesEqual d.bytes stored.bytes
 
 /-- The transmitted form of a credential: base64url for tokens, Crockford base32 for codes. -/
 structure CredentialValue where

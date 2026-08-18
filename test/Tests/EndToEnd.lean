@@ -30,15 +30,15 @@ instance : Clock IO where
 instance : RandomBytes IO where
   draw count := do
     let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Crypto.Sha256.hashString s!"conformance-seed-{index}").take count))
+    pure (.ok ((Crypto.Sha256.hashUtf8 s!"conformance-seed-{index}").extract 0 count))
 
 def capturingTransport : EmailTransport IO where
   send mail := do
     sentRef.modify (· ++ [mail])
     pure (.ok ⟨mail.idempotencyKey⟩)
 
-def peppers : Crypto.PepperRing :=
-  { current := { keyId := ⟨"pepper-1"⟩, secret := Crypto.Sha256.hashString "test pepper" } }
+def peppers : PepperRing :=
+  { current := { keyId := ⟨"pepper-1"⟩, secret := Crypto.Sha256.hashUtf8 "test pepper" } }
 
 def tenant : TenantId := ⟨"acme"⟩
 

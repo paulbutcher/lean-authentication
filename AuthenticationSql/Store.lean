@@ -43,7 +43,7 @@ private def domainOfText (text : String) : Domain := ⟨text.splitOn "."⟩
 private def digestBytesText (d : Digest) : String := Codec.Base64Url.encodeString d.bytes
 
 private def digestOf (keyId : String) (bytes : String) : Digest :=
-  ⟨⟨keyId⟩, (Codec.Base64Url.decodeString bytes).getD []⟩
+  ⟨⟨keyId⟩, (Codec.Base64Url.decodeString bytes).getD ⟨#[]⟩⟩
 
 private def timeOf (i : Int) : Timestamp := ⟨i⟩
 

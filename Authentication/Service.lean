@@ -3,13 +3,13 @@ Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Authentication.Attempt
-import Authentication.Codec.Base32
-import Authentication.Codec.Base64Url
-import Authentication.Crypto.Hmac
+import Authentication.Pepper
 import Authentication.Port.Clock
 import Authentication.Port.Email
 import Authentication.Response
 import Authentication.Store
+import Codec.Base32
+import Codec.Base64Url
 
 /-!
 The interpreter at the edge (AUTH-3.1).
@@ -25,14 +25,14 @@ prevent. By the time `issueSession` runs, whoever is asking has proven control o
 
 namespace Authentication.Service
 
-open Authentication.Codec
+open Codec
 
 /-- The implementations chosen at startup (AUTH-3.5), together with the peppers in force. -/
 structure Ports (m : Type → Type) where
   store : AuthStore m
   transport : EmailTransport m
   responsePolicy : SignInResponsePolicy m
-  peppers : Crypto.PepperRing
+  peppers : PepperRing
 
 /--
 What an account creation tells the client. Both fields exist because the library owns identity
@@ -70,8 +70,8 @@ private def randomValue {m : Type → Type} [Monad m] [RandomBytes m] (bytes : N
 confusable pair, and grouped for transcription (AUTH-5.3.2). It is derived from the token that
 opened the link, which is why it can be shown again without ever having been stored
 (AUTH-5.2.2). -/
-def revealedCode (peppers : Crypto.PepperRing) (token : CredentialValue) : CredentialValue :=
-  ⟨Base32.encodeString ((peppers.current.derive "revealed-code" token).take 5)⟩
+def revealedCode (peppers : PepperRing) (token : CredentialValue) : CredentialValue :=
+  ⟨Base32.encodeString ((peppers.current.derive "revealed-code" token).extract 0 5)⟩
 
 /-- The grouping is for the eye and the typing hand only. What is digested is the canonical
 form, so a code typed back with or without the grouping is the same code. -/
@@ -84,13 +84,13 @@ grouping hyphen, or used lower case has still typed the code. -/
 def canonicalCode (typed : String) : Option CredentialValue :=
   (Base32.decodeString typed).map fun bytes => ⟨Base32.encodeString bytes⟩
 
-private def emailedCodeOf (drawn : List UInt8) : CredentialValue :=
-  let value := drawn.foldl (fun acc byte => acc * 256 + byte.toNat) 0 % 1000000
+private def emailedCodeOf (drawn : ByteArray) : CredentialValue :=
+  let value := drawn.toList.foldl (fun acc byte => acc * 256 + byte.toNat) 0 % 1000000
   let digits := toString value
   ⟨String.ofList (List.replicate (6 - digits.length) '0') ++ digits⟩
 
 def mintSecrets {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
-    (peppers : Crypto.PepperRing) (config : TenantConfig tenant) :
+    (peppers : PepperRing) (config : TenantConfig tenant) :
     m (Except String MintedSecrets) := do
   match ← randomValue 16, ← randomValue 16 with
   | .error e, _ => pure (.error e)
@@ -366,7 +366,7 @@ private def invitationEmail {tenant : TenantId} (config : TenantConfig tenant)
     -- The token rather than the invitation, so that a resend is a different message: AUTH-8.5
     -- rotates the token, and suppressing the second send as a duplicate would strand the person
     -- with a link that no longer works.
-    idempotencyKey := s!"invitation:{invitation.id.value}:{invitation.tokenDigest.bytes.length}" }
+    idempotencyKey := s!"invitation:{invitation.id.value}:{invitation.tokenDigest.bytes.size}" }
 
 /-- Creates an invitation for exactly one address in one tenant and mails the link. The token is
 returned as well, because a client that sends its own mail still needs it. -/

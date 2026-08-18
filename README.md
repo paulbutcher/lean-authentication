@@ -25,8 +25,9 @@ the Postmark transport, then signup policy and invitations.
   it against their own backends.
 - `Authentication/Email.lean` parses and normalises addresses, and holds a domain as its
   labels, which is what makes allowlist matching respect label boundaries.
-- `Authentication/Codec/` and `Authentication/Crypto/` hold base64url, Crockford base32,
-  SHA-256 and HMAC-SHA256. See `KNOWN_ISSUES.md` for why they are here.
+- `leancrypto` supplies base64url, Crockford base32, hex, SHA-256 and HMAC-SHA256. `Pepper`
+  is what this library adds to them: the server-side key a credential is digested under, and the
+  ring of keys a lookup may be satisfied by while a rotation overlaps.
 - `AuthenticationSql/` is one implementation of the port for every SQL backend. A statement is
   a list of fragments and a value can enter one only as a parameter, so no path exists by which
   a value reaches the SQL text. What a backend supplies is a dialect, a schema, and an adapter.
@@ -36,8 +37,9 @@ the Postmark transport, then signup policy and invitations.
 Identifiers are indexed by the tenant they belong to (`AccountId tenant`), so an expression
 that crosses tenants does not typecheck.
 
-Still to come, in the order REQUIREMENTS §19 gives: OIDC, and the session management surface.
-Rate limiting is required and is not in any stage; see `KNOWN_ISSUES.md`.
+Still to come, in the order REQUIREMENTS §19 gives: the SES transport, rate limiting, and the
+session management surface. Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the
+requirements for it.
 
 ## Sending domain DNS
 

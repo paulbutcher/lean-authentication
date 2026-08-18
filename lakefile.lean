@@ -21,6 +21,9 @@ require leanpostgres from git
 require leancurl from git
   "https://github.com/paulbutcher/leancurl" @ "v0.1.0"
 
+require leancrypto from git
+  "https://github.com/paulbutcher/leancrypto" @ "v0.1.0"
+
 @[default_target]
 lean_lib Authentication
 

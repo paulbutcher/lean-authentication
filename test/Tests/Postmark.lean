@@ -135,7 +135,7 @@ instance : Clock IO where
 instance : RandomBytes IO where
   draw count := do
     let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Crypto.Sha256.hashString s!"postmark-seed-{index}").take count))
+    pure (.ok ((Crypto.Sha256.hashUtf8 s!"postmark-seed-{index}").extract 0 count))
 
 def tenant : TenantId := ⟨"acme-postmark"⟩
 
@@ -156,7 +156,7 @@ def flowChecks : IO (List (String × Bool)) := do
       transport := Postmark.transportWith (stub (ok 200 accepted) recorded) config
       responsePolicy := SignInResponsePolicy.silent IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
-                                secret := Crypto.Sha256.hashString "test pepper" } } }
+                                secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
   let _ ← begin ports tenantConfig (address "person@example.com") { ip := some "198.51.100.7" }
   let request := (← recorded.get).getD { url := "" }
   let body := bodyText request

@@ -34,28 +34,6 @@ split on separators and the character check that currently rejects the label. No
 downstream of the parser needs to change, because everything downstream already works on
 normalised labels.
 
-## General-purpose code lives in this repository (AUTH-2.4, AUTH-17.5)
-
-`Authentication/Codec/` holds base64url and Crockford base32; `Authentication/Crypto/` holds
-SHA-256 and HMAC-SHA256. None of it has anything to do with authentication, and both
-requirements say such code should be surveyed against the ecosystem and, where nothing exists,
-raised as a question about which library should own it.
-
-The surveys were done and found nothing usable: no maintained Lean 4 base32 or base64url
-library on a current toolchain, and no HMAC-SHA256 at all, only formalisation projects proving
-things about SHA-256 rather than computing it. The decision taken was to implement here for
-now, isolated in those two directories so the move is a change of import.
-
-Consequences while it stands:
-
-- Anyone else needing these has no library to depend on, and will write them again.
-- The next stage that needs ES256 and RS256 signature verification will face the same question
-  at a much larger size, and that is the point at which the shared library is worth creating.
-
-The crypto is checked against the published vectors in `test/Tests/Crypto.lean`: FIPS 180-4 for
-SHA-256 and RFC 4231 for HMAC-SHA256, including the oversized-key case where the key is hashed
-first. The codecs carry round-trip theorems.
-
 ## No committed test makes an HTTP request (AUTH-16.5)
 
 `Authentication.Postmark.curlHttp` is the only part of the outbound transport the suite never
@@ -95,7 +73,8 @@ recreating the database. That answer expires at the first release.
 
 AUTH-15.7.1 requires Postgres migrations to ship with the backend via `leanmigrate`, which exists
 (`paulbutcher/leanmigrate`, `v0.3.1`) and was not adopted in stage 3. It should be adopted before
-a schema change has to preserve anything, and the next stage adds tables for federated identity.
+a schema change has to preserve anything. The SES transport touches no schema, so the reprieve
+lasts exactly one stage: rate limiting adds counters, and a suppression list follows.
 
 ## Rate limiting is not enforced (AUTH-14.1.1)
 
