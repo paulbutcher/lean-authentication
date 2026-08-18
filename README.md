@@ -8,11 +8,11 @@ falls short of it and why.
 
 ## State of the implementation
 
-Stages 1 to 5 of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
+Stages 1 to 6 of the delivery order in REQUIREMENTS §19: the domain model and pure state machine
 with the theorems of AUTH-16.1, then the `AuthStore` port, its conformance suite, the SQLite
 backend, and the cross-device flow running end to end with no server, then one SQL
 implementation shared by both backends, with Postgres and SQLite each passing the suite, then
-the Postmark transport, then signup policy and invitations.
+the Postmark transport, then signup policy and invitations, then the SES transport.
 
 - `Authentication/Attempt.lean` is the centre. `begin` and `step` decide a sign-in from an
   explicit state and an event, and return the next state together with the effects the edge is
@@ -33,12 +33,17 @@ the Postmark transport, then signup policy and invitations.
   a value reaches the SQL text. What a backend supplies is a dialect, a schema, and an adapter.
 - `AuthenticationSqlite/` and `AuthenticationPostgres/` are those backends, each in its own
   target because the core library depends on no driver.
+- `AuthenticationPostmark/` and `AuthenticationSes/` are the two outbound transports, each in its
+  own target for the same reason. Nothing provider-specific appears outside them, and two of them
+  is what makes the port an abstraction rather than a description of one provider. SES is reached
+  through the SESv2 API signed with SigV4 from `leanaws`, rather than through its SMTP endpoint,
+  because the API reports its failures in a form the permanent and transient split can read.
 
 Identifiers are indexed by the tenant they belong to (`AccountId tenant`), so an expression
 that crosses tenants does not typecheck.
 
-Still to come, in the order REQUIREMENTS §19 gives: the SES transport, rate limiting, and the
-session management surface. Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the
+Still to come, in the order REQUIREMENTS §19 gives: rate limiting, and the session management
+surface. Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the
 requirements for it.
 
 ## Sending domain DNS

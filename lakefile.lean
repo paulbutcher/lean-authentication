@@ -24,6 +24,9 @@ require leancurl from git
 require leancrypto from git
   "https://github.com/paulbutcher/leancrypto" @ "v0.1.0"
 
+require leanaws from git
+  "https://github.com/paulbutcher/lean-aws" @ "v0.1.0"
+
 @[default_target]
 lean_lib Authentication
 
@@ -38,6 +41,9 @@ lean_lib AuthenticationPostgres
 
 @[default_target]
 lean_lib AuthenticationPostmark
+
+@[default_target]
+lean_lib AuthenticationSes
 
 /--
 Tests live in the `test/` subproject rather than here, so that a project depending on this one is

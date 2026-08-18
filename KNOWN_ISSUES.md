@@ -36,8 +36,8 @@ normalised labels.
 
 ## No committed test makes an HTTP request (AUTH-16.5)
 
-`Authentication.Postmark.curlHttp` is the only part of the outbound transport the suite never
-runs. Everything above it is covered: the payload built, the responses interpreted, and the flow
+`Authentication.Postmark.curlHttp` and `Authentication.Ses.curlHttp` are the only parts of the
+outbound transports the suite never runs. Everything above it is covered: the payload built, the responses interpreted, and the flow
 from `begin` through the template into the request. What is not covered is leancurl itself, and
 so whether the payload leaves this process intact.
 
@@ -55,6 +55,11 @@ server token. Anyone changing the request should.
 The residue is that a change to how leancurl is called would pass the suite and fail in
 production. The metadata length check in `test/Tests/Postmark.lean` guards the one case where
 that would otherwise be silent.
+
+The SES adapter has never been run against SES at all, not even by hand, so its standing is weaker
+again: the request it builds is checked against what SigV4 says a signed request should look like,
+and `leanaws` is checked against AWS's published cases, but no signature this adapter produced has
+ever been offered to AWS. The first live send is the test.
 
 ## Neither backend has migrations (AUTH-15.7.1)
 

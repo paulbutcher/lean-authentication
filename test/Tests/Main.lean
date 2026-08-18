@@ -15,7 +15,8 @@ def main : IO UInt32 := do
   let checks := Tests.Flow.checks ++ (← Tests.Sqlite.conformanceChecks)
     ++ (← Tests.EndToEnd.checks) ++ Tests.Sql.checks ++ Tests.Template.checks ++ (← Tests.Signup.checks)
     ++ (← Tests.Signup.invitationChecks) ++ (← Tests.Signup.existingAccountChecks)
-    ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ (← Tests.Postgres.conformanceChecks)
+    ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ Tests.Ses.checks
+    ++ (← Tests.Ses.flowChecks) ++ (← Tests.Postgres.conformanceChecks)
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do
     IO.eprintln s!"FAILED: {name}"
