@@ -61,25 +61,32 @@ again: the request it builds is checked against what SigV4 says a signed request
 and `leanaws` is checked against AWS's published cases, but no signature this adapter produced has
 ever been offered to AWS. The first live send is the test.
 
-## Neither backend has migrations (AUTH-15.7.1)
+## Migrations are shipped but not applied or tracked (AUTH-15.7.1)
 
-Each backend ships a `createSchemaSql` that is a `CREATE TABLE IF NOT EXISTS` script run at
-startup. It creates; it does not migrate. `IF NOT EXISTS` does nothing to a table that already
-exists, so a column added in a later release is silently absent from every database created
-before it, and the failure appears when a statement first names the column rather than when the
-schema is applied. Neither backend records which version of the schema it is at, so nothing can
-detect the mismatch either.
+Each backend ships its schema as up and down SQL under `migrations/`, named in `leanmigrate`'s
+convention so a client using it can adopt the files unaltered. What the library does not do is run
+them, or record that they ran, or check at startup that they did.
 
-This was found the way it will always be found: adding `attempts.invitation_id` passed against a
-fresh SQLite database and failed against a Postgres database an earlier stage had created.
+The consequence is the one that prompted all this. A client who takes a new version and does not
+apply its migration has a database missing a column, and finds out when a statement first names
+that column rather than when the process starts. That is exactly how the gap was found the first
+time: adding `attempts.invitation_id` passed against a fresh SQLite database and failed against a
+Postgres database an earlier stage had created.
 
-The current answer is that the schema has no deployments to preserve, so a change to it means
-recreating the database. That answer expires at the first release.
+Closing it properly needs bookkeeping the library can call its own, and there is nowhere to put it.
+`leanmigrate` writes to a single `schema_migrations` table whose name is fixed in its engine and
+unqualified, so on SQLite it is shared by construction and on Postgres it resolves through
+`search_path` into the client's schema. Two owners in one table leave `migrateUp` and `pending`
+working, because each filters the ids on disk against the table, but they break `rollback` in both
+directions: it selects ids from the table alone, then fails with `cannot roll back <id>: no
+migration files found for it` on the first id belonging to the other owner. A shared 14-digit
+timestamp id would collide on the primary key as well, failing a migration for a reason nobody
+would guess from the message.
 
-AUTH-15.7.1 requires Postgres migrations to ship with the backend via `leanmigrate`, which exists
-(`paulbutcher/leanmigrate`, `v0.3.1`) and was not adopted in stage 3. It should be adopted before
-a schema change has to preserve anything. The SES transport touches no schema, so the reprieve
-lasts exactly one stage: rate limiting adds counters, and a suppression list follows.
+What would close it is a configurable bookkeeping table in `leanmigrate` plus a startup check
+comparing the ids this library ships against the ones recorded. That was weighed and judged more
+machinery than the problem justifies while a loud, if late, failure is the alternative. It should
+be revisited if the schema starts changing often enough that clients fall behind in practice.
 
 ## Rate limiting is not enforced (AUTH-14.1.1)
 

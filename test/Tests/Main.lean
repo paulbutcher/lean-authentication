@@ -12,7 +12,7 @@ value is in the effects a theorem does not constrain.
 -/
 
 def main : IO UInt32 := do
-  let checks := Tests.Flow.checks ++ (← Tests.Sqlite.conformanceChecks)
+  let checks := Tests.Flow.checks ++ (← Tests.Migrations.checks) ++ (← Tests.Sqlite.conformanceChecks)
     ++ (← Tests.EndToEnd.checks) ++ Tests.Sql.checks ++ Tests.Template.checks ++ (← Tests.Signup.checks)
     ++ (← Tests.Signup.invitationChecks) ++ (← Tests.Signup.existingAccountChecks)
     ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ Tests.Ses.checks

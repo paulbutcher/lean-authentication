@@ -46,6 +46,26 @@ Still to come, in the order REQUIREMENTS §19 gives: rate limiting, and the sess
 surface. Federated sign-in over OIDC is deferred; REQUIREMENTS §6 keeps the
 requirements for it.
 
+## Applying the schema
+
+The package ships the SQL under `migrations/postgres` and `migrations/sqlite`, paired up and down
+and named in `leanmigrate`'s convention, so a client using `leanmigrate` copies the files into its
+own migrations directory and they run in with everything else. Applying them by any other means,
+`psql`, the `sqlite3` shell, a deployment pipeline, works just as well: they are ordinary SQL.
+
+Postgres objects live in an `auth` schema and SQLite objects behind an `auth_` prefix, so they
+cannot collide with a client's own. Both stay in the client's database, which is what makes
+enlisting in the client's transaction possible at all.
+
+**Applying them is yours, and nothing here checks that you did.** The library does not run
+migrations and does not record or verify that they ran. A client who upgrades and forgets finds
+out when a statement first names a column the database does not have, which is later and less
+obvious than a failure at startup. `KNOWN_ISSUES.md` records why the alternative was judged more
+machinery than the problem justifies.
+
+`Sqlite.openInMemory` applies the schema, because it starts empty every time and the tests run
+against it. `Sqlite.openFile` deliberately does not.
+
 ## Sending domain DNS
 
 The `From` domain needs all of these before it will be delivered rather than filed (AUTH-10.8):

@@ -48,7 +48,9 @@ implementation and review can refer to them.
   - `leancurl` for outbound HTTPS (the Postmark and SES APIs).
   - `leancrypto` for SHA-256, HMAC-SHA256, hex, base64url, Crockford base32, and the byte
     comparison of AUTH-5.3.4.
-  - `leanpostgres` and `leanmigrate` for the Postgres storage backend.
+  - `leanpostgres` for the Postgres storage backend. Not `leanmigrate`: the migrations this
+    library ships are SQL files the client applies, so nothing here depends on a migration tool
+    (AUTH-15.7.1).
   - A SQLite driver, for both the SQLite backend and the test backend (AUTH-16.5), which makes
     it a dependency of `lake test` and not only of one optional target. Confirm what exists in
     the ecosystem before depending on it; if nothing suitable does, stop and ask rather than
@@ -734,10 +736,19 @@ typecheck while violating, and every one of them is load-bearing:
 
 ### 15.7 Schema and secrets
 
-- **AUTH-15.7.1** Each backend owns its own schema and migrations. For Postgres, migrations ship
-  with the backend via `leanmigrate` and MUST create objects in a dedicated schema (`auth`) so
-  they cannot collide with the client's own, while remaining in the same database so that
-  AUTH-15.3 is possible.
+- **AUTH-15.7.1** Each backend owns its own schema and migrations. For Postgres, migrations MUST
+  create objects in a dedicated schema (`auth`) so they cannot collide with the client's own,
+  while remaining in the same database so that AUTH-15.3 is possible. SQLite has no schemas, so
+  its objects carry an `auth_` prefix for the same purpose.
+
+  Migrations MUST ship as SQL files, paired up and down, named in `leanmigrate`'s convention so
+  that a client using it can adopt them into its own migration set unaltered. The library MUST NOT
+  apply them, and MUST NOT record or verify that they were applied. Its bookkeeping would have to
+  live somewhere, and `leanmigrate` writes to one `schema_migrations` table whose name is fixed and
+  unqualified, so the only place available is the client's: two owners in one table break
+  `rollback` for both, since each rolls back by id and neither has files for the other's. Keeping
+  the library out of that entirely is a deliberate trade of a detectable failure for a much smaller
+  design, and the cost of it MUST be documented (AUTH-15.7.5).
 - **AUTH-15.7.2** Credential lookup is by digest, which works because HMAC is deterministic
   under a fixed pepper. Every stored digest MUST therefore carry the identifier of the key that
   produced it, and lookup MUST try the current key and any keys still within their overlap
@@ -751,6 +762,9 @@ typecheck while violating, and every one of them is load-bearing:
 - **AUTH-15.7.4** Timestamps MUST be stored as epoch integers, not a database-specific
   timestamp type. This removes a dialect difference rather than abstracting one, and matches the
   `Clock` port.
+- **AUTH-15.7.5** Documentation MUST state that applying the migrations is the client's, and what
+  happens when it is not done: a statement naming a column the database does not have, at the
+  moment that statement first runs, rather than an error at startup.
 
 ### 15.8 Backends
 

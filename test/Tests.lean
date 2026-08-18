@@ -8,6 +8,7 @@ import Tests.Digest
 import Tests.Email
 import Tests.Flow
 import Tests.Invitation
+import Tests.Migrations
 import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres
