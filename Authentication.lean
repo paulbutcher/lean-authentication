@@ -17,6 +17,7 @@ import Authentication.Port.Email
 import Authentication.Port.HumanCheck
 import Authentication.Port.Latency
 import Authentication.Port.RateLimiter
+import Authentication.Port.Webhook
 import Authentication.Response
 import Authentication.Service
 import Authentication.Store

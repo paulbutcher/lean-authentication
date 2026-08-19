@@ -22,7 +22,7 @@ require leancurl from git
   "https://github.com/paulbutcher/leancurl" @ "v0.1.0"
 
 require leancrypto from git
-  "https://github.com/paulbutcher/leancrypto" @ "v0.1.0"
+  "https://github.com/paulbutcher/leancrypto" @ "v0.2.0"
 
 require leanaws from git
   "https://github.com/paulbutcher/lean-aws" @ "v0.1.0"

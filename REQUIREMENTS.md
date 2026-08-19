@@ -46,8 +46,9 @@ implementation and review can refer to them.
   the core is usable with either and requires neither.
 - **AUTH-2.3** Expected dependencies, all from `github.com/paulbutcher` unless noted:
   - `leancurl` for outbound HTTPS (the Postmark and SES APIs).
-  - `leancrypto` for SHA-256, HMAC-SHA256, hex, base64url, Crockford base32, and the byte
-    comparison of AUTH-5.3.4.
+  - `leancrypto` for SHA-256, HMAC-SHA256, hex, base64 and base64url, Crockford base32, the byte
+    comparison of AUTH-5.3.4, and, for AUTH-12.1.2, RSASSA-PKCS1-v1_5 verification with the DER
+    reader that gets a public key out of a certificate.
   - `leanpostgres` for the Postgres storage backend. Not `leanmigrate`: the migrations this
     library ships are SQL files the client applies, so nothing here depends on a migration tool
     (AUTH-15.7.1).
@@ -505,11 +506,25 @@ raw-MIME interchange type would make the first adapter impossible.
   them) and maintain a suppression list. Each adapter MUST normalise its provider's payload into
   one event type, so that the decision about which failures are permanent is taken once and not
   per provider.
-- **AUTH-12.1.1** Establishing that a delivery event really came from the provider is the
-  receiving route's, and MUST be documented as such. Postmark authenticates its webhooks with
-  credentials on a URL the client chose, and SNS signs its posts with a certificate the receiver
-  fetches and checks; the library holds neither, and a client that skips the check has published
-  an endpoint by which anyone can suppress any address.
+- **AUTH-12.1.1** Establishing that a delivery event really came from the provider MUST happen
+  before the event is read, and MUST NOT be a separate call a route could omit: a route holding an
+  endpoint gets verified events or nothing. Postmark authenticates its webhooks with credentials
+  on a URL the client chose; SNS signs its posts with a certificate the receiver fetches. An
+  endpoint that skips this is one by which anyone who finds the URL decides which addresses stop
+  receiving mail, which presents as sign-in mail that silently never arrives.
+- **AUTH-12.1.2** For a signed callback, the signature is necessary and not sufficient. The
+  implementation MUST also:
+  - fetch the signing certificate only from a host it recognises, decided before the fetch, so
+    that a payload cannot name the key it is to be checked against;
+  - reject a certificate URL whose authority contains userinfo, because
+    `https://sns.<region>.amazonaws.com@evil.example/` has `evil.example` for its host;
+  - check that the message came from a topic the client expects. A valid signature establishes
+    that the provider sent the message, not that the client's own topic did, and anyone with an
+    account at that provider can point a topic of their own at somebody else's endpoint. This is
+    the check that looks redundant and is not.
+- **AUTH-12.1.3** Signature algorithms MUST be an allowlist, and SHA-1 MUST NOT be on it. Where a
+  provider offers a stronger signature as a per-topic setting, refusing the weaker one costs the
+  client a configuration change and is the correct trade.
 - **AUTH-12.2** Suppression MUST be keyed per tenant, so that one tenant's bounce history is not
   observable through another tenant's behaviour.
 - **AUTH-12.3** Sending to a hard-bounced or complained address MUST be refused, and the caller

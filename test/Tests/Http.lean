@@ -3,6 +3,7 @@ Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import AuthenticationHttp
+import AuthenticationPostmark
 import AuthenticationSqlite
 import Std.Http.Test.Helpers
 
@@ -267,6 +268,48 @@ def humanCheckChecks : IO (List (String × Bool)) := do
         statusOf unsolved == statusOf solved
           && headerNames unsolved == headerNames solved
           && (headerValues unsolved "set-cookie").length == 1) ]
+
+/-- The provider callback route (AUTH-12.1.1). The endpoint's own verification is checked in
+`Tests.Webhooks`; what is checked here is that the route reaches it, that a refusal reaches the
+provider as a refusal, and that an accepted event actually lands in the store. -/
+def webhookChecks : IO (List (String × Bool)) := do
+  clockRef.set ⟨1700000000⟩
+  sentRef.set []
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+  let credentials : Postmark.Credentials := { username := "hook", password := "s3cret" }
+  let http : Authentication.Http.Config :=
+    { ports, tenant := resolver, webhooks := [Postmark.endpoint credentials] }
+
+  let bounce :=
+    "{\"RecordType\":\"Bounce\",\"Type\":\"HardBounce\",\"Email\":\"gone@example.com\"," ++
+    "\"Description\":\"550 5.1.1\"}"
+  let post (path : String) (auth : Option String) : IO String :=
+    send http
+      (mkPost path bounce
+        ("Content-Type: application/json\x0d\nConnection: close\x0d\n"
+          ++ (match auth with
+              | some value => s!"Authorization: {value}\x0d\n"
+              | none => "")))
+  let right := "Basic " ++ Codec.Base64.encodeString "hook:s3cret".toUTF8
+
+  let unauthorised ← post "/t/acme/webhooks/postmark" none
+  let afterRefusal ← suppressed (tenant := tenant) ports (address "gone@example.com")
+  let delivered ← post "/t/acme/webhooks/postmark" (some right)
+  let afterDelivery ← suppressed (tenant := tenant) ports (address "gone@example.com")
+  let unconfigured ← post "/t/acme/webhooks/ses" (some right)
+  let otherTenant ← post "/t/other/webhooks/postmark" (some right)
+
+  pure
+    [ ("http: a callback that cannot prove who sent it is refused (AUTH-12.1.1)",
+        statusOf unauthorised == "HTTP/1.1 403 Forbidden"),
+      ("http: and suppresses nothing", !afterRefusal),
+      ("http: a verified callback is accepted and its event recorded (AUTH-12.1)",
+        statusOf delivered == "HTTP/1.1 200 OK" && afterDelivery),
+      ("http: a provider nobody configured has no endpoint",
+        statusOf unconfigured == "HTTP/1.1 404 Not Found"),
+      ("http: nor does a tenant the client does not know",
+        statusOf otherTenant == "HTTP/1.1 404 Not Found") ]
 
 /-- A redirect target the tenant did not allow is not followed (AUTH-9.8). The theorem in
 `Tests.Session` says an unallowlisted target is never returned; this says the route asks. -/

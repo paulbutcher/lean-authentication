@@ -20,7 +20,8 @@ def main : IO UInt32 := do
     ++ (← Tests.Session.accountChecks) ++ Tests.Session.returnToChecks
     ++ Tests.Suppression.parserChecks ++ (← Tests.Suppression.checks)
     ++ (← Tests.Http.checks) ++ (← Tests.Http.equalisationChecks) ++ (← Tests.Http.returnToChecks)
-    ++ (← Tests.Http.humanCheckChecks)
+    ++ (← Tests.Http.humanCheckChecks) ++ (← Tests.Http.webhookChecks) ++ (← Tests.Webhooks.snsChecks)
+    ++ (← Tests.Webhooks.postmarkChecks)
     ++ (← Tests.Ses.flowChecks) ++ (← Tests.Postgres.conformanceChecks)
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do

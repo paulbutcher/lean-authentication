@@ -45,6 +45,12 @@ structure Config where
   reads no field, which is right only alongside the default `HumanCheck` that admits everyone.
   The field itself belongs to whatever the client's page put in the form. -/
   humanProofField : Option String := none
+  /-- Provider callbacks, each answering on `/t/<tenant>/webhooks/<name>` (AUTH-12.1.1). Empty
+  unless configured, because an endpoint that accepts delivery events without being able to
+  establish who sent them is worse than no endpoint. Each one verifies before it returns
+  anything, so nothing here decides whether to trust a payload; it decides only where to route
+  one. -/
+  webhooks : List (WebhookEndpoint IO) := []
 
 /-! ## Reading the request -/
 
@@ -336,6 +342,34 @@ private def acceptInvitation [Clock IO] [RandomBytes IO] (config : Config) (raw 
           .checkYourMail)
         (cookie.toList.map (setCookie now))
 
+/--
+A provider posting a delivery event. Not an administrative route, which AUTH-13.2 forbids here:
+the decision it carries out is the provider's report that an address bounced, not a client's
+decision about who may do what, and there is no caller to authorise. Clearing a suppression, the
+operation AUTH-13.2 does name, has no route and will not get one.
+
+The endpoint verifies before it returns anything, so this reads no header and trusts no field. It
+answers `200` on anything it accepted and `403` on anything it did not, which is what a provider
+needs to decide whether to retry.
+-/
+private def webhook [Clock IO] (config : Config) (rawTenant : String) (name : String) :
+    Routing.Result := fun request =>
+  withTenant config rawTenant fun tenant _ => do
+    match config.webhooks.find? (·.name == name) with
+    | none => notFoundPage config
+    | some endpoint =>
+      let body ← request.body.readAll (α := String)
+      let header (field : String) : Option String :=
+        (Header.Name.ofString? field.toLower).bind fun name =>
+          (request.line.headers.get? name).map (·.value)
+      match ← (endpoint.accept tenant header body : IO _) with
+      | .rejected => finish .forbidden "" []
+      | .accepted => finish .ok "" []
+      | .ingest events => do
+        for event in events do
+          let _ ← (ingestDelivery (tenant := tenant) config.ports event : IO _)
+        finish .ok "" []
+
 /-! ## The table -/
 
 route_table SignIn [
@@ -343,7 +377,8 @@ route_table SignIn [
   link := "/t/:tenant:String/signin/link",
   confirm := "/t/:tenant:String/signin/confirm",
   code := "/t/:tenant:String/signin/code",
-  accept := "/t/:tenant:String/invitation/accept"
+  accept := "/t/:tenant:String/invitation/accept",
+  webhook := "/t/:tenant:String/webhooks/:provider:String"
 ]
 
 /-- The paths are the ones `BaseUrl.url` builds, because the mail has to arrive somewhere these
@@ -354,7 +389,8 @@ def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route R
     .get SignIn.patterns.link (openLink config),
     .post SignIn.patterns.confirm (confirmSignIn config),
     .post SignIn.patterns.code (submitCode config),
-    .get SignIn.patterns.accept (acceptInvitation config) ]
+    .get SignIn.patterns.accept (acceptInvitation config),
+    .post SignIn.patterns.webhook (webhook config) ]
 
 /-- Mount this wherever the application's own router is. Nothing here is a `Middleware`: these
 are routes, and what wraps them is the client's. -/

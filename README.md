@@ -27,7 +27,8 @@ limiting, then the session management surface with bounce ingestion and suppress
   it against their own backends.
 - `Authentication/Email.lean` parses and normalises addresses, and holds a domain as its
   labels, which is what makes allowlist matching respect label boundaries.
-- `leancrypto` supplies base64url, Crockford base32, hex, SHA-256 and HMAC-SHA256. `Pepper`
+- `leancrypto` supplies base64 and base64url, Crockford base32, hex, SHA-256, HMAC-SHA256, and
+  the RSA signature verification and DER reader that the SNS callback needs. `Pepper`
   is what this library adds to them: the server-side key a credential is digested under, and the
   ring of keys a lookup may be satisfied by while a rotation overlaps.
 - `AuthenticationSql/` is one implementation of the port for every SQL backend. A statement is
@@ -50,10 +51,12 @@ limiting, then the session management surface with bounce ingestion and suppress
   is decided once, in the core, rather than twice in provider vocabulary: a transient failure that
   suppressed would lock people out of their own accounts because a mail server was busy.
 
-- `AuthenticationHttp/` is the optional HTTP integration target: the sign-in routes, and nothing
-  administrative. It has no route that creates an invitation or revokes a session, and cannot
-  have one, because the library owns identity and nothing about permissions, so it has no basis
-  on which to authorise the caller (AUTH-13.2).
+- `AuthenticationHttp/` is the optional HTTP integration target: the sign-in routes, the provider
+  callbacks, and nothing administrative. It has no route that creates an invitation, revokes a
+  session or clears a suppression, and cannot have one, because the library owns identity and
+  nothing about permissions, so it has no basis on which to authorise the caller (AUTH-13.2). A
+  callback is not one of those: what it carries out is the provider's report that an address
+  bounced, and there is no caller to authorise.
 
 Identifiers are indexed by the tenant they belong to (`AccountId tenant`), so an expression
 that crosses tenants does not typecheck.
@@ -113,17 +116,32 @@ name and give `Ports.humanCheck` something that asks them.
 
 ## Receiving bounces
 
-Both transports ship a parser, `Authentication.Postmark.deliveryEvents` and
-`Authentication.Ses.deliveryEvents`, turning a provider payload into `DeliveryEvent`s for
-`Service.ingestDelivery`. A hard bounce or a complaint suppresses the address; a transient
-failure is counted and nothing else. Suppressed addresses are refused before the transport is
-asked, because asking is what spends the sending domain's reputation.
+Each transport ships a verifying endpoint. Give one to `Http.Config.webhooks` and it answers on
+`/t/<tenant>/webhooks/<name>`:
 
-**Establishing that the payload came from the provider is yours.** Postmark authenticates its
-webhooks with credentials on a URL you chose, and SNS signs its posts with a certificate the
-receiver fetches and checks; SNS also asks the endpoint to confirm the subscription before it
-sends anything. This library holds none of those and does none of them, so an endpoint that
-forwards straight to `ingestDelivery` is one by which anyone can suppress any address.
+```lean
+webhooks :=
+  [ Postmark.endpoint { username := "hook", password := hookPassword },
+    Ses.endpoint (Ses.curlSubscription [bouncesTopicArn]) ]
+```
+
+A hard bounce or a complaint suppresses the address; a transient failure is counted and nothing
+else. Suppressed addresses are then refused before the transport is asked, because asking is what
+spends the sending domain's reputation.
+
+Verification happens inside the endpoint, before the payload is read, so there is no call a route
+could forget. Postmark's is a credential comparison. SNS's is the signature, checked against a
+certificate fetched only from a host this library recognises, decided before the fetch; plus the
+subscription handshake, answered automatically. Signature version 1 is refused rather than
+verified with SHA-1, so the topic must be set to version 2.
+
+**The topic list is not optional and has no default.** A valid signature proves that SNS sent the
+message, not that *your* topic did, and anyone with an AWS account can point a topic of their own
+at your endpoint. `Ses.Subscription.topics` is what closes that, and an empty list accepts
+nothing, which is the right way round for a mistake.
+
+The parsers, `Postmark.deliveryEvents` and `Ses.deliveryEvents`, are public for a client
+receiving these some other way. Reaching for them means taking the verification on yourself.
 
 ## Sending domain DNS
 

@@ -3,16 +3,16 @@ Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import Authentication
+import Codec.Base64
 import Lean.Data.Json
 
 /-!
-Postmark's bounce and spam-complaint webhooks (AUTH-12.1).
+Postmark's bounce and spam-complaint webhooks (AUTH-12.1, AUTH-12.1.1).
 
-Reading a payload is all that happens here. Whether it really came from Postmark is the
-receiving route's question, and the route is where the credential to answer it lives: Postmark
-authenticates its webhooks with HTTP basic auth on a URL the client chose, and this library
-never sees either. A client that skips the check has published an endpoint by which anyone can
-suppress any address.
+Postmark authenticates its webhooks by presenting HTTP basic credentials the client configured
+alongside the URL, so establishing that a payload came from Postmark is a comparison against
+those credentials and nothing more. `endpoint` does it; `deliveryEvents` is the parser it uses,
+public because a client receiving these some other way still needs to read one.
 
 An unrecognised payload yields no events rather than an error. A webhook endpoint that fails on
 an event type it was not expecting is one the provider eventually stops calling, and Postmark
@@ -76,5 +76,36 @@ def deliveryEvents (body : String) : List DeliveryEvent :=
           [{ address, failure, detail := detailOf payload, reference := reference payload }]
         else []
     | _, _ => []
+
+/-! ## The endpoint -/
+
+/-- What Postmark was configured to present. Supplied by configuration and never defaulted
+(AUTH-14.1.6): a default would be a published password. -/
+structure Credentials where
+  username : String
+  password : String
+
+/-- Compared whole rather than field by field, and with `Crypto.bytesEqual` rather than `==`: the
+latter stops at the first differing byte, which reports how long a correct prefix a guess had
+(AUTH-5.3.4). This one is a password, so unlike the rest of this library's comparisons the
+property is doing real work. -/
+def authorised (credentials : Credentials) (header : Option String) : Bool :=
+  let expected :=
+    "Basic " ++ Codec.Base64.encodeString (credentials.username ++ ":" ++ credentials.password).toUTF8
+  match header with
+  | none => false
+  | some offered => Crypto.bytesEqual offered.toUTF8 expected.toUTF8
+
+/-- The route-facing endpoint (AUTH-12.1.1). Nothing reaches the parser until the credentials
+match, which is why this is one call and not two. -/
+def endpoint {m : Type → Type} [Pure m] (credentials : Credentials)
+    (name : String := "postmark") : WebhookEndpoint m where
+  name
+  accept _tenant header body :=
+    if !authorised credentials (header "authorization") then pure .rejected
+    else
+      match deliveryEvents body with
+      | [] => pure .accepted
+      | events => pure (.ingest events)
 
 end Authentication.Postmark

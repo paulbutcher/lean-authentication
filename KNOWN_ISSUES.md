@@ -63,6 +63,14 @@ so a field either provider has since renamed would pass the suite and drop every
 production, silently: an address that should have been suppressed simply is not. The first live
 bounce is the test, and it is worth watching for.
 
+The SNS *signature* is in better standing than the payloads it covers. `test/fixtures/` holds a
+real key, a real certificate, and messages signed by `openssl` over an independently built
+canonical string, so the verifier is checked against bytes this repository cannot produce. What
+those fixtures cannot establish is that AWS builds the canonical string the same way: they were
+signed over this library's reading of the specification, so a misreading would be consistent
+across both. A signature from AWS itself is the only thing that settles that, and the first live
+notification is it.
+
 The SES adapter has never been run against SES at all, not even by hand, so its standing is weaker
 again: the request it builds is checked against what SigV4 says a signed request should look like,
 and `leanaws` is checked against AWS's published cases, but no signature this adapter produced has
@@ -127,30 +135,20 @@ Closing it is a client writing about ten lines against whichever provider it use
 arrives in a form field the route is told the name of, and the port hands it to the client's
 `verify`. Nothing in the library needs to change.
 
-## Delivery events are parsed but not authenticated (AUTH-12.1.1)
+## The SNS signing certificate is fetched on every message (AUTH-12.1.1)
 
-`Postmark.deliveryEvents` and `Ses.deliveryEvents` read a payload. Neither establishes that the
-payload came from the provider, and `Service.ingestDelivery` trusts what it is handed.
+`Ses.curlSubscription` fetches the certificate a notification names each time one arrives. SNS
+rotates that certificate rarely and names the same URL on every message, so a busy endpoint makes
+one outbound request per bounce for a document that almost never changes.
 
-That is placement rather than oversight, and the requirement says so: the credential that would
-answer the question belongs to the route. Postmark authenticates its webhooks with HTTP basic
-auth on a URL the client chose, which this library never sees. SNS signs each post with a
-certificate the receiver fetches from a URL in the message and validates against the signing
-key, and it also posts a `SubscriptionConfirmation` that has to be answered before any
-notification arrives at all. Neither is reachable from a function that is given a string.
+That is deliberate. A cache belongs to the deployment: it needs an eviction policy, and a wrong
+one is worse than none, because a certificate cached past a rotation rejects everything and a
+cache keyed carelessly accepts the wrong key. `Subscription.certificate` is a function, so a
+client that wants caching wraps it with one whose behaviour it can see, rather than finding one
+here it cannot.
 
-The consequence is worth stating plainly because it is the whole of the exposure: an endpoint
-that forwards its body to `ingestDelivery` without checking is one by which anyone who finds the
-URL can suppress any address in that tenant, which is a denial of sign-in that looks like mail
-that simply never arrives. `README.md` says so where a client wiring the endpoint will read it,
-and the module comments say so where a client reading the parser will.
-
-What would close it is the integration target shipping the two endpoints with their verification.
-It ships the sign-in routes and not these, because the two providers need different things and
-only one of them is reachable today: Postmark's check is a credential comparison, but SNS signs
-each post with RSA over a certificate the receiver fetches, and no RSA verification exists for
-this toolchain. Adding one is a question about `leancrypto` rather than a change here, and it has
-not been asked.
+The consequence while it stands is latency and outbound traffic on the ingestion path, not
+correctness. It matters at a volume of bounces that would already be an incident.
 
 ## Client-initiated sends are not rate limited (AUTH-14.1.1)
 

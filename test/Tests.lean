@@ -21,3 +21,4 @@ import Tests.Signup
 import Tests.Sql
 import Tests.Suppression
 import Tests.Template
+import Tests.Webhooks
