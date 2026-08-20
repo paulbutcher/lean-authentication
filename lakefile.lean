@@ -41,8 +41,11 @@ require html from git
 require middleware from git
   "https://github.com/paulbutcher/lean-middleware" @ "v0.5.0"
 
+/-- The submodules are globbed because `Authentication.Instances` is deliberately not imported by
+the root: importing it is what turns the default `Clock` and `RandomBytes` on. -/
 @[default_target]
-lean_lib Authentication
+lean_lib Authentication where
+  globs := #[.andSubmodules `Authentication]
 
 @[default_target]
 lean_lib AuthenticationSql

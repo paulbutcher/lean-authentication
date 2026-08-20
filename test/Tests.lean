@@ -20,5 +20,6 @@ import Tests.Ses
 import Tests.Signup
 import Tests.Sql
 import Tests.Suppression
+import Tests.System
 import Tests.Template
 import Tests.Webhooks

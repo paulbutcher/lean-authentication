@@ -18,7 +18,7 @@ def main : IO UInt32 := do
     ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ Tests.Ses.checks ++ (← Tests.RateLimit.checks)
     ++ (← Tests.RateLimit.serviceChecks) ++ (← Tests.RateLimit.floorChecks) ++ (← Tests.Session.checks) ++ (← Tests.Session.lifetimeChecks)
     ++ (← Tests.Session.accountChecks) ++ Tests.Session.returnToChecks
-    ++ Tests.Suppression.parserChecks ++ (← Tests.Suppression.checks)
+    ++ Tests.Suppression.parserChecks ++ (← Tests.Suppression.checks) ++ (← Tests.System.checks)
     ++ (← Tests.Http.checks) ++ (← Tests.Http.equalisationChecks) ++ (← Tests.Http.returnToChecks)
     ++ (← Tests.Http.humanCheckChecks) ++ (← Tests.Http.webhookChecks) ++ (← Tests.Webhooks.snsChecks)
     ++ (← Tests.Webhooks.postmarkChecks)
