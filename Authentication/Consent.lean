@@ -2,8 +2,10 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Tenant
-import Authentication.Time
+module
+
+public import Authentication.Tenant
+public import Authentication.Time
 
 /-!
 Consent records (§4.6).
@@ -23,6 +25,8 @@ The history is append only, for the same reason the audit log is. What it holds 
 evidence the holder can rewrite afterwards is not evidence, so a withdrawal is another entry
 rather than an edit to the entry that granted.
 -/
+
+public section
 
 namespace Authentication
 

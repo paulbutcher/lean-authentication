@@ -2,8 +2,11 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication
+module
+
+public import Authentication
 import Codec.Base64
+import Crypto.Compare
 import Lean.Data.Json
 
 /-!
@@ -18,6 +21,8 @@ An unrecognised payload yields no events rather than an error. A webhook endpoin
 an event type it was not expecting is one the provider eventually stops calling, and Postmark
 sends record types this library has no use for down the same URL.
 -/
+
+public section
 
 namespace Authentication.Postmark
 

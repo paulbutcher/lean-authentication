@@ -2,7 +2,9 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import AuthenticationSql.Dialect
+module
+
+public import AuthenticationSql.Dialect
 
 /-!
 What a driver has to supply for the shared implementation to run on it.
@@ -10,6 +12,8 @@ What a driver has to supply for the shared implementation to run on it.
 Rendering happens above this seam, so a driver never sees a `Dialect` and never builds SQL. It
 receives text it is to prepare and the values it is to bind, in order.
 -/
+
+public section
 
 namespace Authentication.Sql
 

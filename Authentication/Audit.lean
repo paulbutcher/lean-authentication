@@ -2,11 +2,15 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Consent
-import Authentication.Response
-import Authentication.Suppression
+module
+
+public import Authentication.Consent
+public import Authentication.Response
+public import Authentication.Suppression
 import Authentication.Tenant
 import Authentication.Time
+
+public section
 
 namespace Authentication
 

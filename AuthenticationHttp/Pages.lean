@@ -2,7 +2,9 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication
+module
+
+public import Authentication
 import Html
 
 /-!
@@ -16,6 +18,8 @@ something that works and a client that overrides everything is not fighting a st
 Nothing here decides anything. What is said when a sign-in cannot proceed was already decided by
 the response policy (§14.2); these functions render the decision.
 -/
+
+public section
 
 namespace Authentication.Http
 

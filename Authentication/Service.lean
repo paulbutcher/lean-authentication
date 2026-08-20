@@ -2,17 +2,19 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Attempt
-import Authentication.Pepper
-import Authentication.Port.Clock
-import Authentication.Port.Email
-import Authentication.Port.HumanCheck
-import Authentication.Port.Latency
-import Authentication.Port.RateLimiter
+module
+
+public import Authentication.Attempt
+public import Authentication.Pepper
+public import Authentication.Port.Clock
+public import Authentication.Port.Email
+public import Authentication.Port.HumanCheck
+public import Authentication.Port.Latency
+public import Authentication.Port.RateLimiter
+public import Authentication.Store
+public import Codec.Base64Url
 import Authentication.Response
-import Authentication.Store
 import Codec.Base32
-import Codec.Base64Url
 
 /-!
 The interpreter at the edge (AUTH-3.1).
@@ -25,6 +27,8 @@ and account creation is here. Deciding it at `begin` would be worse than misplac
 tell an unauthenticated caller whether an address may sign up, which is what AUTH-14.2 exists to
 prevent. By the time `issueSession` runs, whoever is asking has proven control of the address.
 -/
+
+public section
 
 namespace Authentication.Service
 

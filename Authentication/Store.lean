@@ -2,11 +2,13 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Account
-import Authentication.Attempt
+module
+
+public import Authentication.Account
+public import Authentication.Attempt
+public import Authentication.Invitation
 import Authentication.Audit
 import Authentication.Consent
-import Authentication.Invitation
 import Authentication.Suppression
 
 /-!
@@ -20,6 +22,8 @@ Its contract is not its type signature. The guarantees in AUTH-15.4 are the part
 typecheck while violating, which is why they are written out on the operations below and
 checked by `Authentication.Store.Conformance`.
 -/
+
+public section
 
 namespace Authentication
 

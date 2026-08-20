@@ -2,10 +2,14 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Policy
-import Authentication.Template
-import Authentication.Tenant
+module
+
+public import Authentication.Policy
+public import Authentication.Template
+public import Authentication.Tenant
 import Authentication.Time
+
+public section
 
 namespace Authentication
 

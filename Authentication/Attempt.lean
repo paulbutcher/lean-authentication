@@ -2,12 +2,14 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Account
-import Authentication.Audit
-import Authentication.Config
+module
+
+public import Authentication.Account
+public import Authentication.Audit
+public import Authentication.Config
+public import Authentication.Error
 import Authentication.Digest
 import Authentication.Email
-import Authentication.Error
 import Authentication.Invitation
 
 /-!
@@ -16,6 +18,8 @@ The magic link flow as a pure function over an explicit state (AUTH-3.1, §5).
 Nothing here performs an effect. Time and the digests of whatever a request offered arrive as
 arguments, and everything the edge must do afterwards comes back as data.
 -/
+
+public section
 
 namespace Authentication
 

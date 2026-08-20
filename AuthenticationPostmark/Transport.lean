@@ -2,9 +2,11 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication
-import Leancurl
-import Lean.Data.Json
+module
+
+public import Authentication
+public import Lean.Data.Json
+public import Leancurl
 
 /-!
 The Postmark outbound transport (AUTH-10.6).
@@ -16,6 +18,8 @@ The HTTP call goes through `Http` rather than `Leancurl.Curl.send` directly, so 
 adapter, the payload it builds and the responses it interprets, can be exercised without a
 network (AUTH-16.5).
 -/
+
+public section
 
 namespace Authentication.Postmark
 

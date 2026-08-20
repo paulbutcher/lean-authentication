@@ -2,9 +2,11 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Email
-import Authentication.Tenant
-import Authentication.Time
+module
+
+public import Authentication.Email
+public import Authentication.Tenant
+public import Authentication.Time
 
 /-!
 Bounces and suppression (§12).
@@ -19,6 +21,8 @@ fields, deliberately: it arrives as text in a format that differs by provider, a
 question anything here asks of it is how recent the failure was, which the clock at ingestion
 answers without a date parser.
 -/
+
+public section
 
 namespace Authentication
 

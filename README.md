@@ -13,7 +13,7 @@ an operation.
 [[require]]
 name = "authentication"
 git = "https://github.com/paulbutcher/lean-authentication"
-rev = "v0.1.0"
+rev = "v0.2.0"
 ```
 
 Each target is a separate `lean_lib`. Depend only on what you use.

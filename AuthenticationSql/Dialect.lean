@@ -2,6 +2,7 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
+module
 
 /-!
 Statements as data, rendered against a dialect (AUTH-15.2.2).
@@ -11,6 +12,8 @@ A statement is a list of fragments. A value can enter a statement only as `Fragm
 value reaches the SQL text. That is a property of the types, not of the care taken at each call
 site, which is what makes one shared set of statements safe to write once.
 -/
+
+public section
 
 namespace Authentication.Sql
 

@@ -2,9 +2,11 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
+module
+
+public import Authentication.Email
+public import Authentication.Time
 import Authentication.Digest
-import Authentication.Email
-import Authentication.Time
 
 /-!
 Email bodies (AUTH-10.7).
@@ -15,6 +17,8 @@ AUTH-5.2.12 is kept here as well as at the port: there is nowhere to put it.
 
 The text part is not optional, and the HTML part escapes everything it interpolates.
 -/
+
+public section
 
 namespace Authentication
 
@@ -58,7 +62,7 @@ def escapeHtml (s : String) : String := String.ofList (s.toList.flatMap escapeCh
 /-- The characters an interpolated value would need to open a tag or close an attribute. -/
 def markupChars : List Char := ['<', '>', '"', '\'']
 
-theorem not_mem_escapeChar {c : Char} (h : c ∈ markupChars) (b : Char) :
+private theorem not_mem_escapeChar {c : Char} (h : c ∈ markupChars) (b : Char) :
     c ∉ escapeChar b := by
   simp only [markupChars, List.mem_cons, List.not_mem_nil, or_false] at h
   fun_cases escapeChar b <;>

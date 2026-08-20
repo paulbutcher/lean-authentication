@@ -2,7 +2,9 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Template
+module
+
+public import Authentication.Template
 
 /-!
 Bot mitigation on the send endpoint (AUTH-14.1.8).
@@ -13,6 +15,8 @@ to do with authentication. What crosses this boundary is the value, as text, and
 
 Chosen from configuration at startup, so a structure rather than a class (AUTH-3.5).
 -/
+
+public section
 
 namespace Authentication
 

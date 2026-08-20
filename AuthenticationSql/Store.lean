@@ -2,8 +2,10 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication
-import AuthenticationSql.Connection
+module
+
+public import Authentication
+public import AuthenticationSql.Connection
 
 /-!
 One implementation of `AuthStore` for every SQL backend (AUTH-15.2.2).
@@ -16,6 +18,8 @@ the driver adapter; none of those can change what a conditional update tests.
 Timestamps are epoch integers throughout, which removes a dialect difference rather than
 abstracting one (AUTH-15.7.4).
 -/
+
+public section
 
 namespace Authentication.Sql
 

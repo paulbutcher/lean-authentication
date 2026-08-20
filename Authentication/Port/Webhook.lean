@@ -2,7 +2,9 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Suppression
+module
+
+public import Authentication.Suppression
 import Authentication.Tenant
 
 /-!
@@ -17,6 +19,8 @@ Verification happens inside `accept`, before anything is returned. There is deli
 obtain the events without it: a route holding a `WebhookEndpoint` cannot forget to check, because
 checking is not a separate call it could omit.
 -/
+
+public section
 
 namespace Authentication
 

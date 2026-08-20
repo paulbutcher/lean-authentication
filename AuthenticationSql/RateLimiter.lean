@@ -2,8 +2,10 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication
-import AuthenticationSql.Connection
+module
+
+public import Authentication
+public import AuthenticationSql.Connection
 
 /-!
 The reference `RateLimiter`, over the same SQL backends as `AuthStore` (AUTH-15.6.3).
@@ -13,6 +15,8 @@ library, and on a single-writer backend they contend with everything else (AUTH-
 is separate precisely so that a deployment which feels that can point the limiter elsewhere without
 moving its accounts (AUTH-15.6.2).
 -/
+
+public section
 
 namespace Authentication.Sql
 

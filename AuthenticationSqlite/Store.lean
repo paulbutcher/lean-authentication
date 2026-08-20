@@ -2,8 +2,10 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import AuthenticationSql
-import SQLite
+module
+
+public import AuthenticationSql
+public import SQLite
 
 /-!
 The SQLite backend.
@@ -15,6 +17,8 @@ so the conditional updates this backend runs are the same text the Postgres back
 Objects are prefixed `auth_` so they cannot collide with the client's own, which is what a
 dedicated schema does for Postgres (AUTH-15.7.1).
 -/
+
+public section
 
 namespace Authentication.Sqlite
 

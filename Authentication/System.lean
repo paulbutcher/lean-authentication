@@ -2,8 +2,10 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Port.Clock
-import Std.Time
+module
+
+public import Authentication.Port.Clock
+public import Std.Time
 
 /-!
 The ordinary implementations of `Clock` and `RandomBytes`: the host's wall clock and the
@@ -18,6 +20,8 @@ instance : Clock IO := Clock.system
 
 where its own code can see it.
 -/
+
+public section
 
 namespace Authentication
 

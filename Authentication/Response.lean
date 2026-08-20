@@ -2,7 +2,9 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Tenant
+module
+
+public import Authentication.Tenant
 
 /-!
 What a person is told when a sign-in cannot proceed (AUTH-14.2).
@@ -13,6 +15,8 @@ individual, so they are usually safe to state openly. `unknownAddress` and `notI
 identify people, and are the part worth protecting. Rate limiting does more work here than
 wording does: at a few probes an hour any oracle is nearly worthless.
 -/
+
+public section
 
 namespace Authentication
 

@@ -2,8 +2,10 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import AuthenticationPostgres.Schema
-import Postgres
+module
+
+public import AuthenticationPostgres.Schema
+public import Postgres
 import AuthenticationSql
 
 /-!
@@ -17,6 +19,8 @@ Parameters go to the server as text and come back as text, which is libpq's defa
 nothing here: every column in the schema is text or a `bigint` epoch second, and the shared
 decoders already read an integer from either representation.
 -/
+
+public section
 
 namespace Authentication.Postgres
 

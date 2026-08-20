@@ -2,9 +2,12 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import AuthenticationHttp.Pages
+module
+
+public import AuthenticationHttp.Pages
+public import Routing
+import Crypto.Compare
 import Middleware
-import Routing
 
 /-!
 The sign-in routes (AUTH-13.2).
@@ -23,6 +26,8 @@ HTTP response and the service has none:
 - The redirect target is validated against the tenant's allowlist before anything is sent to it
   (AUTH-9.8).
 -/
+
+public section
 
 namespace Authentication.Http
 

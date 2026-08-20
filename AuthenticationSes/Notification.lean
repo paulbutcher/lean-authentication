@@ -2,11 +2,14 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication
-import AuthenticationSes.Transport
-import Codec.Base64
-import Codec.Base64Url
-import Der
+module
+
+public import Authentication
+public import AuthenticationSes.Transport
+public import Codec.Base64
+public import Codec.Base64Url
+public import Crypto.Rsa
+public import Der
 import Lean.Data.Json
 
 /-!
@@ -31,6 +34,8 @@ leaves an endpoint by which somebody else decides which addresses stop receiving
 An unrecognised payload yields no events. SES sends deliveries, opens and rejections down the
 same subscription, and an endpoint that fails on them is one SNS eventually stops calling.
 -/
+
+public section
 
 namespace Authentication.Ses
 

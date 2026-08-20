@@ -2,12 +2,15 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
+module
 
 /-!
 Address parsing and normalisation (AUTH-4.5).
 
 Non-ASCII domains are rejected rather than converted to punycode; see `KNOWN_ISSUES.md`.
 -/
+
+public section
 
 namespace Authentication
 

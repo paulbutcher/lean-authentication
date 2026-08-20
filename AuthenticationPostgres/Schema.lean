@@ -2,7 +2,9 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import AuthenticationSql
+module
+
+public import AuthenticationSql
 
 /-!
 The Postgres backend's dialect and schema.
@@ -15,6 +17,8 @@ possible (AUTH-15.7.1). Timestamps are `bigint` epoch seconds, matching the `Clo
 There is no connection here, so that everything a client might want without one, the dialect and
 the schema, is reachable without libpq. The driver adapter is in `AuthenticationPostgres.Store`.
 -/
+
+public section
 
 namespace Authentication.Postgres
 

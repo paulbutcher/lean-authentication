@@ -2,7 +2,9 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication.Store
+module
+
+public import Authentication.Store
 
 /-!
 The conformance suite (AUTH-15.5).
@@ -15,6 +17,8 @@ parties against their own backends, which is why it lives here and not in the te
 Each run uses tenant identifiers derived from `label`, so the suite can be pointed at a real
 database and run repeatedly without colliding with itself.
 -/
+
+public section
 
 namespace Authentication.Store.Conformance
 
