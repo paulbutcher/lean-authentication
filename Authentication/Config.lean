@@ -79,12 +79,13 @@ def forAttempt (tenant : TenantId) (value : String) (expiresAt : Timestamp) : Co
     sameSite := .lax }
 
 /-- The attributes AUTH-9.2 fixes, fixed here for the same reason `forAttempt` fixes its own: no
-caller can weaken them because no caller supplies them. The path is the tenant's, so one
-tenant's cookie is never offered to another's routes (AUTH-4.3.3). -/
-def forSession (tenant : TenantId) (value : String) (expiresAt : Timestamp) : CookieSpec :=
+caller can weaken them because no caller supplies them. The path is supplied, because an
+application mounted outside the tenant's path is never offered a cookie confined to it; what
+choosing it costs is set out at `TenantConfig.sessionCookiePath`. -/
+def forSession (path : String) (value : String) (expiresAt : Timestamp) : CookieSpec :=
   { name := "auth_session"
     value
-    path := BaseUrl.tenantPath tenant
+    path
     expiresAt
     secure := true
     httpOnly := true
@@ -168,6 +169,23 @@ structure TenantConfig (tenant : TenantId) where
   idle timeout of AUTH-9.4 has to slide or it is merely a shorter absolute lifetime, but sliding
   it on every request makes a write out of every read; this is what that costs. -/
   sessionTouchInterval : Duration := Duration.minutes 5
+  /-- The path the session cookie is issued with. The default confines it to the tenant's own
+  routes, so one tenant's cookie is never offered to another's (AUTH-4.3.3). A browser offers a
+  cookie only to paths at or below this one, so an application mounted anywhere else, which
+  includes every application mounted at `/`, never receives it and can never call
+  `Service.identify` for its own requests; such a client widens this, typically to `"/"`.
+
+  Widening it does mean one tenant's session cookie is offered to another tenant's routes, and
+  that is harmless rather than merely unlikely: a presented credential is resolved through
+  `Store.sessionByDigest`, which is given the tenant it was presented to, and the store
+  conformance suite requires a session to be invisible from every other tenant. The cookie
+  arrives, resolves to nothing, and `identify` answers `none`, exactly as it would for a cookie
+  that was never issued.
+
+  What a client accepts by widening it is reach: the credential is then sent to everything
+  served at or below the path named here, and keeping that to paths the client controls is the
+  client's responsibility, not this library's. -/
+  sessionCookiePath : String := BaseUrl.tenantPath tenant
   /-- Overridable per tenant, which is what AUTH-10.7 asks for: a client supplies its own
   renderer rather than filling in holes in one this library dictates. -/
   templates : EmailTemplates := .standard

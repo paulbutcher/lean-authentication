@@ -90,8 +90,8 @@ def config (tenant : TenantId) : TenantConfig tenant :=
 | `peppers` | The current pepper, plus any inside a rotation window |
 
 `TenantConfig` also carries attempt and session lifetimes, the optional emailed code, the
-`returnTo` allowlist, and the email templates, all with defaults. Peppers and provider tokens are
-never defaulted.
+`returnTo` allowlist, the session cookie's path, and the email templates, all with defaults.
+Peppers and provider tokens are never defaulted.
 
 ## Mounting the routes
 
@@ -143,6 +143,9 @@ Service.reactivateAccount ports account
 Sessions are server-side and revocable. The idle timeout slides on use, capped by an absolute
 lifetime. Changing the primary address and deactivating each revoke every session in the same
 call, and a deactivated account cannot sign in until reactivated.
+
+The session cookie is issued with `TenantConfig.sessionCookiePath`, which defaults to
+`/t/<tenant>`. Set the field to a path that covers your application if different.
 
 ## Invitations
 

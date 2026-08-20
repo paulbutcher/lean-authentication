@@ -16,7 +16,9 @@ def main : IO UInt32 := do
     ++ (← Tests.EndToEnd.checks) ++ Tests.Sql.checks ++ Tests.Template.checks ++ (← Tests.Signup.checks)
     ++ (← Tests.Signup.invitationChecks) ++ (← Tests.Signup.existingAccountChecks)
     ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ Tests.Ses.checks ++ (← Tests.RateLimit.checks)
-    ++ (← Tests.RateLimit.serviceChecks) ++ (← Tests.RateLimit.floorChecks) ++ (← Tests.Session.checks) ++ (← Tests.Session.lifetimeChecks)
+    ++ (← Tests.RateLimit.serviceChecks) ++ (← Tests.RateLimit.floorChecks)
+    ++ (← Tests.Session.checks) ++ (← Tests.Session.cookiePathChecks)
+    ++ (← Tests.Session.lifetimeChecks)
     ++ (← Tests.Session.accountChecks) ++ (← Tests.Session.purgeChecks)
     ++ Tests.Session.returnToChecks
     ++ Tests.Suppression.parserChecks ++ (← Tests.Suppression.checks) ++ (← Tests.System.checks)

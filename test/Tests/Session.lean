@@ -196,6 +196,39 @@ def checks : IO (List (String × Bool)) := do
       ("session: revoking all of them leaves none (AUTH-9.6)",
         afterAll.isEmpty && noneSurvive.isNone) ]
 
+private def otherTenant : TenantId := ⟨"beta"⟩
+
+private def otherConfig : TenantConfig otherTenant :=
+  { displayName := "Beta"
+    baseUrl := ⟨"https://auth.example.com"⟩
+    sendingIdentity :=
+      { address := address "sign-in@auth.example.com", displayName := "Beta sign-in" }
+    signupPolicy := .unrestricted }
+
+/-- A tenant whose application is not mounted under the tenant path widens the cookie's path so
+that the browser offers it at all, and the price is that another tenant's routes are offered it
+too. The last check is what makes that price payable: a credential presented to a tenant it was
+not issued for identifies nobody. -/
+def cookiePathChecks : IO (List (String × Bool)) := do
+  clockRef.set ⟨1700000000⟩
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+  let widened : TenantConfig tenant := { config with sessionCookiePath := "/" }
+  let signedIn ← signIn ports widened "person@example.com"
+  let cookie := cookieNamed signedIn "auth_session"
+  let credential := signedIn.session.getD ⟨""⟩
+  let own ← identify (tenant := tenant) ports widened credential
+  let elsewhere ← identify (tenant := otherTenant) ports otherConfig credential
+
+  pure
+    [ ("session: the cookie is issued with the path the tenant configured",
+        (cookie.map (·.path)) == some "/"),
+      ("session: widening the path leaves the fixed attributes fixed (AUTH-9.2)",
+        (cookie.map fun c => (c.secure, c.httpOnly, c.sameSite))
+          == some (true, true, SameSite.lax)),
+      ("session: a widened cookie identifies nobody at another tenant (AUTH-4.3.3)",
+        own.isSome && elsewhere.isNone) ]
+
 /-- The idle timeout has to slide to be an idle timeout, and has to stop sliding at the absolute
 lifetime to be bounded. Both are worth driving through the store, because both are the kind of
 thing an implementation can get right in the pure layer and drop on the way to a column. -/

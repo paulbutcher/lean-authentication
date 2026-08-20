@@ -273,7 +273,7 @@ private def perform {m : Type → Type} [Monad m] [RandomBytes m] {tenant : Tena
       | none => outcome.setCookies
       | some credential =>
         outcome.setCookies ++
-          [CookieSpec.forSession tenant credential.encoded
+          [CookieSpec.forSession config.sessionCookiePath credential.encoded
             (now.advance config.sessionAbsoluteLifetime)]
     pure
       { outcome with
