@@ -6,6 +6,7 @@ import Authentication.Account
 import Authentication.Attempt
 import Authentication.Audit
 import Authentication.Config
+import Authentication.Consent
 import Authentication.Digest
 import Authentication.Email
 import Authentication.Error

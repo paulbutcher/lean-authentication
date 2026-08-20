@@ -759,4 +759,58 @@ def reactivateAccount {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId
     ports.store.appendAudit tenant ⟨now, .anonymous, .accountReactivated account⟩
     pure (.ok ())
 
+/-! ## Consent
+
+Stored, never captured (AUTH-4.6.1). Nothing in this library asks anybody for consent, and the
+sign-in flow in particular cannot: it shows the same page to an address it has never seen as to
+one it knows, and a consent control that appeared on only the first of those would report which
+was which before any mail was sent. The client asks somebody it has already signed in, whenever
+it likes, and calls these.
+
+Like the invitation and session operations, none of them check a permission (AUTH-13.2).
+-/
+
+/-- Records what somebody said about one subject. The version is the client's own, stored
+verbatim and never read here (AUTH-4.6.2). -/
+def recordConsent {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (subject : ConsentSubject) (version : String) (act : ConsentAct)
+    (actor : Actor := .anonymous) : m Unit := do
+  let now ← Clock.now
+  ports.store.recordConsent tenant { account, subject, version, act, recordedAt := now }
+  ports.store.appendAudit tenant ⟨now, actor,
+    match act with
+    | .granted => .consentGranted account subject
+    | .withdrawn => .consentWithdrawn account subject⟩
+
+def grantConsent {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (subject : ConsentSubject) (version : String)
+    (actor : Actor := .anonymous) : m Unit :=
+  recordConsent ports account subject version .granted actor
+
+/-- Withdrawing is as easy as granting, and is the same call with the other answer. The entry
+that granted stays where it is: what it says was agreed to in June is still true in December,
+and a record that could be edited to say otherwise would be worth nothing as evidence. -/
+def withdrawConsent {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (subject : ConsentSubject) (version : String)
+    (actor : Actor := .anonymous) : m Unit :=
+  recordConsent ports account subject version .withdrawn actor
+
+/-- Where the account stands on everything it has been asked about (AUTH-4.6.4). -/
+def consents {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) : m (List ConsentState) :=
+  Consent.state <$> ports.store.consentHistory tenant account
+
+/-- Every entry, oldest first. `consents` answers what is true now; this is what was said, which
+is the part that is evidence. -/
+def consentHistory {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) : m (List (ConsentEntry tenant)) :=
+  ports.store.consentHistory tenant account
+
+/-- Who may be written to about this subject (AUTH-4.6.5). Deactivated accounts are among them:
+somebody who closed their account did not thereby withdraw a consent, and the client decides
+what its own closure means. -/
+def consenting {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (subject : ConsentSubject) : m (List (AccountId tenant)) :=
+  ports.store.consentingAccounts tenant subject
+
 end Authentication.Service

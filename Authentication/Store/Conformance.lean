@@ -206,6 +206,19 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let afterClearing ← store.deliveryRecord alpha bouncing.normalise
   let byClient ← store.suppressAddress alpha flaky.normalise later "asked us to stop"
 
+  -- Consent: append only, oldest first, and the last word deciding who is still consenting.
+  let marketing : ConsentSubject := ⟨"marketing"⟩
+  let terms : ConsentSubject := ⟨"terms"⟩
+  store.recordConsent alpha ⟨⟨"account-1"⟩, terms, "2026-01", .granted, epoch⟩
+  store.recordConsent alpha ⟨⟨"account-1"⟩, marketing, "2026-01", .granted, epoch⟩
+  store.recordConsent alpha ⟨⟨"account-1"⟩, marketing, "2026-01", .withdrawn, soon⟩
+  store.recordConsent alpha ⟨⟨"account-3"⟩, marketing, "2026-02", .granted, soon⟩
+  store.recordConsent beta ⟨⟨"account-1"⟩, marketing, "2026-01", .granted, epoch⟩
+  let consentTrail ← store.consentHistory alpha ⟨"account-1"⟩
+  let crossTenantConsent ← store.consentHistory beta ⟨"account-3"⟩
+  let stillConsenting ← store.consentingAccounts alpha marketing
+  let consentingElsewhere ← store.consentingAccounts beta marketing
+
   -- The audit log, and that it stays inside its tenant.
   store.appendAudit alpha ⟨soon, .anonymous, .attemptCreated ⟨"attempt-3"⟩⟩
   store.appendAudit beta ⟨soon, .anonymous, .attemptCreated ⟨"attempt-elsewhere"⟩⟩
@@ -220,6 +233,7 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   store.createInvitation doomed (sampleInvitation doomed "invitation-doomed" person)
   store.appendAudit doomed ⟨soon, .anonymous, .attemptCreated ⟨"attempt-doomed"⟩⟩
   let _ ← store.recordDeliveryFailure doomed person.normalise .hardBounce epoch "gone"
+  store.recordConsent doomed ⟨⟨"account-doomed"⟩, terms, "2026-01", .granted, epoch⟩
   store.deleteTenant doomed
   let doomedAccount ← store.accountByIdentity doomed person.normalise
   let doomedAttempt ← store.attemptById doomed ⟨"attempt-doomed"⟩
@@ -227,6 +241,7 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let doomedInvitation ← store.invitationById doomed ⟨"invitation-doomed"⟩
   let doomedAudit ← store.auditEntries doomed
   let doomedRecord ← store.deliveryRecord doomed person.normalise
+  let doomedConsent ← store.consentHistory doomed ⟨"account-doomed"⟩
   let survivingAccount ← store.accountByIdentity alpha person.normalise
 
   pure
@@ -304,6 +319,19 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := afterClearing.isNone }
     , { name := "the client can suppress an address itself"
         passed := byClient.suppressedBy == some .client }
+    , { name := "a withdrawal is another entry, not an edit to the one that granted (AUTH-4.6.3)"
+        passed := consentTrail.map (fun entry => (entry.subject, entry.act)) ==
+          [(terms, .granted), (marketing, .granted), (marketing, .withdrawn)] }
+    , { name := "the version each answer was given under is kept (AUTH-4.6.2)"
+        passed := consentTrail.map (·.version) == ["2026-01", "2026-01", "2026-01"] }
+    , { name := "the last word decides where a subject stands (AUTH-4.6.4)"
+        passed := !Consent.granted consentTrail marketing && Consent.granted consentTrail terms }
+    , { name := "consent does not cross tenants"
+        passed := crossTenantConsent.isEmpty }
+    , { name := "an account that withdrew is not still consenting (AUTH-4.6.5)"
+        passed := stillConsenting.map (·.value) == ["account-3"] }
+    , { name := "consent in one tenant grants nothing in another"
+        passed := consentingElsewhere.map (·.value) == ["account-1"] }
     , { name := "audit entries are readable in the tenant they were written for"
         passed := alphaAudit.length == 1 }
     , { name := "audit entries do not leak across tenants"
@@ -320,6 +348,8 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := doomedAudit.isEmpty }
     , { name := "deleting a tenant removes its delivery history"
         passed := doomedRecord.isNone }
+    , { name := "deleting a tenant removes its consent records (AUTH-4.2.5)"
+        passed := doomedConsent.isEmpty }
     , { name := "deleting a tenant leaves other tenants alone"
         passed := survivingAccount.isSome } ]
 

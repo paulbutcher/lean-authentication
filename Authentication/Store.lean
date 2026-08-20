@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 import Authentication.Account
 import Authentication.Attempt
 import Authentication.Audit
+import Authentication.Consent
 import Authentication.Invitation
 import Authentication.Suppression
 
@@ -106,12 +107,23 @@ structure AuthStore (m : Type → Type) where
   as well as the suppression: an address that has been repaired starts from no failures, or the
   count that reported it stays high for ever. -/
   clearSuppression : (tenant : TenantId) → NormalisedEmail → m Unit
+  /-- Append only, for the reason the audit log is: a withdrawal is another entry rather than an
+  edit to the entry that granted, so what the record says was agreed to at the time cannot be
+  changed afterwards (AUTH-4.6.3). -/
+  recordConsent : (tenant : TenantId) → ConsentEntry tenant → m Unit
+  /-- Oldest first, so the last entry about a subject is the current answer (AUTH-4.6.4). -/
+  consentHistory : (tenant : TenantId) → AccountId tenant → m (List (ConsentEntry tenant))
+  /-- The accounts whose last word on this subject was a grant, which is the query a mailshot
+  is drawn from (AUTH-4.6.5). It is an operation rather than a fold the client writes over
+  every account's history, because that fold is the part that gets written wrong, and wrongly
+  in the direction of mailing somebody who said no. -/
+  consentingAccounts : (tenant : TenantId) → ConsentSubject → m (List (AccountId tenant))
   /-- Append only. The port offers no update and no delete, which is how AUTH-15.4.5 is kept:
   not by a rule a backend is asked to follow but by an operation it is not given. -/
   appendAudit : (tenant : TenantId) → AuditEntry tenant → m Unit
   auditEntries : (tenant : TenantId) → m (List (AuditEntry tenant))
-  /-- Removes the tenant's accounts, sessions, invitations, attempts, delivery history and audit
-  records, with no orphans (AUTH-4.2.5). -/
+  /-- Removes the tenant's accounts, sessions, invitations, attempts, delivery history, consent
+  records and audit records, with no orphans (AUTH-4.2.5). -/
   deleteTenant : (tenant : TenantId) → m Unit
 
 /--

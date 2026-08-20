@@ -25,13 +25,14 @@ private def attempts : TableName := ⟨"attempts"⟩
 private def sessions : TableName := ⟨"sessions"⟩
 private def invitations : TableName := ⟨"invitations"⟩
 private def deliveryRecords : TableName := ⟨"delivery_records"⟩
+private def consents : TableName := ⟨"consents"⟩
 private def audit : TableName := ⟨"audit"⟩
 
 /-- The tables these statements read and write, as the bare names `Dialect.table` qualifies. A
 backend's schema has to create all of them and nothing here depends on what it calls them. -/
 def tableNames : List String :=
   [accounts.value, accountEmails.value, attempts.value, sessions.value, invitations.value,
-    deliveryRecords.value, audit.value]
+    deliveryRecords.value, consents.value, audit.value]
 
 /-! ## Encoding between domain values and columns -/
 
@@ -99,6 +100,14 @@ private def suppressionOf : String → SuppressionReason
   | "client" => .client
   | _ => .hardBounce
 
+private def consentActText : ConsentAct → String
+  | .granted => "granted"
+  | .withdrawn => "withdrawn"
+
+private def consentActOf : String → ConsentAct
+  | "withdrawn" => .withdrawn
+  | _ => .granted
+
 private def normalisedText (address : NormalisedEmail) : String :=
   address.localPart ++ "@" ++ domainText address.domain
 
@@ -157,6 +166,8 @@ private def auditColumns {tenant : TenantId} : AuditEvent tenant → String × S
       suppressionText reason)
   | .suppressionCleared address =>
     ("suppression-cleared", normalisedText address, "")
+  | .consentGranted account subject => ("consent-granted", account.value, subject.name)
+  | .consentWithdrawn account subject => ("consent-withdrawn", account.value, subject.name)
 
 private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
     Option (AuditEvent tenant) :=
@@ -196,6 +207,8 @@ private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
   | "address-suppressed" =>
     (normalisedOf subject).map fun address => .addressSuppressed address (suppressionOf detail)
   | "suppression-cleared" => (normalisedOf subject).map (.suppressionCleared ·)
+  | "consent-granted" => some (.consentGranted ⟨subject⟩ ⟨detail⟩)
+  | "consent-withdrawn" => some (.consentWithdrawn ⟨subject⟩ ⟨detail⟩)
   | _ => none
 
 /-! ## Running statements -/
@@ -592,6 +605,47 @@ private def clearSuppression [Monad m] (c : Ctx m) (tenant : TenantId)
          WHERE tenant = {tenant.value} AND identity_local = {address.localPart}
            AND identity_domain = {domainText address.domain}"
 
+/-! ## Consent
+
+Insert and select, and nothing else. There is no update and no delete because AUTH-4.6.3 admits
+neither, and a table with no statement that rewrites a row cannot have one written by accident.
+-/
+
+private def recordConsent [Monad m] (c : Ctx m) (tenant : TenantId)
+    (entry : ConsentEntry tenant) : m Unit :=
+  c.run
+    sql!"INSERT INTO {consents} (tenant, account, subject, version, act, recorded_at)
+         VALUES ({tenant.value}, {entry.account.value}, {entry.subject.name}, {entry.version},
+           {consentActText entry.act}, {timeText entry.recordedAt})"
+
+private def consentHistory [Monad m] (c : Ctx m) (tenant : TenantId)
+    (account : AccountId tenant) : m (List (ConsentEntry tenant)) := do
+  let rows ← c.rows
+    sql!"SELECT subject, version, act, recorded_at
+         FROM {consents} WHERE tenant = {tenant.value} AND account = {account.value}
+         ORDER BY seq"
+  pure (rows.map fun row =>
+    { account
+      subject := ⟨row.text 0⟩
+      version := row.text 1
+      act := consentActOf (row.text 2)
+      recordedAt := timeOf (row.int 3) }).toList
+
+/-- The last word on the subject, per account, and only where it was a grant. `seq` decides
+which entry is last rather than the timestamp, because two entries can share a second and the
+one that arrived second is the one that counts. -/
+private def consentingAccounts [Monad m] (c : Ctx m) (tenant : TenantId)
+    (subject : ConsentSubject) : m (List (AccountId tenant)) := do
+  let rows ← c.rows
+    sql!"SELECT account FROM {consents} said
+         WHERE said.tenant = {tenant.value} AND said.subject = {subject.name}
+           AND said.act = 'granted'
+           AND said.seq = (SELECT MAX(latest.seq) FROM {consents} latest
+                           WHERE latest.tenant = said.tenant AND latest.account = said.account
+                             AND latest.subject = said.subject)
+         ORDER BY said.account"
+  pure (rows.map fun row => ⟨row.text 0⟩).toList
+
 /-! ## Audit -/
 
 private def appendAudit [Monad m] (c : Ctx m) (tenant : TenantId) (entry : AuditEntry tenant) :
@@ -619,6 +673,7 @@ private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
     c.run sql!"DELETE FROM {sessions} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {invitations} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {deliveryRecords} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {consents} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {audit} WHERE tenant = {tenant.value}"
 
 /-- The port, for any dialect and any driver that can bind parameters and report rows affected
@@ -648,6 +703,9 @@ def sqlAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : AuthSt
     deliveryRecord := deliveryRecord c
     deliveryRecords := allDeliveryRecords c
     clearSuppression := clearSuppression c
+    recordConsent := recordConsent c
+    consentHistory := consentHistory c
+    consentingAccounts := consentingAccounts c
     appendAudit := appendAudit c
     auditEntries := auditEntries c
     deleteTenant := deleteTenant c }

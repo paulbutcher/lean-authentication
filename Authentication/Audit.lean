@@ -2,6 +2,7 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
+import Authentication.Consent
 import Authentication.Response
 import Authentication.Suppression
 import Authentication.Tenant
@@ -54,6 +55,11 @@ inductive AuditEvent (tenant : TenantId) where
   mail" is answered, and it is already the tenant's own data. -/
   | addressSuppressed (address : NormalisedEmail) (reason : SuppressionReason)
   | suppressionCleared (address : NormalisedEmail)
+  /-- Which version was agreed to is in the consent record itself; this is the tenant-wide
+  chronological note that it happened, which is what AUTH-14.1.7 asks of any client-initiated
+  action on an account. -/
+  | consentGranted (account : AccountId tenant) (subject : ConsentSubject)
+  | consentWithdrawn (account : AccountId tenant) (subject : ConsentSubject)
   deriving DecidableEq, Repr
 
 /-- Append-only (AUTH-15.4.5). The actor is whatever the client said it was; the library
