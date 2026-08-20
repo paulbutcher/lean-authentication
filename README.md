@@ -82,7 +82,7 @@ def config (tenant : TenantId) : TenantConfig tenant :=
 | Port | Implementations |
 | --- | --- |
 | `store` | `Sqlite.store`, `Postgres.store` |
-| `transport` | `Postmark.transport`, `Ses.transport` |
+| `transport` | `Postmark.transport`, `Ses.transport`, `EmailTransport.capturing` |
 | `responsePolicy` | `SignInResponsePolicy.silent` (uniform silence) |
 | `limiter` | `Sql.rateLimiter`, `RateLimiter.unlimited` |
 | `responseFloor` | `ResponseFloor.sleeping ms`, `ResponseFloor.immediate` |
@@ -92,6 +92,23 @@ def config (tenant : TenantId) : TenantConfig tenant :=
 `TenantConfig` also carries attempt and session lifetimes, the optional emailed code, the
 `returnTo` allowlist, the session cookie's path, and the email templates, all with defaults.
 Peppers and provider tokens are never defaulted.
+
+Both providers need an account and credentials, which a developer running the application locally
+has not got, and the magic link exists nowhere but inside the message. `EmailTransport.capturing`
+takes a sink of your own instead of sending, and `EmailTransport.console` is that sink wired to
+standard output:
+
+```lean
+-- prints the message
+transport := EmailTransport.console
+
+-- or hands it to a sink of your own, which is what a test wants
+transport := EmailTransport.capturing fun mail => sent.modify (· ++ [mail])
+```
+
+Either reports success, with the id a real transport would have returned for the same message.
+Development only: the message carries the sign-in credential in the clear, so anyone who can read
+the console, or whatever the sink writes to, can sign in as whoever asked to.
 
 ## Mounting the routes
 

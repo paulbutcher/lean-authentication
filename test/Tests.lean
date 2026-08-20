@@ -23,4 +23,5 @@ import Tests.Sql
 import Tests.Suppression
 import Tests.System
 import Tests.Template
+import Tests.Transport
 import Tests.Webhooks
