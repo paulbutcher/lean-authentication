@@ -32,6 +32,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-      - name: Install libpq
-        run: sudo apt-get update && sudo apt-get install -y libpq-dev
+      # libpq for the Postgres backend, libcurl for the outbound transports: leancurl builds its
+      # shim with `pkg-config libcurl`, which needs the development package and not just the
+      # runtime library the runner already has.
+      - name: Install libpq and libcurl
+        run: sudo apt-get update && sudo apt-get install -y libpq-dev libcurl4-openssl-dev
       - uses: leanprover/lean-action@v1
