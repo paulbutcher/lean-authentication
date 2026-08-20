@@ -9,9 +9,11 @@ an operation.
 
 ## Installing
 
-```lean
-require authentication from git
-  "https://github.com/paulbutcher/lean-authentication" @ "v0.1.0"
+```toml
+[[require]]
+name = "authentication"
+git = "https://github.com/paulbutcher/lean-authentication"
+rev = "v0.1.0"
 ```
 
 Each target is a separate `lean_lib`. Depend only on what you use.
@@ -44,22 +46,18 @@ credential if one was issued, and the account if one was created.
 
 ## Wiring
 
-`Clock` and `RandomBytes` are typeclasses. `import Authentication.Instances` supplies both, from
-the host's wall clock and the operating system's random source. Nothing else in the package
-imports that module, so a module meaning to pin the clock and forgetting gets a compile error
-rather than the real one.
-
-To keep the choice visible in your own code, `import Authentication.System` instead and write it
-out:
+`Clock` and `RandomBytes` are typeclasses, and no instance is in scope until you ask for one.
+`import Authentication.Instances` supplies both, from the host's wall clock and the operating
+system's random source. To keep them visible in your own code instead:
 
 ```lean
+import Authentication.System
+
 instance : Clock IO := Clock.system
 instance : RandomBytes IO := RandomBytes.system
 ```
 
-Either way your own instance wins wherever it is in scope; the shipped ones are low priority. A
-deployment whose nodes disagree about the time, or which draws entropy from an HSM, supplies its
-own.
+The shipped instances are low priority, so your own wins wherever it is in scope.
 
 ```lean
 open Authentication
@@ -173,9 +171,8 @@ webhooks :=
 A hard bounce or spam complaint suppresses the address; a transient failure is counted. Suppressed
 addresses are refused before the transport is asked.
 
-`Ses.Subscription.topics` has no default, and an empty list accepts nothing: a valid signature
-proves AWS sent the message, not that your topic did. Set your SNS topic to signature version 2;
-version 1 is refused rather than verified with SHA-1.
+`Ses.Subscription.topics` has no default and an empty list accepts nothing, so name every topic
+you expect. Set those topics to signature version 2; version 1 is refused.
 
 To receive callbacks some other way, `Postmark.deliveryEvents` and `Ses.deliveryEvents` parse a
 payload and `Service.ingestDelivery` records one. Verification is then yours.
@@ -209,13 +206,12 @@ append only: withdrawing adds an entry rather than editing one.
 Service.purgeExpired (tenant := t) ports (grace := Duration.days 1)  -- PurgeCounts
 ```
 
-Removes attempts and sessions that stopped being usable more than `grace` ago. Nothing depends on
-it having run, since all of it is refused on read anyway; what it bounds is table growth. **The
-library does not schedule it.** Run it from whatever you already use for periodic work.
+Removes attempts and sessions that stopped being usable more than `grace` ago, and bounds table
+growth. Correctness does not depend on it. **The library does not schedule it**: run it from
+whatever you already use for periodic work.
 
-It sweeps nothing else. The audit log, consent records and delivery history are retention
-questions rather than expiry ones, and the store offers no way to remove one of those. Rate
-limiter counters need no sweeping: old buckets are dropped as new ones are opened.
+Nothing else is swept. The audit log, consent records and delivery history are never removed, and
+rate limiter counters drop their own stale buckets.
 
 ## Schema
 
@@ -225,8 +221,7 @@ The SQL ships under `migrations/postgres` and `migrations/sqlite`, paired up and
 Postgres objects live in an `auth` schema, SQLite objects behind an `auth_` prefix, both in your
 own database, so `TransactionalStore` can enlist in your transaction.
 
-**Applying them is yours, and nothing here checks that you did.** Upgrade without migrating and
-the failure arrives when a statement first names a missing column.
+**Applying them is yours, and nothing here checks that you did.**
 
 `Sqlite.openInMemory` applies the schema; `Sqlite.openFile` and `Postgres.connect` do not.
 `Sqlite.createSchemaSql` and `Postgres.createSchemaSql` are the whole schema as one string, and
@@ -279,7 +274,6 @@ lake test
 Tests are a subproject in `test/` with its own lakefile, so a project depending on this one is free
 to name its own modules `Tests.*`. Warnings are errors.
 
-`lake test` needs `libpq` and a Postgres server, because the reference backend has to pass the
-conformance suite. It connects to `dbname=leanauthentication user=leanauthentication` unless
-`AUTHENTICATION_POSTGRES` says otherwise, and reports an unreachable server as a failed check
-rather than skipping.
+`lake test` needs `libpq` and a Postgres server. It connects to
+`dbname=leanauthentication user=leanauthentication` unless `AUTHENTICATION_POSTGRES` says
+otherwise, and reports an unreachable server as a failed check rather than skipping.
