@@ -235,6 +235,12 @@ private def Ctx.affected [Monad m] (c : Ctx m) (s : Statement) : m Nat :=
 private def Ctx.run [Monad m] (c : Ctx m) (s : Statement) : m Unit := do
   discard (c.affected s)
 
+/-- The statements inside run on the connection the transaction is open on rather than on the one
+this was reached through, which for a pooled driver are not the same. The block's `c` shadows the
+outer one so that reaching the wrong connection is not expressible. -/
+private def Ctx.transaction [Monad m] {α : Type} (c : Ctx m) (action : Ctx m → m α) : m α :=
+  c.conn.transaction fun conn => action { c with conn }
+
 /-! ## Accounts -/
 
 private def accountSelect : Statement :=
@@ -277,7 +283,7 @@ transaction. The unique index is still what enforces uniqueness; the lookup is w
 case a client will actually hit into a typed error rather than a driver exception. -/
 private def setPrimaryEmail [Monad m] (c : Ctx m) (tenant : TenantId) (id : AccountId tenant)
     (address : EmailAddress) : m (Except StoreError Unit) :=
-  c.conn.transaction do
+  c.transaction fun c => do
     let identity := address.normalise
     let holder ← c.first
       sql!"SELECT id FROM {accounts}
@@ -308,7 +314,7 @@ statement: a caller that selects first and inserts second races, and the race is
 account (AUTH-15.4.2). -/
 private def createAccount [Monad m] (c : Ctx m) (tenant : TenantId) (account : Account tenant) :
     m (Except StoreError (AccountCreated tenant)) :=
-  c.conn.transaction do
+  c.transaction fun c => do
     let inserted ← c.affected
       sql!"INSERT INTO {accounts}
              (tenant, id, identity_local, identity_domain, sending_local, sending_domain,
@@ -364,7 +370,7 @@ private def attemptById [Monad m] (c : Ctx m) (tenant : TenantId) (id : AttemptI
 
 private def startAttempt [Monad m] (c : Ctx m) (tenant : TenantId)
     (attempt : AttemptState tenant) : m (List (AttemptId tenant)) :=
-  c.conn.transaction do
+  c.transaction fun c => do
     let identity := attempt.address.normalise
     let live ← c.rows
       sql!"SELECT id FROM {attempts}
@@ -564,7 +570,7 @@ supplies none, which is what makes a later soft bounce unable to lift a hard one
 private def recordDeliveryFailure [Monad m] (c : Ctx m) (tenant : TenantId)
     (address : NormalisedEmail) (failure : DeliveryFailure) (now : Timestamp) (detail : String) :
     m (DeliveryRecord tenant) :=
-  c.conn.transaction do
+  c.transaction fun c => do
     let reason := failure.suppression.map suppressionText
     c.run
       sql!"INSERT INTO {deliveryRecords}
@@ -583,7 +589,7 @@ private def recordDeliveryFailure [Monad m] (c : Ctx m) (tenant : TenantId)
 
 private def suppressAddress [Monad m] (c : Ctx m) (tenant : TenantId) (address : NormalisedEmail)
     (now : Timestamp) (detail : String) : m (DeliveryRecord tenant) :=
-  c.conn.transaction do
+  c.transaction fun c => do
     c.run
       sql!"INSERT INTO {deliveryRecords}
              (tenant, identity_local, identity_domain, suppressed_by, failures,
@@ -677,7 +683,7 @@ and `touchSession` cannot resurrect one, so a row matching any of them is unreac
 merely stale. -/
 private def purgeExpired [Monad m] (c : Ctx m) (tenant : TenantId) (before : Timestamp) :
     m PurgeCounts :=
-  c.conn.transaction do
+  c.transaction fun c => do
     let attemptsRemoved ← c.affected
       sql!"DELETE FROM {attempts}
            WHERE tenant = {tenant.value} AND expires_at < {timeText before}"
@@ -690,7 +696,7 @@ private def purgeExpired [Monad m] (c : Ctx m) (tenant : TenantId) (before : Tim
     pure { attempts := attemptsRemoved, sessions := sessionsRemoved }
 
 private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
-  c.conn.transaction do
+  c.transaction fun c => do
     c.run sql!"DELETE FROM {accountEmails} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {accounts} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {attempts} WHERE tenant = {tenant.value}"
@@ -741,6 +747,6 @@ AUTH-15.3.5 requires be stated: the library's tables live in the client's own da
 def sqlTransactionalStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) :
     TransactionalStore m :=
   { store := sqlAuthStore dialect conn
-    runInTx := fun action => conn.transaction (action (sqlAuthStore dialect conn)) }
+    runInTx := fun action => conn.transaction fun conn => action (sqlAuthStore dialect conn) }
 
 end Authentication.Sql

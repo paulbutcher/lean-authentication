@@ -69,4 +69,57 @@ def checks : List (String × Bool) :=
     ("sql: the SQLite schema creates every table the statements name",
       schemaCoversTables Authentication.Sqlite.dialect Authentication.Sqlite.createSchemaSql) ]
 
+/-! ## The connection a transaction runs on -/
+
+/-- A driver that hands out a different connection every time it is asked, which is what a pool
+does. Neither shipped backend can exercise this: with one pinned connection, a transaction spread
+over several looks exactly like one that was not. -/
+private structure Pool where
+  next : IO.Ref Nat
+  log : IO.Ref (List (Nat × String))
+
+private def Pool.borrow (pool : Pool) : IO Nat := pool.next.modifyGet fun n => (n, n + 1)
+
+private def Pool.record (pool : Pool) (conn : Nat) (text : String) : IO Unit :=
+  pool.log.modify (· ++ [(conn, text)])
+
+/-- The handle is the borrowed connection, and `none` is one not yet chosen: a statement outside
+a transaction borrows its own, and a statement inside is given the one the `BEGIN` ran on. -/
+private def poolConnection (pool : Pool) : SqlConnection IO where
+  handle := (none : Option Nat)
+  query handle text _ := do
+    pool.record (← handle.getDM pool.borrow) text
+    pure #[]
+  exec handle text _ := do
+    pool.record (← handle.getDM pool.borrow) text
+    pure 1
+  runTransaction _ action := do
+    let borrowed ← pool.borrow
+    pool.record borrowed "BEGIN"
+    let result ← action (some borrowed)
+    pool.record borrowed "COMMIT"
+    pure result
+
+def poolChecks : IO (List (String × Bool)) := do
+  let pool : Pool := { next := ← IO.mkRef 1, log := ← IO.mkRef [] }
+  let store := sqlAuthStore Authentication.Sqlite.dialect (poolConnection pool)
+  let tenant : Authentication.TenantId := ⟨"acme"⟩
+  store.deleteTenant tenant
+  let inside ← pool.log.get
+  pool.log.set []
+  let _ ← store.auditEntries tenant
+  let _ ← store.auditEntries tenant
+  let outside ← pool.log.get
+  let opened := inside.head?.map (·.1)
+  pure
+    [ ("sql: a transaction is a BEGIN, the statements it wraps, and a COMMIT",
+        inside.length > 3 && (inside.head?.map (·.2)) == some "BEGIN"
+          && (inside.getLast?.map (·.2)) == some "COMMIT"),
+      ("sql: every statement inside a transaction runs on the connection it was opened on",
+        inside.all fun (conn, _) => some conn == opened),
+      ("sql: a statement outside a transaction is self-contained on its own connection",
+        match outside.map (·.1) with
+        | [first, second] => first != second
+        | _ => false) ]
+
 end Tests.Sql

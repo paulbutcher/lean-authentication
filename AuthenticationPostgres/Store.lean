@@ -86,7 +86,8 @@ private def withTransaction {α : Type} (c : Connection) (action : IO α) : IO �
       throw e
 
 def connection (c : Connection) : SqlConnection IO where
-  query text params := do
+  handle := c
+  query c text params := do
     let stmt ← prepared c text params
     let mut rows : Array SqlRow := #[]
     let mut columns := 0
@@ -95,11 +96,13 @@ def connection (c : Connection) : SqlConnection IO where
         columns ← stmt.columnCount
       rows := rows.push (← readRow stmt columns)
     pure rows
-  exec text params := do
+  exec c text params := do
     let stmt ← prepared c text params
     discard stmt.step
     pure ((← stmt.commandTuples).getD 0).toNatClampNeg
-  transaction action := withTransaction c action
+  -- There is one connection and its depth is tracked on it, so the block is handed the one the
+  -- `BEGIN` ran on, which is the one it was already going to use.
+  runTransaction c action := withTransaction c (action c)
 
 /-- The port, wired to one connection. -/
 def store (c : Connection) : AuthStore IO := sqlAuthStore dialect (connection c)

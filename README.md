@@ -250,6 +250,12 @@ own database, so `TransactionalStore` can enlist in your transaction.
 Any other backend behind the `AuthStore` port has to pass
 `Authentication.Store.Conformance.run`, which ships with the library.
 
+A client that already owns a connection pool can implement `Sql.SqlConnection` over it rather
+than run a second connection alongside it. `Handle` is whatever the pool lends out, statements
+outside a transaction may each borrow their own, and `runTransaction` is handed the one its
+`BEGIN` ran on and passes it to the block, so a transaction cannot spread itself over connections
+chosen independently. `Sql.sqlAuthStore` and `Sql.sqlTransactionalStore` turn one into the ports.
+
 ## Sending domain DNS
 
 The `From` domain needs all of these before mail is delivered rather than filed:

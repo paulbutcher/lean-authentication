@@ -107,21 +107,23 @@ private def prepared (db : SQLite) (text : String) (params : Array SqlValue) : I
   pure stmt
 
 def connection (db : SQLite) : SqlConnection IO where
-  query text params := do
+  handle := db
+  query db text params := do
     let stmt ← prepared db text params
     let mut rows : Array SqlRow := #[]
     while ← stmt.step do
       rows := rows.push (← readRow stmt)
     pure rows
-  exec text params := do
+  exec db text params := do
     let stmt ← prepared db text params
     while ← stmt.step do
       pure ()
     pure (← db.changes).toNatClampNeg
   -- SQLite has no nested transactions, so an operation reached from inside `runInTx` joins the
-  -- transaction already open rather than opening a second one.
-  transaction action := do
-    if ← db.inTransaction then action else db.transaction action
+  -- transaction already open rather than opening a second one. There is one connection, so the
+  -- block is handed the one it was already going to use.
+  runTransaction db action := do
+    if ← db.inTransaction then action db else db.transaction (action db)
 
 /-- The port, wired to one connection. -/
 def store (db : SQLite) : AuthStore IO := sqlAuthStore dialect (connection db)
