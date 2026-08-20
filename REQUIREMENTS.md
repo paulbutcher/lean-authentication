@@ -135,7 +135,7 @@ The single most important structural requirement:
   example by making the identifier types carry the tenant, over a discipline the caller has to
   remember.
 - **AUTH-4.2.5** Deleting a tenant MUST remove its accounts, sessions, invitations, attempts,
-  suppression entries, and audit records, with no orphans.
+  suppression entries, consent records, and audit records, with no orphans.
 
 ### 4.3 Tenant identification in URLs
 
@@ -180,6 +180,37 @@ The single most important structural requirement:
 - **AUTH-4.5.4** Plus-tag and dot stripping (`user+tag@`, `u.s.e.r@gmail.com`) MUST NOT be
   applied by default. It MAY be offered as an explicit per-tenant option, off unless configured,
   because it silently merges addresses that some organisations treat as distinct.
+
+### 4.6 Consent records
+
+Answering §18.7. Terms acceptance and marketing consent are recorded here; they are not captured
+here, and the distinction is the whole of the design.
+
+- **AUTH-4.6.1** The library MUST NOT solicit consent anywhere in the sign-in flow. Whether a
+  sign-in is about to create an account is exactly what §14.2 exists to hide, and a control shown
+  only to addresses with no account reports it before any mail is sent, to anyone who reads the
+  page. The client asks somebody it has already authenticated, at a moment of its choosing, and
+  records the answer. A consequence to state plainly: consent is therefore not captured at the
+  instant of signup, which is what §18.7 asked for in so many words.
+- **AUTH-4.6.2** A record MUST carry the subject consented to, the version that was shown, the
+  answer, and when it was given. The subject and the version are the client's own strings, stored
+  verbatim and never interpreted, as an invitation's metadata is (AUTH-8.7). The library records
+  that something was agreed to, not what.
+- **AUTH-4.6.3** The history MUST be append only. Withdrawing MUST add an entry rather than edit
+  or remove the one that granted, so that what was agreed to under an earlier version stays on
+  the record. The store MUST offer no update and no delete for it.
+- **AUTH-4.6.4** Where a subject stands now MUST be derived from the last entry about it.
+  Withdrawal has to be as easy as granting, so a later withdrawal MUST take precedence over any
+  earlier grant, and a subject with no entry MUST NOT count as granted.
+- **AUTH-4.6.5** The library MUST expose, per tenant, the accounts whose latest answer on a
+  subject was a grant. This is the query a mailshot is drawn from, and leaving it to the client to
+  fold every account's history is leaving the mistake that mails somebody who said no.
+- **AUTH-4.6.6** Consent records MUST NOT be swept (AUTH-15.4.3). They outlive the attempts and
+  sessions around them because their purpose is evidentiary, and how long they are kept is part of
+  the retention question in §18.5.
+- **AUTH-4.6.7** Distinct consents MUST be recordable separately, not as one answer. A single
+  control covering both terms and marketing invalidates the marketing half under the usual reading
+  of GDPR Article 7(4).
 
 ---
 
@@ -265,6 +296,10 @@ before implementing any of it.
   people who prefer typing to clicking and for mail environments that mangle links.
 - **AUTH-5.4.2** When enabled, that code is a distinct credential from the revealed code. Both
   are valid inputs to the same attempt; both are subject to the shared 5-attempt budget.
+- **AUTH-5.4.3** Where the library serves the sign-in pages, enabling this MUST give the person
+  somewhere to type the code. The two codes MUST be submitted separately rather than one
+  endpoint trying both, because a submission tried against both spends two entries of the budget
+  they share.
 
 ---
 
@@ -590,7 +625,7 @@ a philosophical position, and it has consequences that must be built in rather t
 - **AUTH-14.1.7** An append-only audit record MUST be written for: attempt created, link opened
   and on which side of the device boundary, code entered and outcome, session issued, session
   revoked, identity linked or unlinked, invitation created, sent, accepted, revoked, policy
-  changed, and any client-initiated action on an account.
+  changed, consent granted or withdrawn, and any client-initiated action on an account.
 - **AUTH-14.1.8** The library MUST expose a hook point for bot mitigation on the send endpoint
   (Turnstile, hCaptcha, or none), without depending on any particular provider.
 
@@ -661,7 +696,7 @@ channel the client did not intend.
 
 ### 15.1 What is stored
 
-Eleven kinds of record, every one of them tenant-scoped except the tenant configuration itself:
+Twelve kinds of record, every one of them tenant-scoped except the tenant configuration itself:
 
 1. **Tenant auth config**: signup policy and allowlist, invitation-override flag, attempt and
    session lifetimes, enabled providers and their credentials, sending identity, base URL,
@@ -680,7 +715,8 @@ Eleven kinds of record, every one of them tenant-scoped except the tenant config
 8. **OAuth state**: PKCE verifier, nonce, tenant, return target, expiry.
 9. **Suppression list**, per AUTH-12.2.
 10. **Rate limiter counters**, behind their own port per AUTH-15.6.
-11. **Audit log**, append-only.
+11. **Consent records**: account, subject, version, answer, and when, append-only per AUTH-4.6.3.
+12. **Audit log**, append-only.
 
 ### 15.2 The port and its layering
 
@@ -744,6 +780,13 @@ typecheck while violating, and every one of them is load-bearing:
   (tenant, address).
 - **AUTH-15.4.3** Expiry is enforced on read. A sweeper is required to bound growth but
   correctness MUST NOT depend on it having run.
+  - **AUTH-15.4.3.1** The port MUST expose the sweep, and it MUST remove only records that
+    nothing can reach: attempts past their expiry, and sessions past their idle or absolute
+    expiry or revoked. The audit log, consent records and delivery history are retention
+    questions rather than expiry ones (AUTH-4.6.6, §18.5) and MUST NOT be swept.
+  - **AUTH-15.4.3.2** The library MUST NOT schedule it. A client runs it from whatever it
+    already uses for periodic work, and the cutoff is a parameter, because how far apart the
+    clocks of the processes sharing that database are is not something this library can know.
 - **AUTH-15.4.4** Tenant isolation holds for every operation (AUTH-4.2.4), and tenant deletion
   cascades with no orphans (AUTH-4.2.5).
 - **AUTH-15.4.5** The audit log admits no update and no delete.
@@ -894,8 +937,9 @@ Inherit the conventions in the project's `CLAUDE.md`, in particular:
 
 ## 18. Open decisions
 
-Unresolved. Each needs an answer before the affected part is built; a recommendation is offered
-but the decision is not the implementer's to make. Ask, do not assume.
+Unresolved unless the entry says otherwise. Each needs an answer before the affected part is
+built; a recommendation is offered but the decision is not the implementer's to make. Ask, do not
+assume. An entry that has been answered keeps its number and records what was decided.
 
 - **18.1 Administrator-led recovery.** Self-service recovery is out of scope, so someone who
   loses mailbox access is restored by the client. The three operations that were named as
@@ -925,8 +969,13 @@ but the decision is not the implementer's to make. Ask, do not assume.
   common operational need and a serious security feature. In or out? If in, it needs its own
   audit trail and a visible indication to the person being impersonated.
 
-- **18.7 Consent capture.** Terms acceptance and marketing consent at signup, with a record of
-  which version was accepted and when. Cheap to add now, awkward to backfill.
+- **18.7 Consent capture.** Answered, in §4.6: the library stores consent and does not capture
+  it. The record, the version and the history are what could not be backfilled, and they now
+  exist; the capture is the client's, on somebody it has already authenticated. Asking during
+  sign-in was rejected because a consent control shown only to addresses with no account is a
+  better account enumeration oracle than any channel §14.2 closes. What remains open is only what
+  §18.5 decides: how long the records are kept, and what account deletion does to evidence that
+  permission was given.
 
 - **18.8 Localisation.** Are emails single-language? Locale selection has to be threaded from
   the request through to template rendering, which is easier to design in than to retrofit.
@@ -949,5 +998,6 @@ Each stage should build, test, and be reviewable on its own.
    listed as a stage because it was previously assigned to none, and so would have been
    delivered by nobody.
 8. Session management surface, bounce ingestion, suppression.
+9. Consent records (§4.6), which answer §18.7.
 
 Federated sign-in was stage 6 and is deferred; see §6.

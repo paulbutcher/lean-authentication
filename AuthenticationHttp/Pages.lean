@@ -31,6 +31,10 @@ structure PageContext where
   /-- Where the person asked to land, carried forward so that the browser being signed in is the
   one that says where it is going. It is validated where it is used, not here (AUTH-9.8). -/
   returnTo : Option String := none
+  /-- Set only when the tenant puts a code in the mail body (AUTH-5.4.1). It is a second action
+  rather than a second meaning for the first, because the two codes are distinct credentials and
+  trying one against the other would spend two of the five entries they share (AUTH-5.4.2). -/
+  emailedCodeAction : Option String := none
 
 structure Pages where
   signIn : PageContext → String
@@ -79,18 +83,23 @@ private def refusalText : SignInRefusal → String
   | .signup .domainNotAllowed => "This organisation does not accept that address's domain."
   | .accountDeactivated => "That account is closed."
 
-private def codeForm (context : PageContext) : Node .flow :=
+private def oneCodeForm (context : PageContext) (action label id : String) : Node .flow :=
   Html.form
-    ([ Html.p
-         [ Html.label [Node.text "Verification code"] { for_ := "code" } ],
+    ([ Html.p [ Html.label [Node.text label] { for_ := id } ],
        Html.p
          [ Html.input
-             { type := "text", name := "code", id := "code", required := true }
+             { type := "text", name := "code", id, required := true }
              [("autocomplete", "one-time-code"), ("autocapitalize", "off"),
               ("spellcheck", "false")] ] ]
       ++ carried context
       ++ [Html.p [Html.button [Node.text "Sign in"]]])
-    { method := "post", action := context.action }
+    { method := "post", action }
+
+private def codeForm (context : PageContext) : List (Node .flow) :=
+  oneCodeForm context context.action "Verification code" "code"
+    :: match context.emailedCodeAction with
+      | none => []
+      | some action => [oneCodeForm context action "Code from the email" "emailed-code"]
 
 def standard : Pages where
   signIn context :=
@@ -108,12 +117,12 @@ def standard : Pages where
           { method := "post", action := context.action } ]
   sent context message :=
     page s!"Sign in to {context.tenantName}"
-      [ Html.h1 [Node.text "Check your mail"],
+      ([ Html.h1 [Node.text "Check your mail"],
         Html.p [Node.text (messageText message)],
         Html.p
           [ Node.text
-              "If you opened the link on another device, type the code it showed you here." ],
-        codeForm context ]
+              "If you opened the link on another device, type the code it showed you here." ] ]
+      ++ codeForm context)
   confirm context :=
     page s!"Sign in to {context.tenantName}"
       [ Html.h1 [Node.text s!"Sign in to {context.tenantName}"],
@@ -130,12 +139,12 @@ def standard : Pages where
         Html.p [Html.strong [Html.code [Node.text shown]]] ]
   codeRejected context remaining :=
     page s!"Sign in to {context.tenantName}"
-      [ Html.h1 [Node.text "That code is not right"],
+      ([ Html.h1 [Node.text "That code is not right"],
         Html.p
           [ Node.text
               (if remaining == 0 then "No attempts remain. Ask for a new link."
-                else s!"{remaining} attempts remain.") ],
-        codeForm context ]
+                else s!"{remaining} attempts remain.") ] ]
+      ++ codeForm context)
   refused context reason :=
     page s!"Sign in to {context.tenantName}"
       [ Html.h1 [Node.text "You cannot sign in"],

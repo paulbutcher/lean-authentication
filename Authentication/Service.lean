@@ -813,4 +813,22 @@ def consenting {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports 
     (subject : ConsentSubject) : m (List (AccountId tenant)) :=
   ports.store.consentingAccounts tenant subject
 
+/-! ## Housekeeping -/
+
+/--
+Removes the attempts and sessions that expired more than `grace` ago (AUTH-15.4.3). The library
+does not schedule this; a client runs it from whatever it already uses to run periodic work.
+
+The grace period is what makes it safe to run against a database shared with processes whose
+clocks differ slightly, and it is a parameter rather than a constant because how far apart those
+clocks are is not something this library can know.
+
+Sweeping is not audited. The audit log is the one thing this cannot remove, and a record of every
+sweep would grow it in proportion to how often growth was being controlled.
+-/
+def purgeExpired {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (grace : Duration := Duration.days 1) : m PurgeCounts := do
+  let now ← Clock.now
+  ports.store.purgeExpired tenant ⟨now.epochSeconds - grace.seconds⟩
+
 end Authentication.Service

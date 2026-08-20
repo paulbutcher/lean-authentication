@@ -320,4 +320,31 @@ def returnToChecks : List (String × Bool) :=
       resolve (some "https://evil.test/") == "/"),
     ("returnTo: asking for nowhere lands at the default", resolve none == "/") ]
 
+/-- Sweeping (AUTH-15.4.3). That the grace period is subtracted rather than added is the part
+worth pinning: added, the sweep would remove records that are still live, and the first thing
+anyone would notice is people being signed out.
+-/
+def purgeChecks : IO (List (String × Bool)) := do
+  let start : Timestamp := ⟨1700000000⟩
+  clockRef.set start
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+  let signedIn ← signIn ports config "person@example.com"
+  let credential := signedIn.session.getD ⟨""⟩
+
+  let immediately ← purgeExpired (tenant := tenant) ports
+  let survived ← identify (tenant := tenant) ports config credential
+
+  clockRef.set (start.advance (Duration.days 30))
+  let swept ← purgeExpired (tenant := tenant) ports
+  let again ← purgeExpired (tenant := tenant) ports
+
+  clockRef.set start
+  pure
+    [ ("purge: a database with nothing expired loses nothing",
+        immediately == {} && survived.isSome),
+      ("purge: the session and the attempt behind it go once both are unreachable",
+        swept.sessions == 1 && swept.attempts == 1),
+      ("purge: and a second sweep finds nothing left to remove", again == {}) ]
+
 end Tests.Session

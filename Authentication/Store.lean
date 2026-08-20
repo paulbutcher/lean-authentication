@@ -38,6 +38,12 @@ structure AccountCreated (tenant : TenantId) where
   firstInTenant : Bool
   deriving Repr
 
+/-- What a sweep removed (AUTH-15.4.3). -/
+structure PurgeCounts where
+  attempts : Nat := 0
+  sessions : Nat := 0
+  deriving DecidableEq, Repr, Inhabited
+
 /--
 Every operation takes the tenant, and every identifier it accepts carries the tenant in its
 type, so a query that reads another tenant's rows cannot be written (AUTH-4.2.4).
@@ -122,6 +128,13 @@ structure AuthStore (m : Type → Type) where
   not by a rule a backend is asked to follow but by an operation it is not given. -/
   appendAudit : (tenant : TenantId) → AuditEntry tenant → m Unit
   auditEntries : (tenant : TenantId) → m (List (AuditEntry tenant))
+  /-- Removes attempts that expired before `before`, and sessions that can no longer be used and
+  stopped being usable before it. Everything it removes is already refused on read, so no
+  correctness depends on it having run; what it bounds is growth (AUTH-15.4.3).
+
+  It sweeps nothing else. The audit log, consent records and delivery history are retention
+  questions rather than expiry ones, and the port offers no way to remove one of those. -/
+  purgeExpired : (tenant : TenantId) → (before : Timestamp) → m PurgeCounts
   /-- Removes the tenant's accounts, sessions, invitations, attempts, delivery history, consent
   records and audit records, with no orphans (AUTH-4.2.5). -/
   deleteTenant : (tenant : TenantId) → m Unit

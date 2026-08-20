@@ -665,6 +665,26 @@ private def auditEntries [Monad m] (c : Ctx m) (tenant : TenantId) :
     (auditEventOf tenant (row.text 2) (row.text 3) (row.text 4)).map fun event =>
       { occurredAt := timeOf (row.int 0), actor := actorOf (row.text? 1), event })
 
+/-! ## Sweeping -/
+
+/-- A session is removed once nothing can reach it: past its absolute lifetime, past the idle
+timeout it was last written with, or revoked. Those are the three `Session.identify` refuses on,
+and `touchSession` cannot resurrect one, so a row matching any of them is unreachable rather than
+merely stale. -/
+private def purgeExpired [Monad m] (c : Ctx m) (tenant : TenantId) (before : Timestamp) :
+    m PurgeCounts :=
+  c.conn.transaction do
+    let attemptsRemoved ← c.affected
+      sql!"DELETE FROM {attempts}
+           WHERE tenant = {tenant.value} AND expires_at < {timeText before}"
+    let sessionsRemoved ← c.affected
+      sql!"DELETE FROM {sessions}
+           WHERE tenant = {tenant.value}
+             AND (absolute_expires_at < {timeText before}
+                  OR idle_expires_at < {timeText before}
+                  OR revoked_at < {timeText before})"
+    pure { attempts := attemptsRemoved, sessions := sessionsRemoved }
+
 private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
   c.conn.transaction do
     c.run sql!"DELETE FROM {accountEmails} WHERE tenant = {tenant.value}"
@@ -708,6 +728,7 @@ def sqlAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : AuthSt
     consentingAccounts := consentingAccounts c
     appendAudit := appendAudit c
     auditEntries := auditEntries c
+    purgeExpired := purgeExpired c
     deleteTenant := deleteTenant c }
 
 /-- The transactional capability (AUTH-15.3), for a driver whose `transaction` nests or whose

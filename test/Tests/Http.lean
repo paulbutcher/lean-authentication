@@ -340,4 +340,46 @@ def returnToChecks : IO (List (String × Bool)) := do
         statusOf signedIn == "HTTP/1.1 303 See Other"
           && headerValues signedIn "location" == ["/"]) ]
 
+private def codedConfig : TenantConfig tenant := { config with emailedCodeEnabled := true }
+
+private def codedResolver (t : TenantId) : IO (Option (TenantConfig t)) :=
+  if h : t = tenant then pure (some (h ▸ codedConfig)) else pure none
+
+private def emailedCodeIn (body : String) : Option String :=
+  ((body.splitOn "Or type this code instead: ").drop 1).head?.map fun tail =>
+    String.ofList (tail.toList.takeWhile Char.isDigit)
+
+/-- The optional code in the mail body (AUTH-5.4). It is offered only where the tenant enabled
+one, and it signs in without the link having been opened at all, which is the whole of its use.
+-/
+def emailedCodeChecks : IO (List (String × Bool)) := do
+  clockRef.set ⟨1700000000⟩
+  sentRef.set []
+  let codedDb ← Sqlite.openInMemory
+  let plainDb ← Sqlite.openInMemory
+  let coded : Authentication.Http.Config := { ports := portsOn codedDb, tenant := codedResolver }
+  let plain : Authentication.Http.Config := { ports := portsOn plainDb, tenant := resolver }
+  let headers := "Content-Type: application/x-www-form-urlencoded\x0d\nConnection: close\x0d\n"
+
+  let begun ← send coded
+    (mkPost "/t/acme/signin" "email=person%40example.com&returnTo=%2Fdashboard" headers)
+  let attemptCookie := (cookiePair begun "auth_attempt").getD ""
+  let token := (fieldValue (bodyOf begun) "token").getD ""
+  let typed := (emailedCodeIn ((((← sentRef.get)[0]?).map (·.textBody)).getD "")).getD ""
+  let signedIn ← send coded
+    (mkPost "/t/acme/signin/emailed-code" s!"code={typed}&token={token}&returnTo=%2Fdashboard"
+      (headers ++ s!"Cookie: {attemptCookie}\x0d\n"))
+  let withoutFlag ← send plain
+    (mkPost "/t/acme/signin" "email=person%40example.com" headers)
+
+  pure
+    [ ("http: a tenant with typed codes enabled sends one (AUTH-5.4.1)", !typed.isEmpty),
+      ("http: and the page it lands on offers somewhere to type it",
+        contains (bodyOf begun) "/t/acme/signin/emailed-code"),
+      ("http: a tenant without them is offered nothing",
+        !contains (bodyOf withoutFlag) "/t/acme/signin/emailed-code"),
+      ("http: the emailed code signs in without the link being opened (AUTH-5.4.2)",
+        statusOf signedIn == "HTTP/1.1 303 See Other"
+          && (cookiePair signedIn "auth_session").isSome) ]
+
 end Tests.Http

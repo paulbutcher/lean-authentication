@@ -150,6 +150,21 @@ here it cannot.
 The consequence while it stands is latency and outbound traffic on the ingestion path, not
 correctness. It matters at a volume of bounces that would already be an incident.
 
+## Sweeping is offered but never runs by itself (AUTH-15.4.3.2)
+
+`Service.purgeExpired` removes the attempts and sessions nothing can reach, and the library never
+calls it. A client that mounts the routes and schedules nothing has a database that grows for as
+long as it runs.
+
+That is deliberate for the reason AUTH-15.4.3.2 gives: the cutoff depends on how far apart the
+clocks of the processes sharing that database are, and a library that swept on its own timer would
+be choosing that, on a schedule the client cannot see, against a database the client owns.
+
+Correctness never depends on it. Everything the sweep removes is already refused on read, so the
+consequence of never running it is disk and index size, not a session that should have ended still
+answering. It is listed here because the failure is silent and slow: nothing degrades until the
+attempts table is large enough for its own index to matter.
+
 ## Client-initiated sends are not rate limited (AUTH-14.1.1)
 
 The limiter covers beginning a sign-in and submitting a code. Creating and resending an invitation

@@ -165,8 +165,16 @@ private def signInPath (tenant : TenantId) : String :=
 private def codePath (tenant : TenantId) : String :=
   BaseUrl.tenantPath tenant ++ "/signin/code"
 
+private def emailedCodePath (tenant : TenantId) : String :=
+  BaseUrl.tenantPath tenant ++ "/signin/emailed-code"
+
 private def confirmPath (tenant : TenantId) : String :=
   BaseUrl.tenantPath tenant ++ "/signin/confirm"
+
+/-- Offered only where the tenant puts a code in the mail (AUTH-5.4.1). Offering it regardless
+would give the page a field for a code that is never sent. -/
+private def emailedCodeAction {tenant : TenantId} (config : TenantConfig tenant) : Option String :=
+  if config.emailedCodeEnabled then some (emailedCodePath tenant) else none
 
 /-- Resolves the tenant, or answers the way an unrouted path would. A tenant the client does not
 recognise must be indistinguishable from one that does not exist. -/
@@ -230,7 +238,8 @@ private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : Str
         { tenantName := tenantConfig.displayName
           action := codePath tenant
           token
-          returnTo }
+          returnTo
+          emailedCodeAction := emailedCodeAction tenantConfig }
         response.message)
       [setCookie now cookie]
 
@@ -315,9 +324,37 @@ private def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : Stri
           { tenantName := tenantConfig.displayName
             action := codePath tenant
             token := some (formToken config.ports.peppers nonce)
-            returnTo }
+            returnTo
+            emailedCodeAction := emailedCodeAction tenantConfig }
         match ← (Service.submitCode config.ports tenantConfig attempt typed nonce requester :
             IO _) with
+        | .error _ => finish .ok (config.pages.codeRejected context 0) []
+        | .ok outcome => settled config tenant tenantConfig now outcome returnTo context
+
+/-- The optional code carried in the mail body (AUTH-5.4). It is a separate endpoint from the
+revealed code because they are separate credentials sharing one entry budget: an endpoint that
+tried both would spend two entries on one submission. -/
+private def submitEmailedCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+  withTenant config raw fun tenant tenantConfig => do
+    let form ← formBody request
+    match (cookieNamed request "auth_attempt").bind (cookieParts (tenant := tenant)) with
+    | none => notFoundPage config
+    | some (attempt, nonce) =>
+      if !tokenAccepted config.ports.peppers nonce (form.get "token") then
+        finish .forbidden config.pages.unknown []
+      else
+        let now ← (Clock.now : IO Timestamp)
+        let returnTo := form.get "returnTo"
+        let typed := (form.get "code").getD ""
+        let requester := requesterOf request
+        let context : PageContext :=
+          { tenantName := tenantConfig.displayName
+            action := codePath tenant
+            token := some (formToken config.ports.peppers nonce)
+            returnTo
+            emailedCodeAction := emailedCodeAction tenantConfig }
+        match ← (Service.submitEmailedCode config.ports tenantConfig attempt typed nonce
+            requester : IO _) with
         | .error _ => finish .ok (config.pages.codeRejected context 0) []
         | .ok outcome => settled config tenant tenantConfig now outcome returnTo context
 
@@ -338,7 +375,8 @@ private def acceptInvitation [Clock IO] [RandomBytes IO] (config : Config) (raw 
         fun parts => formToken config.ports.peppers parts.2
       finish .ok
         (config.pages.sent
-          { tenantName := tenantConfig.displayName, action := codePath tenant, token }
+          { tenantName := tenantConfig.displayName, action := codePath tenant, token
+            emailedCodeAction := emailedCodeAction tenantConfig }
           .checkYourMail)
         (cookie.toList.map (setCookie now))
 
@@ -377,6 +415,7 @@ route_table SignIn [
   link := "/t/:tenant:String/signin/link",
   confirm := "/t/:tenant:String/signin/confirm",
   code := "/t/:tenant:String/signin/code",
+  emailedCode := "/t/:tenant:String/signin/emailed-code",
   accept := "/t/:tenant:String/invitation/accept",
   webhook := "/t/:tenant:String/webhooks/:provider:String"
 ]
@@ -389,6 +428,7 @@ def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route R
     .get SignIn.patterns.link (openLink config),
     .post SignIn.patterns.confirm (confirmSignIn config),
     .post SignIn.patterns.code (submitCode config),
+    .post SignIn.patterns.emailedCode (submitEmailedCode config),
     .get SignIn.patterns.accept (acceptInvitation config),
     .post SignIn.patterns.webhook (webhook config) ]
 

@@ -17,10 +17,12 @@ def main : IO UInt32 := do
     ++ (← Tests.Signup.invitationChecks) ++ (← Tests.Signup.existingAccountChecks)
     ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ Tests.Ses.checks ++ (← Tests.RateLimit.checks)
     ++ (← Tests.RateLimit.serviceChecks) ++ (← Tests.RateLimit.floorChecks) ++ (← Tests.Session.checks) ++ (← Tests.Session.lifetimeChecks)
-    ++ (← Tests.Session.accountChecks) ++ Tests.Session.returnToChecks
+    ++ (← Tests.Session.accountChecks) ++ (← Tests.Session.purgeChecks)
+    ++ Tests.Session.returnToChecks
     ++ Tests.Suppression.parserChecks ++ (← Tests.Suppression.checks) ++ (← Tests.System.checks)
     ++ (← Tests.Http.checks) ++ (← Tests.Http.equalisationChecks) ++ (← Tests.Http.returnToChecks)
-    ++ (← Tests.Http.humanCheckChecks) ++ (← Tests.Http.webhookChecks) ++ (← Tests.Webhooks.snsChecks)
+    ++ (← Tests.Http.humanCheckChecks) ++ (← Tests.Http.webhookChecks)
+    ++ (← Tests.Http.emailedCodeChecks) ++ (← Tests.Webhooks.snsChecks)
     ++ (← Tests.Webhooks.postmarkChecks)
     ++ (← Tests.Ses.flowChecks) ++ (← Tests.Postgres.conformanceChecks)
   let failed := checks.filter fun (_, passed) => !passed

@@ -111,13 +111,15 @@ def routes (db : SQLite) (secret : ByteArray) (token : String) :
 | `/t/<tenant>/signin/link` | `GET`, the magic link target |
 | `/t/<tenant>/signin/confirm` | `POST`, same-device completion |
 | `/t/<tenant>/signin/code` | `POST`, cross-device code entry |
+| `/t/<tenant>/signin/emailed-code` | `POST`, the optional code from the mail body |
 | `/t/<tenant>/invitation/accept` | `GET`, the invitation link target |
 | `/t/<tenant>/webhooks/<name>` | `POST`, provider callbacks |
 
 `Http.routes` returns the same list for mounting into a router you already have.
 
-`Config.pages` replaces the rendering; the defaults are unstyled and semantic. Nothing
-administrative is served: invitations, revocation and suppression have no route.
+`Config.pages` replaces the rendering; the defaults are unstyled and semantic. The emailed-code
+form appears only where `TenantConfig.emailedCodeEnabled` is set. Nothing administrative is
+served: invitations, revocation and suppression have no route.
 
 Two things remain yours:
 
@@ -200,6 +202,20 @@ Service.consenting ports ⟨"marketing"⟩ -- the accounts to write to
 
 Subject and version are your own strings, stored verbatim and never interpreted. The history is
 append only: withdrawing adds an entry rather than editing one.
+
+## Housekeeping
+
+```lean
+Service.purgeExpired (tenant := t) ports (grace := Duration.days 1)  -- PurgeCounts
+```
+
+Removes attempts and sessions that stopped being usable more than `grace` ago. Nothing depends on
+it having run, since all of it is refused on read anyway; what it bounds is table growth. **The
+library does not schedule it.** Run it from whatever you already use for periodic work.
+
+It sweeps nothing else. The audit log, consent records and delivery history are retention
+questions rather than expiry ones, and the store offers no way to remove one of those. Rate
+limiter counters need no sweeping: old buckets are dropped as new ones are opened.
 
 ## Schema
 

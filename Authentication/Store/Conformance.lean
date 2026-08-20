@@ -85,6 +85,7 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let alpha : TenantId := ⟨label ++ "-alpha"⟩
   let beta : TenantId := ⟨label ++ "-beta"⟩
   let doomed : TenantId := ⟨label ++ "-doomed"⟩
+  let swept : TenantId := ⟨label ++ "-swept"⟩
   let person := addressOf "person"
   let other := addressOf "other"
 
@@ -93,6 +94,7 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   store.deleteTenant alpha
   store.deleteTenant beta
   store.deleteTenant doomed
+  store.deleteTenant swept
 
   -- Accounts, uniqueness, and the first-account signal.
   let created ← store.createAccount alpha (sampleAccount alpha "account-1" person)
@@ -225,6 +227,26 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let alphaAudit ← store.auditEntries alpha
   let betaAudit ← store.auditEntries beta
 
+  -- Sweeping removes what nothing can reach, and leaves everything else.
+  let _ ← store.createAccount swept (sampleAccount swept "account-swept" person)
+  let _ ← store.startAttempt swept (sampleAttempt swept "attempt-live" other later)
+  let _ ← store.startAttempt swept (sampleAttempt swept "attempt-stale" person epoch)
+  store.createSession swept
+    (sampleSession swept "session-live" ⟨"account-swept"⟩ (digestOf [30]) later later)
+  store.createSession swept
+    (sampleSession swept "session-idle" ⟨"account-swept"⟩ (digestOf [31]) epoch later)
+  store.createSession swept
+    (sampleSession swept "session-revoked" ⟨"account-swept"⟩ (digestOf [32]) later later)
+  store.revokeSession swept epoch ⟨"session-revoked"⟩
+  store.appendAudit swept ⟨epoch, .anonymous, .attemptCreated ⟨"attempt-stale"⟩⟩
+  store.recordConsent swept ⟨⟨"account-swept"⟩, terms, "2026-01", .granted, epoch⟩
+  let purged ← store.purgeExpired swept soon
+  let sweptLiveAttempt ← store.attemptById swept ⟨"attempt-live"⟩
+  let sweptStaleAttempt ← store.attemptById swept ⟨"attempt-stale"⟩
+  let sweptLiveSession ← store.sessionByDigest swept soon (digestOf [30])
+  let sweptAudit ← store.auditEntries swept
+  let sweptConsent ← store.consentHistory swept ⟨"account-swept"⟩
+
   -- Tenant deletion cascades, and stops at the tenant it was asked about.
   let _ ← store.createAccount doomed (sampleAccount doomed "account-doomed" person)
   let _ ← store.startAttempt doomed (sampleAttempt doomed "attempt-doomed" person soon)
@@ -336,6 +358,15 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := alphaAudit.length == 1 }
     , { name := "audit entries do not leak across tenants"
         passed := betaAudit.length == 1 }
+    , { name := "sweeping removes an expired attempt and reports it (AUTH-15.4.3)"
+        passed := sweptStaleAttempt.isNone && purged.attempts == 1 }
+    , { name := "sweeping leaves a live attempt alone"
+        passed := (sweptLiveAttempt.map (·.id.value)) == some "attempt-live" }
+    , { name := "sweeping removes the sessions nothing can reach, and only those"
+        passed := purged.sessions == 2
+          && (sweptLiveSession.map (·.id.value)) == some "session-live" }
+    , { name := "sweeping leaves the audit log and consent records where they are (AUTH-4.6.6)"
+        passed := sweptAudit.length == 1 && sweptConsent.length == 1 }
     , { name := "deleting a tenant removes its accounts (AUTH-4.2.5)"
         passed := doomedAccount.isNone }
     , { name := "deleting a tenant removes its attempts"
