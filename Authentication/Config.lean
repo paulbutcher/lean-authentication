@@ -19,7 +19,12 @@ structure Url where
 
 /-- Held per tenant so that every emitted URL is built from it rather than from a global
 constant. In this version every tenant resolves to the same origin, which is what makes a
-per-tenant hostname later a configuration change rather than a rewrite (AUTH-4.3.4). -/
+per-tenant hostname later a configuration change rather than a rewrite (AUTH-4.3.4).
+
+`origin` may be written with or without a trailing slash; both name the same place, and
+platforms publish it both ways, so neither is an error and neither reaches a built URL
+(AUTH-4.3.5). A path prefix below the origin, `https://example.com/app`, is kept: only
+slashes at the end are removed. -/
 structure BaseUrl where
   origin : String
   deriving DecidableEq, Repr, Inhabited
@@ -31,8 +36,23 @@ match redirect URIs exactly and a hostname per tenant would need a registration 
 (AUTH-4.3.2). -/
 def tenantPath (tenant : TenantId) : String := "/t/" ++ tenant.value
 
+def trimTrailingSlashes (origin : String) : String :=
+  String.ofList (origin.toList.reverse.dropWhile (· == '/')).reverse
+
+/-- Normalises on the way in, for a client holding an origin it has just read from its
+environment and would rather store trimmed. Construction by any other route is no less safe:
+`url` trims whatever it is given. -/
+def ofString (origin : String) : BaseUrl := ⟨trimTrailingSlashes origin⟩
+
+/-- The trim is here as well as in `ofString` because `BaseUrl` is an ordinary structure and a
+literal is the ordinary way to write one; an origin that arrives untrimmed still cannot add its
+slash to the one `tenantPath` already begins with.
+
+An origin of nothing but slashes trims away entirely, leaving a URL with no scheme or host.
+That is deliberate: such a configuration is wrong however it is treated, and a relative
+reference in a mailed link fails where it is read rather than resolving somewhere plausible. -/
 def url (base : BaseUrl) (tenant : TenantId) (path : String) : Url :=
-  ⟨base.origin ++ tenantPath tenant ++ path⟩
+  ⟨trimTrailingSlashes base.origin ++ tenantPath tenant ++ path⟩
 
 end BaseUrl
 

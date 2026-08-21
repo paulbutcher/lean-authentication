@@ -154,6 +154,13 @@ The single most important structural requirement:
   redirects) MUST be built from a per-tenant base URL held in configuration, never from a
   global constant. In v1 every tenant's base URL resolves to the same origin. This is what makes
   per-tenant hostnames a configuration change later rather than a rewrite.
+- **AUTH-4.3.5** A base URL MUST be accepted with or without a trailing slash on its origin, and
+  a trailing slash MUST NOT reach a URL built from it. Every path the library appends begins with
+  a slash, so `https://app.example.com/` would otherwise produce an empty leading path segment
+  matching no route, in a magic link already sent. Platforms publish origins both ways, an AWS
+  Lambda function URL among them, so the wrong form is the one a client is invited to copy. Only
+  trailing slashes are removed: an origin carrying a path prefix keeps it. An origin of nothing
+  but slashes becomes empty, and the URL then lacks a scheme and host rather than looking usable.
 
 ### 4.4 Account structure
 
