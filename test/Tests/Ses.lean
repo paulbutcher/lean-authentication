@@ -112,7 +112,7 @@ def checks : List (String × Bool) :=
       occurs "\"FromEmailAddress\"" body && occurs "\"person@example.com\"" body
         && occurs "\"Text\"" body && occurs "\"Html\"" body),
     ("ses: a subject containing a quote does not break the payload",
-      (Lean.Json.parse body).toOption.isSome),
+      (Json.parse body).toOption.isSome),
     ("ses: the configuration set is named, without which no event carries the tag back",
       occurs "\"ConfigurationSetName\":\"auth-events\"" body),
     -- SES accepts only letters, digits, hyphen and underscore in a tag value, and rejects the

@@ -10,7 +10,7 @@ public import Codec.Base64
 public import Codec.Base64Url
 public import Crypto.Rsa
 public import Der
-import Lean.Data.Json
+import Json
 
 /-!
 SES bounce and complaint notifications (AUTH-12.1, AUTH-12.1.1).
@@ -38,8 +38,6 @@ same subscription, and an endpoint that fails on them is one SNS eventually stop
 public section
 
 namespace Authentication.Ses
-
-open Lean (Json)
 
 private def field (payload : Json) (name : String) : Option Json :=
   (payload.getObjVal? name).toOption

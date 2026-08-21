@@ -100,7 +100,7 @@ def checks : IO (List (String × Bool)) := do
       ("postmark: both body parts are sent",
         occurs "\"TextBody\"" body && occurs "\"HtmlBody\"" body),
       ("postmark: a subject containing a quote does not break the payload",
-        (Lean.Json.parse body).toOption.isSome
+        (Json.parse body).toOption.isSome
           && !occurs "\"Subject\":\"Sign in to \"Acme\"\"" body),
       ("postmark: an accepted send yields the provider's message id",
         sentIdOf sent == some "24c0bc72-4982-481e-9cdd-168f84e68fee"),
@@ -164,7 +164,7 @@ def flowChecks : IO (List (String × Bool)) := do
   let request := (← recorded.get).getD { url := "" }
   let body := bodyText request
   let metadataValue :=
-    (((Lean.Json.parse body).toOption.bind fun payload =>
+    (((Json.parse body).toOption.bind fun payload =>
       (payload.getObjVal? "Metadata").toOption.bind fun metadata =>
         (metadata.getObjVal? "idempotency-key").toOption.bind fun value =>
           value.getStr?.toOption)).getD ""

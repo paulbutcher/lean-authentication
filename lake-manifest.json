@@ -89,7 +89,7 @@
    "name": "json",
    "manifestFile": "lake-manifest.json",
    "inputRev": "v0.1.0",
-   "inherited": true,
+   "inherited": false,
    "configFile": "lakefile.lean"}],
  "name": "authentication",
  "lakeDir": ".lake",

@@ -7,7 +7,7 @@ module
 public import Authentication
 import Codec.Base64
 import Crypto.Compare
-import Lean.Data.Json
+import Json
 
 /-!
 Postmark's bounce and spam-complaint webhooks (AUTH-12.1, AUTH-12.1.1).
@@ -25,8 +25,6 @@ sends record types this library has no use for down the same URL.
 public section
 
 namespace Authentication.Postmark
-
-open Lean (Json)
 
 private def stringField (payload : Json) (name : String) : Option String :=
   ((payload.getObjVal? name).toOption).bind fun value => value.getStr?.toOption

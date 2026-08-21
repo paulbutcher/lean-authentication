@@ -12,6 +12,9 @@ package authentication where
     ⟨`relaxedAutoImplicit, false⟩,
     ⟨`warningAsError, true⟩]
 
+require json from git
+  "https://github.com/paulbutcher/lean-json" @ "v0.1.0"
+
 require leansqlite from git
   "https://github.com/leanprover/leansqlite" @ "v4.33.0"
 

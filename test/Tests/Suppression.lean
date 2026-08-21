@@ -59,7 +59,7 @@ private def sesTag (key : String) : String :=
 /-- SES publishes to SNS, which posts an envelope whose `Message` is the payload as a string. -/
 private def wrapped (message : String) : String :=
   "{\"Type\":\"Notification\",\"TopicArn\":\"arn:aws:sns:eu-west-1:1:bounces\"," ++
-  "\"Message\":" ++ (Lean.Json.str message).compress ++ "}"
+  "\"Message\":" ++ (Json.str message).compress ++ "}"
 
 private def sesBounce : String :=
   wrapped ("{\"notificationType\":\"Bounce\",\"bounce\":{\"bounceType\":\"Permanent\"," ++

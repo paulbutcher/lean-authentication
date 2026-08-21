@@ -5,7 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Authentication
-public import Lean.Data.Json
+public import Json
 public import Leancurl
 
 /-!
@@ -22,8 +22,6 @@ network (AUTH-16.5).
 public section
 
 namespace Authentication.Postmark
-
-open Lean (Json)
 
 /--
 Sending must not block a response beyond a short bounded timeout, so the timeout is part of the

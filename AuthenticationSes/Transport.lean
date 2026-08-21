@@ -6,7 +6,7 @@ module
 
 public import Authentication
 public import Aws.Sigv4
-public import Lean.Data.Json
+public import Json
 public import Leancurl
 
 /-!
@@ -23,8 +23,6 @@ network (AUTH-16.5).
 public section
 
 namespace Authentication.Ses
-
-open Lean (Json)
 
 /--
 Sending must not block a response beyond a short bounded timeout, so the timeout is part of the
