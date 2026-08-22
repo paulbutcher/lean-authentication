@@ -54,6 +54,15 @@ reference in a mailed link fails where it is read rather than resolving somewher
 def url (base : BaseUrl) (tenant : TenantId) (path : String) : Url :=
   ⟨trimTrailingSlashes base.origin ++ tenantPath tenant ++ path⟩
 
+/-- Whether cookies issued for this origin can carry `Secure`. A browser is entitled to discard
+a `Secure` cookie that arrived over `http`, and Safari does, so on an `http` origin the flag
+costs the cookie rather than protecting it. Every other scheme keeps it, which is every
+deployment.
+
+Schemes are case-insensitive, so the comparison is too. -/
+def secureCookies (base : BaseUrl) : Bool :=
+  !("http://".toList.isPrefixOf (base.origin.toList.map Char.toLower))
+
 end BaseUrl
 
 /-- Resolved per tenant from the first version, even though every tenant initially points at
@@ -87,14 +96,15 @@ namespace CookieSpec
 `Lax` is required rather than an oversight: the cookie has to survive a top-level navigation
 arriving from a mail client, and `Strict` would make every same-device click look cross-device
 (AUTH-5.2.4). The attributes are fixed here rather than passed in, so no caller can weaken
-them.
+them; `secure` is derived from the origin rather than supplied, for the same reason.
 -/
-def forAttempt (tenant : TenantId) (value : String) (expiresAt : Timestamp) : CookieSpec :=
+def forAttempt (base : BaseUrl) (tenant : TenantId) (value : String) (expiresAt : Timestamp) :
+    CookieSpec :=
   { name := "auth_attempt"
     value
     path := BaseUrl.tenantPath tenant
     expiresAt
-    secure := true
+    secure := base.secureCookies
     httpOnly := true
     sameSite := .lax }
 
@@ -102,12 +112,13 @@ def forAttempt (tenant : TenantId) (value : String) (expiresAt : Timestamp) : Co
 caller can weaken them because no caller supplies them. The path is supplied, because an
 application mounted outside the tenant's path is never offered a cookie confined to it; what
 choosing it costs is set out at `TenantConfig.sessionCookiePath`. -/
-def forSession (path : String) (value : String) (expiresAt : Timestamp) : CookieSpec :=
+def forSession (base : BaseUrl) (path : String) (value : String) (expiresAt : Timestamp) :
+    CookieSpec :=
   { name := "auth_session"
     value
     path
     expiresAt
-    secure := true
+    secure := base.secureCookies
     httpOnly := true
     sameSite := .lax }
 

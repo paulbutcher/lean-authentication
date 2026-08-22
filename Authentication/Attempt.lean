@@ -146,7 +146,8 @@ def begin {tenant : TenantId} (config : TenantConfig tenant) (now : Timestamp)
   (state,
     [ .audit ⟨now, .anonymous, .attemptCreated attempt⟩,
       .setAttemptCookie
-        (CookieSpec.forAttempt tenant (cookieValue attempt secrets.bindingNonce.value) expiresAt),
+        (CookieSpec.forAttempt config.baseUrl tenant
+          (cookieValue attempt secrets.bindingNonce.value) expiresAt),
       .sendSignInEmail
         { attempt
           recipient := address

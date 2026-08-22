@@ -111,11 +111,15 @@ private def setCookie (now : Timestamp) (spec : CookieSpec) : Header.Value :=
             | .strict => .strict
             | .none => .none) } }).2
 
-private def clearCookie (name : String) (path : String) : Header.Value :=
+private def clearCookie (base : BaseUrl) (name : String) (path : String) : Header.Value :=
   (Middleware.SetCookie.serialize
     { name
       value := ""
-      attrs := { path := some path, maxAge := some 0, httpOnly := true, secure := true } }).2
+      attrs :=
+        { path := some path
+          maxAge := some 0
+          httpOnly := true
+          secure := base.secureCookies } }).2
 
 /--
 Every response these routes produce, so that the header set does not vary with the outcome and
@@ -234,7 +238,7 @@ private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : Str
           | .ok attempt, .ok nonce =>
             Codec.Base64Url.encodeString attempt ++ ":" ++ Codec.Base64Url.encodeString nonce
           | _, _ => ":"
-        pure (CookieSpec.forAttempt tenant value
+        pure (CookieSpec.forAttempt tenantConfig.baseUrl tenant value
           (now.advance tenantConfig.attemptLifetime.duration)) : IO _)
     let token := (cookieParts (tenant := tenant) cookie.value).map fun parts =>
       formToken config.ports.peppers parts.2
@@ -280,7 +284,7 @@ private def settled (config : Config) (tenant : TenantId) (tenantConfig : Tenant
   | some _ =>
     finish .seeOther ""
       (outcome.setCookies.map (setCookie now)
-        ++ outcome.clearCookies.map fun (name, path) => clearCookie name path)
+        ++ outcome.clearCookies.map fun (name, path) => clearCookie tenantConfig.baseUrl name path)
       (some (tenantConfig.returnTo returnTo))
   | none =>
     match outcome.refused with

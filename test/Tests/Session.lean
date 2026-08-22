@@ -229,6 +229,22 @@ def cookiePathChecks : IO (List (String × Bool)) := do
       ("session: a widened cookie identifies nobody at another tenant (AUTH-4.3.3)",
         own.isSome && elsewhere.isNone) ]
 
+/-- That the cookies follow the origin is a theorem in `Tests.Config`; what is driven here is
+that the origin reaches them, from two different builders through two different layers. -/
+def insecureOriginChecks : IO (List (String × Bool)) := do
+  clockRef.set ⟨1700000000⟩
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+  let development : TenantConfig tenant := { config with baseUrl := ⟨"http://localhost:8080"⟩ }
+  let (begun, _) ← begin ports development (address "person@example.com") {}
+  let signedIn ← signIn ports development "person@example.com"
+
+  pure
+    [ ("session: an http origin issues the attempt cookie without Secure",
+        ((cookieNamed begun "auth_attempt").map (·.secure)) == some false),
+      ("session: an http origin issues the session cookie without Secure",
+        ((cookieNamed signedIn "auth_session").map (·.secure)) == some false) ]
+
 /-- The idle timeout has to slide to be an idle timeout, and has to stop sliding at the absolute
 lifetime to be bounded. Both are worth driving through the store, because both are the kind of
 thing an implementation can get right in the pure layer and drop on the way to a column. -/
