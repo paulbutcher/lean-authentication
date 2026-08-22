@@ -16,18 +16,61 @@ environment variables apply.
 -/
 
 namespace Tests.Postgres
-open Authentication
+open Authentication Authentication.Sql
 
 def conninfo : IO String := do
   pure ((← IO.getEnv "AUTHENTICATION_POSTGRES").getD
     "dbname=leanauthentication user=leanauthentication")
 
-def conformanceChecks : IO (List (String × Bool)) := do
+private def reported (label : String) (run : IO (List Store.Conformance.Check)) :
+    IO (List (String × Bool)) := do
+  match ← run.toBaseIO with
+  | .ok results => pure (results.map fun check => (s!"{label}: {check.name}", check.passed))
+  | .error e => pure [(s!"{label}: the reference backend was reachable ({e})", false)]
+
+def conformanceChecks : IO (List (String × Bool)) :=
+  reported "postgres" do
+    let connection ← Authentication.Postgres.connect (← conninfo)
+    Authentication.Postgres.createSchema connection
+    Store.Conformance.run (Authentication.Postgres.store connection) "postgres"
+
+/-- The same suite over a pool, which reaches the other driver adapter without restating a single
+one of the guarantees it checks. -/
+def poolConformanceChecks : IO (List (String × Bool)) :=
+  reported "postgres pool" do
+    let pool ← _root_.Postgres.Pool.create (← conninfo) 2
+    pool.withConn (_root_.Postgres.execScript · Authentication.Postgres.createSchemaSql)
+    Store.Conformance.run
+      (sqlAuthStore Authentication.Postgres.dialect (Authentication.Postgres.poolConnection pool))
+      "postgres-pool"
+
+private def backendPid (conn : SqlConnection IO) : IO String := do
+  let rows ← conn.query conn.handle "SELECT pg_backend_pid()" #[]
+  pure ((rows[0]?).map (·.text 0) |>.getD "")
+
+/--
+Which connection a pooled statement lands on, which the conformance suite cannot see: every
+guarantee it checks holds whether or not a transaction was spread over several connections.
+
+The pool holds two, so a statement issued while a transaction has one of them can be answered by
+the other rather than waiting for the transaction to end. That second connection is what makes
+the check meaningful: a `runTransaction` that returned its borrow before running the block would
+still see one pid throughout, because the pool hands back the connection most recently returned.
+-/
+def poolTransactionChecks : IO (List (String × Bool)) := do
   match ← (do
-      let connection ← Authentication.Postgres.connect (← conninfo)
-      Authentication.Postgres.createSchema connection
-      Store.Conformance.run (Authentication.Postgres.store connection) "postgres").toBaseIO with
-  | .ok results => pure (results.map fun check => (s!"postgres: {check.name}", check.passed))
-  | .error e => pure [(s!"postgres: the reference backend was reachable ({e})", false)]
+      let pool ← _root_.Postgres.Pool.create (← conninfo) 2
+      let conn := Authentication.Postgres.poolConnection pool
+      conn.transaction fun inTransaction => do
+        let first ← backendPid inTransaction
+        let second ← backendPid inTransaction
+        pure (first, second, ← backendPid conn)).toBaseIO with
+  | .ok (first, second, elsewhere) =>
+    pure
+      [ ("postgres pool: every statement inside a transaction runs on one connection",
+          first != "" && first == second),
+        ("postgres pool: a statement given no connection borrows one of its own",
+          elsewhere != "" && elsewhere != first) ]
+  | .error e => pure [(s!"postgres pool: the transaction ran ({e})", false)]
 
 end Tests.Postgres

@@ -64,11 +64,27 @@ private def readRow (stmt : Postgres.Stmt) (columns : Nat) : IO SqlRow := do
       else do pure (.text (← stmt.columnText position))
   pure row
 
-private def prepared (c : Connection) (text : String) (params : Array SqlValue) :
+private def prepared (conn : Postgres.Conn) (text : String) (params : Array SqlValue) :
     IO Postgres.Stmt := do
-  let stmt ← Postgres.prepare c.conn text
+  let stmt ← Postgres.prepare conn text
   bind stmt params
   pure stmt
+
+private def runQuery (conn : Postgres.Conn) (text : String) (params : Array SqlValue) :
+    IO (Array SqlRow) := do
+  let stmt ← prepared conn text params
+  let mut rows : Array SqlRow := #[]
+  let mut columns := 0
+  while ← stmt.step do
+    if rows.isEmpty then
+      columns ← stmt.columnCount
+    rows := rows.push (← readRow stmt columns)
+  pure rows
+
+private def runExec (conn : Postgres.Conn) (text : String) (params : Array SqlValue) : IO Nat := do
+  let stmt ← prepared conn text params
+  discard stmt.step
+  pure ((← stmt.commandTuples).getD 0).toNatClampNeg
 
 /-- An operation reached from inside `runInTx` joins the transaction already open, which is what
 the SQLite backend does too, so a client sees one behaviour from both. -/
@@ -87,22 +103,43 @@ private def withTransaction {α : Type} (c : Connection) (action : IO α) : IO �
 
 def connection (c : Connection) : SqlConnection IO where
   handle := c
-  query c text params := do
-    let stmt ← prepared c text params
-    let mut rows : Array SqlRow := #[]
-    let mut columns := 0
-    while ← stmt.step do
-      if rows.isEmpty then
-        columns ← stmt.columnCount
-      rows := rows.push (← readRow stmt columns)
-    pure rows
-  exec c text params := do
-    let stmt ← prepared c text params
-    discard stmt.step
-    pure ((← stmt.commandTuples).getD 0).toNatClampNeg
+  query c text params := runQuery c.conn text params
+  exec c text params := runExec c.conn text params
   -- There is one connection and its depth is tracked on it, so the block is handed the one the
   -- `BEGIN` ran on, which is the one it was already going to use.
   runTransaction c action := withTransaction c (action c)
+
+/-- Runs `action` on the handle's connection if it has one, and on a connection borrowed for the
+length of `action` if it does not. -/
+private def borrowing {α : Type} (pool : Postgres.Pool) (handle : Option Postgres.Conn)
+    (action : Postgres.Conn → IO α) : IO α :=
+  match handle with
+  | some conn => action conn
+  | none => pool.withConn action
+
+/--
+The same adapter over a pool, for a client that already keeps one and would rather authentication
+drew from it than held a connection of its own.
+
+The handle is the connection a statement has been given, and `none` is a statement that has not
+been given one: it borrows for its own duration and returns what it borrowed. `runTransaction`
+borrows once and holds it, so the `BEGIN`, the statements between and the `COMMIT` all reach the
+one connection; a transaction reached from inside another joins it rather than nesting, as
+`connection` does.
+
+Borrowing blocks the calling thread until the pool has a connection free, because the ports this
+library is written against are `IO` and there is no `Async` here to suspend on instead. A caller
+on a fiber-scheduled server therefore gives up the thread it shares with every other request in
+flight for as long as the borrow lasts, which for a transaction is the whole of it.
+-/
+def poolConnection (pool : Postgres.Pool) : SqlConnection IO where
+  handle := (none : Option Postgres.Conn)
+  query handle text params := borrowing pool handle (runQuery · text params)
+  exec handle text params := borrowing pool handle (runExec · text params)
+  runTransaction handle action :=
+    match handle with
+    | some conn => action (some conn)
+    | none => pool.withConn fun conn => _root_.Postgres.transaction conn (action (some conn))
 
 /-- The port, wired to one connection. -/
 def store (c : Connection) : AuthStore IO := sqlAuthStore dialect (connection c)
