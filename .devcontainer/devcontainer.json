@@ -12,7 +12,10 @@
     "PGHOST": "host.docker.internal"
   },
 
-  "postCreateCommand": "claude mcp add lean-lsp uvx lean-lsp-mcp --scope user",
+  "postCreateCommand": {
+    "safeDirectory": "git config --global --add safe.directory ${containerWorkspaceFolder}"
+  },
+
 
 	"customizations": {
 		"vscode": {
