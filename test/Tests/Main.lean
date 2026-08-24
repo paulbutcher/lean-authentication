@@ -31,6 +31,8 @@ def main : IO UInt32 := do
     ++ (← Tests.Webhooks.postmarkChecks)
     ++ (← Tests.Ses.flowChecks) ++ (← Tests.Postgres.conformanceChecks)
     ++ (← Tests.Postgres.poolConformanceChecks) ++ (← Tests.Postgres.poolTransactionChecks)
+    ++ Tests.OAuth.pkceChecks ++ (← Tests.OAuth.sqliteChecks)
+    ++ (← Tests.OAuth.postgresChecks)
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do
     IO.eprintln s!"FAILED: {name}"

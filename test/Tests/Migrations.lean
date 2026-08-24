@@ -2,13 +2,15 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
+import AuthenticationOAuth
 import AuthenticationSqlite
 
 /-!
 The migrations this package ships for a client to apply (AUTH-15.7.1).
 
-The up files are already exercised everywhere, since `openInMemory` is built from them and the
-whole suite runs against it. The down files are not exercised by anything else, and SQL that
+The core up files are already exercised everywhere, since `openInMemory` is built from them and
+the whole suite runs against it; the authorisation server ships its own pair, applied beside
+them here and by the tests that need it. The down files are not exercised by anything else, and SQL that
 nobody runs is SQL that does not work, so they are run here: applied, undone, and applied again.
 
 Only the SQLite pair is run. The Postgres down drops the schema the conformance suite is using,
@@ -17,6 +19,9 @@ and interleaving that with the rest of the run would trade a real check for a fr
 
 namespace Tests.Migrations
 open Authentication
+
+private def oauthDown : String :=
+  include_str "../../migrations/sqlite/20260824120000_authentication_oauth.down.sql"
 
 private def consentDown : String :=
   include_str "../../migrations/sqlite/20260820120000_authentication_consent.down.sql"
@@ -33,7 +38,7 @@ private def initialDown : String :=
 /-- Newest first, which is the order a rollback undoes them in. Applying them the other way round
 would leave whatever a later migration added. -/
 private def down : String :=
-  consentDown ++ suppressionDown ++ rateCountersDown ++ initialDown
+  oauthDown ++ consentDown ++ suppressionDown ++ rateCountersDown ++ initialDown
 
 private def authTables (db : SQLite) : IO Nat := do
   let stmt ← db.prepare "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name LIKE 'auth%'"
@@ -45,10 +50,12 @@ private def authTables (db : SQLite) : IO Nat := do
 def checks : IO (List (String × Bool)) := do
   let db ← SQLite.openWith ":memory:" .readWriteCreate
   db.exec Sqlite.createSchemaSql
+  db.exec Authentication.OAuth.sqliteSchemaSql
   let created ← authTables db
   db.exec down
   let dropped ← authTables db
   db.exec Sqlite.createSchemaSql
+  db.exec Authentication.OAuth.sqliteSchemaSql
   let recreated ← authTables db
   pure
     [ ("migrations: the up file creates the tables", created > 0),

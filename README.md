@@ -1,8 +1,9 @@
 # lean-authentication
 
-Passwordless authentication for Lean 4 web applications: magic links with a cross-device
+- Passwordless authentication for Lean 4 web applications: magic links with a cross-device
 verification code, per-tenant signup policy, invitations, sessions, bounce handling, and consent
 records.
+- An OAuth 2.1 authorisation server.
 
 The library says who someone is. It holds no roles or permissions and never decides who may call
 an operation.
@@ -13,7 +14,6 @@ an operation.
 [[require]]
 name = "authentication"
 git = "https://github.com/paulbutcher/lean-authentication"
-rev = "v0.2.0"
 ```
 
 Each target is a separate `lean_lib`. Depend only on what you use.
@@ -27,6 +27,7 @@ Each target is a separate `lean_lib`. Depend only on what you use.
 | `AuthenticationPostmark` | Postmark transport and webhook endpoint |
 | `AuthenticationSes` | Amazon SES transport and SNS callback endpoint |
 | `AuthenticationHttp` | Ready-made sign-in routes |
+| `AuthenticationOAuth` | OAuth 2.1 authorisation server, for MCP clients and anything else |
 
 ## The flow
 
@@ -220,6 +221,65 @@ Service.consenting ports ⟨"marketing"⟩ -- the accounts to write to
 Subject and version are your own strings, stored verbatim and never interpreted. The history is
 append only: withdrawing adds an entry rather than editing one.
 
+## Authorisation server
+
+`AuthenticationOAuth` is the other direction from signing in with somebody else's provider: it is
+the provider that somebody else's client gets tokens from. It implements the MCP authorization
+specification of 2026-07-28 and the OAuth 2.1 subset that one selects, which is
+`authorization_code` with PKCE `S256`, refresh tokens rotated on every use, and public clients
+only.
+
+```lean
+open Authentication.OAuth
+
+def oauthPorts : Service.Ports IO :=
+  { store := Sqlite.store db                                  -- sessions, consent, audit
+    oauth := sqlOAuthStore Sqlite.dialect (Sqlite.connection db)
+    documents := yourFetcher                                  -- one HTTPS GET
+    peppers }
+
+def oauthConfig : OAuthConfig tenant :=
+  OAuthConfig.standard ⟨"https://auth.example.com"⟩ [⟨"files:read"⟩, ⟨"files:write"⟩]
+```
+
+`metadataDocument oauthConfig` is the RFC 8414 document to serve at
+`/.well-known/oauth-authorization-server`. Serve the three endpoints yourself and hand the
+decoded parameters over:
+
+```lean
+Service.authorize ports config params sessionCookie   -- Outcome: consent, respond, authenticate, refuse
+Service.conclude  ports config decision               -- what the person said
+Service.token     ports config params                 -- Except ErrorResponse TokenResponse
+Service.register  ports body                          -- RFC 7591, application/json
+```
+
+`authorize` never renders anything. It answers with one of four outcomes: `consent` carries
+everything a consent page must show, including the hosts of the `client_id` and the redirect URI;
+`respond` is a redirect the user agent should follow, success or error; `authenticate` means you
+should run the sign-in flow and ask again; `refuse` means the client could not be established and
+nothing may be sent to it. A grant is recorded as a consent record, so revoking one is
+`Service.revoke` and shows up in `Service.consentHistory` beside everything else the person
+agreed to.
+
+A client identifier is either an `https` URL that resolves to a metadata document the client
+hosts, or one this server issued at `/register`. Both reach the same flow. Documents are cached
+for as long as the response's cache headers allow, and registrations that nobody has used can be
+pruned:
+
+```lean
+Service.pruneClients ports (idle := Duration.days 30)
+```
+
+For a resource server, `Service.verify` is the whole of token validation:
+
+```lean
+Service.verify ports presented ⟨"https://mcp.example.com/mcp"⟩ [⟨"files:write"⟩]
+```
+
+The audience is checked against the `resource` the token was issued for and nothing else, and an
+operation that needs more scope comes back as `insufficientScope`, which `Service.challenge`
+turns into the `WWW-Authenticate` value naming what to ask for.
+
 ## Housekeeping
 
 ```lean
@@ -246,6 +306,10 @@ own database, so `TransactionalStore` can enlist in your transaction.
 `Sqlite.openInMemory` applies the schema; `Sqlite.openFile` and `Postgres.connect` do not.
 `Sqlite.createSchemaSql` and `Postgres.createSchemaSql` are the whole schema as one string, and
 `Postgres.createSchema` applies it.
+
+The authorisation server's tables are separate, so a deployment that does not use it creates
+none of them. They ship as another pair of migrations, and `OAuth.sqliteSchemaSql` and
+`OAuth.postgresSchemaSql` are the same SQL as a string.
 
 Any other backend behind the `AuthStore` port has to pass
 `Authentication.Store.Conformance.run`, which ships with the library.
@@ -286,9 +350,16 @@ The `From` domain needs all of these before mail is delivered rather than filed:
   checked.
 - **`returnTo` is validated** against the tenant's allowlist before any redirect.
 - **The audit log and the consent history are append only.** The port offers no update or delete.
+- **An authorization code is redeemed at most once**, a refresh token rotated at most once, and
+  either presented twice revokes everything its grant issued. Both are theorems about the state
+  and compare-and-set in the store.
+- **A token's audience is the `resource` its request named**, and its scopes are a subset of what
+  was consented to. Both are theorems, and verification refuses a token presented anywhere else.
+- **A redirect URI is compared as a string**, with the port ignored for loopback URIs and for
+  nothing else. That the exception admits no other host is a theorem.
 
 `REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls
-short of it. Federated sign-in over OIDC, inbound email, passkeys and SAML are not implemented.
+short of it. Federated sign-in over OIDC, inbound email, passkeys and SAML are not implemented, and the authorisation server issues no ID tokens.
 
 ## Building
 

@@ -165,6 +165,11 @@ consequence of never running it is disk and index size, not a session that shoul
 answering. It is listed here because the failure is silent and slow: nothing degrades until the
 attempts table is large enough for its own index to matter.
 
+The authorisation server has a sweep of its own, `OAuth.Service.purgeExpired`, and the same is
+true of it. So does `OAuth.Service.pruneClients`, and there the growth is faster: some clients
+register once per fresh connection, so the registrations table grows with connections rather than
+with people.
+
 ## Client-initiated sends are not rate limited (AUTH-14.1.1)
 
 The limiter covers beginning a sign-in and submitting a code. Creating and resending an invitation
@@ -176,3 +181,40 @@ knocking on the sign-in page. It stops being true the moment a client exposes re
 unauthenticated route, which is the failure worth naming here because nothing in the types will
 prevent it.
 
+
+## The client metadata document fetcher is a port with no implementation (AUTH-20.2.2)
+
+Resolving a `client_id` that is a URL means fetching that URL, and outbound HTTP is not something
+this library does. `ClientDocuments` is the seam and no adapter ships behind it, so a deployment
+that wants client ID metadata documents writes one.
+
+What the adapter owes is not only the request. It must refuse any scheme but `https`, must not
+follow a redirect to a host the identifier check would have refused, must apply a timeout, and
+must report the body's size and whatever freshness the response's cache headers allowed
+(AUTH-20.2.3, AUTH-20.2.4). The identifier check above the seam refuses literal private and
+loopback addresses, and that is a floor rather than a substitute: a name that resolves to one
+passes it, and only the adapter is in a position to notice.
+
+A deployment that supplies no adapter is not broken. Dynamic registration still works, and every
+metadata document client is refused with `invalid_client`.
+
+## The authorisation server records no audit events of its own (AUTH-20.17.10)
+
+Granting and withdrawing a grant are consent records, so they reach the audit log through §4.6
+exactly as any other consent does. Nothing else does: which client redeemed which code, when a
+token was issued, and when a replayed refresh token revoked a grant are not in the log.
+
+The reason is where `AuditEvent` lives. It is a closed inductive in the core target, and every
+case of it is decoded by `auditColumns` in the shared SQL store, which a consumer taking only
+magic links links today. Naming the authorisation server's events there is a change to the core
+library rather than to this target, and AUTH-20.18.1 records it as a decision rather than making
+it quietly.
+
+## The authorisation server's endpoints are not rate limited (AUTH-20.18.2)
+
+The limiter of §15.6 covers beginning a sign-in and submitting a code. Nothing counts
+authorization requests, token requests, or registrations.
+
+Registration is the one worth naming. It is unauthenticated by design, it writes a row, and
+AUTH-20.6.7 bounds what accumulates rather than what arrives; a deployment that exposes it without
+a limiter in front of it has a way to make a server write rows for nothing.

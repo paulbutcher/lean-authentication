@@ -1008,3 +1008,359 @@ Each stage should build, test, and be reviewable on its own.
 9. Consent records (§4.6), which answer §18.7.
 
 Federated sign-in was stage 6 and is deferred; see §6.
+
+---
+
+## 20. Authorisation server (OAuth 2.1)
+
+The other direction from §6. That section is about signing in with somebody else's provider;
+this is about being the provider somebody else's client gets tokens from. They share vocabulary
+and almost no code, which is why this is a section of its own rather than an extension of that
+one.
+
+The client it is written for is an MCP client, and the specification it follows is the MCP
+authorization specification of 2026-07-28 together with the documents that one normatively
+references: the OAuth 2.1 draft, RFC 8414, RFC 8707, RFC 9207, RFC 7591, RFC 8252, and
+`draft-ietf-oauth-client-id-metadata-document-00`. Where this section and one of those disagree,
+the specification wins and this section is wrong; §20.17 lists the places where the disagreement
+is deliberate.
+
+It lives in this repository rather than one of its own because it needs `AccountId`, `Session`,
+`AuthStore` and the consent model directly, and because OpenID Connect is coming: a port over
+those types would thicken into a worse copy of the same API the moment an ID token has to name
+the account that a session identified.
+
+### 20.1 The role and the shape
+
+- **AUTH-20.1.1** The target is `AuthenticationOAuth`, a `lean_lib` in this package beside
+  `AuthenticationHttp` and `AuthenticationSql`. It is not a new package and not a new repository.
+- **AUTH-20.1.2** Its dependencies MUST stay scoped to it, as AUTH-2.3 requires of the HTTP
+  target, so that a consumer taking only the magic link flow links none of it. It adds no
+  `require` to the package: percent-encoding comes from `Std.Http`, which the toolchain ships.
+- **AUTH-20.1.3** Every decision about whether a code may be spent, what a token may carry and
+  where a response may be sent MUST be a pure function. `Service` mints credentials, reads and
+  writes through the stores, and performs the one fetch the protocol needs; it decides nothing
+  else. This is AUTH-3.1 applied to a second protocol.
+- **AUTH-20.1.4** Nothing is `partial`, nothing may panic, and nothing is left `sorry`.
+  `autoImplicit` and `relaxedAutoImplicit` are off and `warningAsError` is on, as everywhere
+  else in this package.
+
+### 20.2 Layering and the one new port
+
+- **AUTH-20.2.1** `Clock` and `RandomBytes` are reused from `Authentication.Port.Clock`. No new
+  port is added for either.
+- **AUTH-20.2.2** The only new port is `ClientDocuments.fetch : String → m (Except String
+  FetchedDocument)`, which fetches a client's metadata document. The protocol core MUST perform
+  no I/O of its own.
+- **AUTH-20.2.3** The fetch result MUST carry more than the document. Caching is required to
+  respect the response's HTTP cache headers, which do not survive being parsed into JSON, and
+  the recommended size limit is on the bytes received; both therefore cross the seam as data and
+  are enforced where the document is validated. An adapter that reported neither would leave two
+  requirements unenforceable above the seam.
+- **AUTH-20.2.4** An adapter MUST refuse any scheme but `https`, MUST NOT follow a redirect to a
+  host the identifier check would have refused, and MUST apply a timeout. The request is made on
+  a caller's say-so and what it spends is this server's own network position.
+
+### 20.3 Configuration and the issuer
+
+- **AUTH-20.3.1** Configuration is per tenant, like `TenantConfig`. The issuer identifier is per
+  tenant because tenants are distinguished by a path prefix on one origin (AUTH-4.3.2), and
+  RFC 8414 §3 inserts the well-known suffix ahead of an issuer's path, so a tenant's metadata
+  document is reachable without a hostname of its own.
+- **AUTH-20.3.2** The issuer MUST be an `https` URL with no query and no fragment (RFC 8414 §2,
+  RFC 9207 §2). It is configured once and every `iss` parameter and metadata document is built
+  from that one value, so the string comparison a client performs cannot fail on a rebuild.
+- **AUTH-20.3.3** Every lifetime has a defensible default. An authorization code lives at most
+  ten minutes (OAuth 2.1 §4.1.3), and access tokens are short because a leaked one is usable
+  until it expires.
+
+### 20.4 The authorization endpoint
+
+- **AUTH-20.4.1** The authorization request arrives as decoded name and value pairs, and the
+  token request as the same. The registration request is JSON and is read by a different
+  function. A parser that accepted either would accept a form-encoded registration and a JSON
+  token request, and neither is something this server has agreed to read.
+- **AUTH-20.4.2** A parameter given more than once MUST be refused (OAuth 2.1 §4.1.1).
+- **AUTH-20.4.3** The request MUST be read in two stages. Until the client and its redirect URI
+  are established, an error cannot be reported to the client at all, because reporting it means
+  redirecting to a URI this server has not established the client owns (OAuth 2.1 §4.1.2.1).
+  Once they are established, every remaining error goes to that URI.
+- **AUTH-20.4.4** The consent page is not this library's. `authorize` returns everything the page
+  must show and `conclude` takes back what the person said. The library does not authenticate
+  anybody either: the caller passes whatever session credential the browser presented, and §5 is
+  what put it there.
+- **AUTH-20.4.5** A request whose scopes are already covered by a standing consent, and which did
+  not ask for a fresh decision, MUST be granted without asking again. A person re-prompted for
+  what they have already agreed to stops reading the page.
+- **AUTH-20.4.6** The decision the host hands back MUST be narrowed to what the request asked
+  for, so that a host cannot record a consent to more than the page displayed.
+
+### 20.5 PKCE
+
+- **AUTH-20.5.1** `S256` only. `plain` is the default `code_challenge_method` in OAuth 2.1 and
+  MUST NOT be implemented here: a challenge that is its own verifier protects against nothing an
+  attacker who saw the request cannot do.
+- **AUTH-20.5.2** `code_challenge_method` is therefore required rather than defaulted. A request
+  that omits it is one whose author believes it is protected and is not.
+- **AUTH-20.5.3** The verifier MUST be 43 to 128 characters from the unreserved set
+  (OAuth 2.1 §7.5.2).
+- **AUTH-20.5.4** The comparison MUST be free of a data-dependent early exit, for the reason
+  AUTH-5.3.4 gives about credentials generally: an early exit reports how long a correct prefix a
+  guess had.
+
+### 20.6 Client registration
+
+Real deployments need both mechanisms. Client ID metadata documents are the newest of the three
+and unevenly implemented; dynamic registration is deprecated and retained for at least twelve
+months. A client that has only the second has no other way to obtain an identifier.
+
+- **AUTH-20.6.1** Both mechanisms MUST reach one flow. Resolution produces a client, and
+  everything downstream of it, redirect matching, the consent page, the code and the tokens, sees
+  a client and not a mechanism.
+- **AUTH-20.6.2** A `client_id` that is a URL is a metadata document identifier. It MUST use the
+  `https` scheme, contain a path component, and carry no fragment, no user information and no
+  dot segments (client ID metadata document draft §3).
+- **AUTH-20.6.3** The fetched document's `client_id` MUST equal the URL exactly. Without that
+  check any client could name any document and be taken for whoever published it.
+- **AUTH-20.6.4** A URL-shaped identifier that is not a usable metadata document URL MUST be
+  refused rather than looked for among the dynamic registrations. Otherwise whoever can register
+  dynamically chooses what a URL-shaped identifier means.
+- **AUTH-20.6.5** The registration endpoint takes `application/json` (RFC 7591 §3.1) and answers
+  `201` with every field that was registered. It issues no `client_secret`: every client here is
+  public and authenticates with `none`, and a secret nobody can use is a secret that leaks for
+  nothing.
+- **AUTH-20.6.6** A metadata document MUST NOT declare a `token_endpoint_auth_method` based on a
+  shared symmetric secret (draft §6.2). This server supports only `none`, so `private_key_jwt` is
+  refused as well until §6's JWKS machinery arrives.
+- **AUTH-20.6.7** Dynamic registrations accumulate, one per fresh connection from some clients,
+  and nothing in the protocol bounds how many. The store MUST record when a registration was last
+  used and MUST offer a way to prune the ones nobody has used since a given moment.
+- **AUTH-20.6.8** A document MUST NOT be fetched from a private or loopback address (draft §6.5),
+  and a response above the recommended five kilobytes (draft §6.6) MUST be refused.
+- **AUTH-20.6.9** Neither a failed fetch nor a malformed document may be cached (draft §5). A
+  client that publishes a broken document and fixes it must not be refused until an entry
+  expires.
+- **AUTH-20.6.10** The consent page MUST be given the host of the `client_id` URL beside the name
+  the client gave itself (draft §6.4), MUST be given the redirect URI's host, and MUST be told
+  when every registered redirect URI is a loopback one: no document can establish who is
+  listening on a port of the person's own machine.
+
+### 20.7 Redirect URIs
+
+- **AUTH-20.7.1** A redirect URI MUST be compared by simple string comparison against those the
+  client registered (RFC 3986 §6.2.1, OAuth 2.1 §4.1.1).
+- **AUTH-20.7.2** The one exception is RFC 8252 §7.3: for a loopback redirect the port MUST be
+  ignored, because a native client binds an ephemeral one at the moment it asks and without this
+  it cannot connect at all. Everything else about the two URIs still has to be equal.
+- **AUTH-20.7.3** The port-agnostic comparison MUST admit no host that is not a loopback address.
+  This is a theorem, not a test.
+- **AUTH-20.7.4** Every registered redirect URI MUST be `https` or a loopback `http`, and none
+  may carry a fragment.
+
+### 20.8 Resource indicators
+
+- **AUTH-20.8.1** `resource` (RFC 8707) is required on both the authorization request and the
+  token request.
+- **AUTH-20.8.2** It MUST be an absolute URI with an authority and no fragment. The scheme and
+  the authority are folded to lower case, which is the robustness the MCP specification asks for;
+  nothing after the authority is touched, because a path is case sensitive and a resource server
+  that distinguishes two of them is entitled to.
+- **AUTH-20.8.3** A token's audience is the `resource` its request named. That it is, at every
+  step between the request and the token, is a theorem.
+- **AUTH-20.8.4** Verification MUST reject a token presented to any other audience. A server that
+  accepts a token issued for somewhere else is the confused deputy of every client that talks to
+  it.
+- **AUTH-20.8.5** A missing, repeated or malformed `resource` is `invalid_target` (RFC 8707 §2).
+
+### 20.9 Scopes
+
+- **AUTH-20.9.1** Scopes are opaque strings the host chooses. Nothing here interprets one and
+  nothing here has a list of the ones that exist: what a scope permits is the resource server's
+  question.
+- **AUTH-20.9.2** Only what was consented to may be issued. That the issued set is a subset of
+  the consented set is a theorem.
+- **AUTH-20.9.3** A rejection for insufficient scope MUST name every scope the operation needs,
+  in one challenge (RFC 6750 §3.1). Naming them one at a time costs a round trip through the
+  browser for each.
+- **AUTH-20.9.4** `scopes_supported` is the minimal set for basic functionality. A resource
+  server naming more in a challenge is expected rather than an error, so an authorization request
+  is not refused for asking for a scope the metadata document does not list.
+
+### 20.10 Codes and tokens
+
+- **AUTH-20.10.1** `authorization_code` with PKCE, and refresh tokens. No implicit, no hybrid, no
+  password, no `client_credentials`.
+- **AUTH-20.10.2** An authorization code is single use and short lived. That a redeemed code
+  cannot be redeemed again is a theorem about the state, and the store's compare-and-set is
+  conditioned on the stamp that decision writes, so what holds of the state holds of two
+  concurrent requests.
+- **AUTH-20.10.3** A code is bound to its client, its redirect URI, its `code_challenge`, its
+  `resource` and the scopes that were consented to, and to nothing the token request gets to
+  choose.
+- **AUTH-20.10.4** Refresh tokens are rotated on every use, which OAuth 2.1 §4.3.1 requires for a
+  public client and every client here is one. A rotated token that is presented again is
+  `invalid_grant`, and it revokes everything issued under its grant: two holders of one refresh
+  token means one of them is not the client.
+- **AUTH-20.10.5** A replayed authorization code does the same (OAuth 2.1 §4.1.3). So does a code
+  presented with a binding that does not match, which is spent rather than merely refused, so
+  that a stolen code cannot be retried against one guess after another.
+- **AUTH-20.10.6** Tokens are stored digested under the pepper ring, never in the clear, exactly
+  as credentials already are (AUTH-5.3.4). A lookup tries every pepper still inside its overlap
+  window, so a rotation does not invalidate every outstanding token (AUTH-15.7.2).
+- **AUTH-20.10.7** A redeemed code and a rotated refresh token are kept until they expire. The
+  record of a spent credential is the only thing that can tell a replay from an unknown token.
+
+### 20.11 Errors
+
+- **AUTH-20.11.1** One error type serves all three shapes a rejection reaches a client in: query
+  parameters on a redirect, a JSON body, and `WWW-Authenticate` parameters. Deciding the code in
+  one place is what keeps the three agreeing.
+- **AUTH-20.11.2** An `error_description` MUST never contain anything the caller sent. A
+  description is copied into a redirect and shown to a person, and one that echoed a parameter
+  would be a channel from whoever crafted the request to whoever is reading the page.
+- **AUTH-20.11.3** Every authorization response carries `iss`, error responses included
+  (RFC 9207 §2), and the metadata document advertises that it does.
+
+### 20.12 Metadata
+
+- **AUTH-20.12.1** The RFC 8414 document MUST carry at least `issuer`,
+  `authorization_endpoint`, `token_endpoint`, `registration_endpoint`, `scopes_supported`,
+  `response_types_supported`, `code_challenge_methods_supported`,
+  `token_endpoint_auth_methods_supported`, `client_id_metadata_document_supported` and
+  `authorization_response_iss_parameter_supported`.
+- **AUTH-20.12.2** `code_challenge_methods_supported` MUST always be `["S256"]`, whatever the
+  configuration. A client that does not find the field must refuse to proceed, so it is the field
+  that decides whether this server is usable at all. That it is always there is a theorem.
+- **AUTH-20.12.3** `token_endpoint_auth_methods_supported` MUST always contain `"none"`, and
+  `client_id_metadata_document_supported` MUST be `true`: a client selects metadata documents only
+  when both are present, and falls back to dynamic registration otherwise.
+- **AUTH-20.12.4** Serving the document is the caller's. It belongs at
+  `/.well-known/oauth-authorization-server` with the issuer's path inserted after the suffix, and
+  where a route lives is not this library's business.
+
+### 20.13 Room for OpenID Connect
+
+Out of the first version, and deliberately not designed out. No ID tokens, no JWKS, no userinfo,
+no `openid` scope.
+
+- **AUTH-20.13.1** `prompt` and `max_age` MUST be read and acted on now, to the extent the OAuth
+  subset allows. The alternative is discovering at the point of adding OpenID Connect that every
+  caller assumed a session is only ever read.
+- **AUTH-20.13.2** The authorization outcome MUST be able to say that the person has to
+  authenticate again, rather than only that they are or are not signed in.
+- **AUTH-20.13.3** `login_required`, `consent_required` and `interaction_required` exist as codes
+  from the start, so that the path which will use them is already spelled.
+
+### 20.14 Consent is the grant
+
+- **AUTH-20.14.1** A grant MUST be recorded through `recordConsent` and read through
+  `consentHistory`. What an authorisation server calls a grant, §4.6 already had: a thing a person
+  agreed to, the version of it they were shown, when they said so, and an append-only history in
+  which a withdrawal is another entry rather than an edit.
+- **AUTH-20.14.2** The subject names the client and the resource, so one person's decisions about
+  two clients, or about one client and two resources, are separate answers. The version carries
+  the scopes agreed to, which is what §4.6 already means by it: the client's own words, stored
+  verbatim and read by nobody except the client that wrote them.
+- **AUTH-20.14.3** Revoking a grant is `withdrawConsent`, and it revokes everything issued under
+  the grant in the same call. A consent nobody has and a token that still works is the worst of
+  both.
+
+### 20.15 Storage
+
+- **AUTH-20.15.1** New storage goes in an `OAuthStore` in the shape of `AuthStore`: it speaks
+  codes, tokens and clients rather than SQL, every operation takes the tenant, and every
+  identifier it accepts carries the tenant in its type (AUTH-4.2.4).
+- **AUTH-20.15.2** Two of its operations are compare-and-set. A backend that implements either as
+  a read followed by a write typechecks and issues two tokens for one authorization code.
+- **AUTH-20.15.3** There is one implementation for every SQL backend, with dialect-based
+  statements in the style of `sqlAuthStore`, and migrations for both Postgres and SQLite
+  (AUTH-15.8.2). Two independent implementations would be two independent chances to write a
+  conditional update wrong.
+- **AUTH-20.15.4** The schema is separate from the core library's rather than folded into it, so
+  that a deployment taking only the sign-in flow creates none of these tables. `createSchemaSql`
+  keeps its meaning; the authorisation server ships its own alongside.
+- **AUTH-20.15.5** `OAuthStore.deleteTenant` is the other half of AUTH-4.2.5. A client using both
+  ports calls both.
+
+### 20.16 Out of scope, and testing
+
+Out entirely: the consent page, authenticating the person, HTTP routing, and outbound HTTP. The
+resource server side of RFC 9728, the protected resource metadata document, is the resource
+server's to serve and is not here either; what is here is the verification a resource server
+performs on a token and the challenge it answers with.
+
+- **AUTH-20.16.1** These MUST be theorems rather than tests, for the reason AUTH-16.1 gives:
+  each is a pure total function over decidable structure and each is a security defect rather
+  than a cosmetic one if it is ever false.
+  - An authorization code can be redeemed at most once, and a refresh token rotated at most once.
+  - An issued token's audience is the `resource` its request named.
+  - An issued token's scopes are a subset of those consented to.
+  - The verifier-to-challenge transform is `S256`, and the comparison is exact and free of an
+    early exit.
+  - Loopback port-agnostic matching admits no host that is not a loopback address.
+  - The metadata document always advertises `S256` and always offers `"none"`.
+- **AUTH-20.16.2** Beyond the theorems, the suite MUST cover a full exchange for a metadata
+  document client and for a dynamically registered client, a replayed code, a wrong
+  `code_verifier`, a token presented to the wrong resource, a rotated refresh token, and a
+  loopback redirect on an unregistered port.
+- **AUTH-20.16.3** The driven checks MUST run against both backends, as AUTH-15.8.2 requires of
+  the core store. They run the statements production runs; there is no hand-written fake.
+
+### 20.17 Where this deliberately departs from the specifications
+
+Each of these is a place where this server is stricter than, or differs from, a document it
+otherwise follows. They are written down because a reader who checks the specification and finds
+a difference should find it explained here rather than have to decide whether it was meant.
+
+- **AUTH-20.17.1** `resource` is required. RFC 8707 §2 permits an authorization server to accept
+  a request without one, and puts the MUST on the client. This server refuses such a request with
+  `invalid_target`, which §2 explicitly allows, because every client this is written for is
+  required to send one and a token with no audience is the thing AUTH-20.8.4 exists to prevent.
+- **AUTH-20.17.2** Exactly one `resource` is accepted. RFC 8707 §2 permits several; this server
+  issues a token for one audience, so a request naming two is refused rather than narrowed.
+- **AUTH-20.17.3** `localhost` is admitted as a loopback host. RFC 8252 §8.3 recommends against
+  it, naming only the IP literals in §7.3, but the example metadata document in the MCP client
+  registration page registers one, and a client whose redirect URI cannot be matched cannot
+  connect at all. `127.0.0.1` and `[::1]` are admitted as the RFC names them.
+- **AUTH-20.17.4** `iss` is on every authorization response. The MCP specification says SHOULD
+  and notes that a future revision is expected to make it MUST; RFC 9207 §2 already says MUST for
+  a server that supports the parameter, and this one does.
+- **AUTH-20.17.5** `application_type` is recorded and not enforced. It constrains redirect URIs
+  only under OpenID Connect registration, which this is not, and the MCP client registration page
+  says a non-OIDC server safely ignores it. Enforcing it would refuse exactly the native clients
+  the loopback rule exists for.
+- **AUTH-20.17.6** A code presented with a wrong binding is spent. OAuth 2.1 requires invalidation
+  on replay and does not require it here; spending it is what stops a stolen code being retried
+  against one guessed verifier after another.
+- **AUTH-20.17.7** `code_challenge_method` is required. OAuth 2.1 §4.1.1 defaults it to `plain`,
+  which is a method this server does not implement, so a request that omits it would otherwise be
+  refused for a reason its author would have to guess at.
+- **AUTH-20.17.8** An omitted `token_endpoint_auth_method` is read as `"none"`. RFC 7591 §2
+  defaults it to `client_secret_basic`. This server issues no secrets, so the alternative is
+  refusing a registration that omitted a field it has no use for; the response says what was
+  actually registered, which RFC 7591 §3.2.1 requires and which is how the client finds out.
+- **AUTH-20.17.9** `invalid_client` is answered `401`. OAuth 2.1 §5.3 requires that only when the
+  request carried client credentials in the `Authorization` header. This server authenticates no
+  client, so every `invalid_client` is a client it could not identify at all, and there is no
+  second case to distinguish.
+- **AUTH-20.17.10** Nothing an authorisation server does is audited beyond the consent entries a
+  grant and a withdrawal already write. `AuditEvent` is a closed inductive in the core target, so
+  naming code redemption or token issuance in it is a change to the core library and to both SQL
+  backends; §20.18 records that as the open question it is.
+
+### 20.18 Open decisions
+
+- **AUTH-20.18.1** Whether `AuditEvent` should gain the authorisation server's own events. What
+  the log answers today about a grant is that it was given and by whom, through §4.6; what it
+  cannot answer is which client redeemed which code and when. The cost of adding them is a change
+  to the core target's closed inductive and to `auditColumns` in the shared SQL store, which a
+  consumer taking only magic links links today.
+- **AUTH-20.18.2** Whether the authorisation server endpoints should be rate limited through the
+  port of §15.6. Dynamic registration in particular is a well-known way to make a server write
+  rows for free, and AUTH-20.6.7 bounds what accumulates rather than what arrives.
+- **AUTH-20.18.3** Whether `OAuthStore` should ship a conformance suite as `AuthStore` does
+  (§15.5). The driven checks are parameterised over the port already, so what is missing is the
+  decision to make them a shipped artefact rather than a test.
+- **AUTH-20.18.4** What pruning a dynamic registration should do to the consent records naming
+  it. They are left where they are today, on the grounds that evidence of what somebody agreed to
+  does not stop being true when an accumulated registration goes away.

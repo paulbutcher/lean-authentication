@@ -68,6 +68,11 @@ lean_lib AuthenticationSes
 @[default_target]
 lean_lib AuthenticationHttp
 
+/-- The authorisation server (§20). It needs no `require` of its own: percent-encoding comes
+from `Std.Http`, which the toolchain ships, and everything else it uses is already here. -/
+@[default_target]
+lean_lib AuthenticationOAuth
+
 /--
 Tests live in the `test/` subproject rather than here, so that a project depending on this one is
 free to name its own modules `Tests.*` and acquires nothing this library does not ship.

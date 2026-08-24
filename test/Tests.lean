@@ -11,6 +11,7 @@ import Tests.Flow
 import Tests.Http
 import Tests.Invitation
 import Tests.Migrations
+import Tests.OAuth
 import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres
