@@ -142,11 +142,51 @@ private def finish (status : Status) (body : String) (cookies : List Header.Valu
 
 /-! ## The attempt cookie, and the token bound to it -/
 
-private def cookieParts {tenant : TenantId} (value : String) :
-    Option (AttemptId tenant × CredentialValue) :=
-  match value.splitOn ":" with
-  | [attempt, nonce] => some (⟨attempt⟩, ⟨nonce⟩)
+/--
+What the attempt cookie carries. The redirect target rides here because the magic link carries
+the attempt and its token and nothing else: the browser that opens the link has no other way to
+say where the person was going, and this cookie is present on exactly the requests that can
+confirm a sign-in from that browser (AUTH-9.8).
+-/
+structure AttemptCookie (tenant : TenantId) where
+  attempt : AttemptId tenant
+  nonce : CredentialValue
+  returnTo : Option String := none
+  deriving DecidableEq, Repr
+
+namespace AttemptCookie
+
+/-- Bytes rather than characters, because what has to stay inside the browser's limit is the
+cookie, and a character is up to four of them. A `Set-Cookie` past that limit is discarded in
+silence, and the cookie discarded would be the one the flow depends on, so a target longer than
+this is left behind and the sign-in lands on the tenant's default rather than nowhere. -/
+def returnToLimit : Nat := 1024
+
+/-- Base64url, so the field carries no `:` to confuse the split and nothing a cookie value may
+not hold. -/
+def encodeReturnTo (target : String) : Option String :=
+  if target.utf8ByteSize > returnToLimit then none
+  else some (Codec.Base64Url.encodeString target.toUTF8)
+
+def decodeReturnTo (field : String) : Option String :=
+  (Codec.Base64Url.decodeString field).bind String.fromUTF8?
+
+/-- Appends the target to the two fields the core wrote (`Attempt.cookieValue`). -/
+def withReturnTo (value : String) (target : Option String) : String :=
+  match target.bind encodeReturnTo with
+  | none => value
+  | some encoded => value ++ ":" ++ encoded
+
+/-- Two fields are a cookie issued before targets rode in one, and the browser holding it must
+still be able to finish signing in. -/
+def parse {tenant : TenantId} (value : String) : Option (AttemptCookie tenant) :=
+  match (value.toList.splitOn ':').map String.ofList with
+  | [attempt, nonce] => some { attempt := ⟨attempt⟩, nonce := ⟨nonce⟩ }
+  | [attempt, nonce, target] =>
+    some { attempt := ⟨attempt⟩, nonce := ⟨nonce⟩, returnTo := decodeReturnTo target }
   | _ => none
+
+end AttemptCookie
 
 /--
 The anti-forgery token (AUTH-14.1.4). Derived from the binding nonce in the attempt cookie under
@@ -211,7 +251,9 @@ Beginning a sign-in. Every path out of here answers `200`, with the same headers
 That last part is why a refusal sets a cookie at all. `begin` produces no attempt for an address
 it will not send to, so there is no cookie to set and the missing header would say so; the
 decoy is drawn the same way a real one is and is the same shape, and a code typed against it
-fails the way a code typed against an expired attempt fails.
+fails the way a code typed against an expired attempt fails. The redirect target is appended to
+both for the same reason: a decoy shorter by the length of an encoded target would say which
+was which.
 -/
 private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
@@ -240,8 +282,9 @@ private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : Str
           | _, _ => ":"
         pure (CookieSpec.forAttempt tenantConfig.baseUrl tenant value
           (now.advance tenantConfig.attemptLifetime.duration)) : IO _)
-    let token := (cookieParts (tenant := tenant) cookie.value).map fun parts =>
-      formToken config.ports.peppers parts.2
+    let cookie := { cookie with value := AttemptCookie.withReturnTo cookie.value returnTo }
+    let token := (AttemptCookie.parse (tenant := tenant) cookie.value).map fun held =>
+      formToken config.ports.peppers held.nonce
     finish .ok
       (config.pages.sent
         { tenantName := tenantConfig.displayName
@@ -260,14 +303,16 @@ private def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String
     let query := queryOf request
     let attempt : AttemptId tenant := ⟨(query.get "attempt").getD ""⟩
     let token : CredentialValue := ⟨(query.get "token").getD ""⟩
-    let held := (cookieNamed request "auth_attempt").bind (cookieParts (tenant := tenant))
-    match ← (Service.openLink config.ports tenantConfig attempt token (held.map (·.2)) : IO _) with
+    let held := (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant))
+    match ← (Service.openLink config.ports tenantConfig attempt token
+        (held.map (·.nonce)) : IO _) with
     | .error _ => notFoundPage config
     | .ok outcome =>
       let context : PageContext :=
         { tenantName := tenantConfig.displayName
           action := confirmPath tenant
-          token := held.map fun parts => formToken config.ports.peppers parts.2 }
+          token := held.map fun cookie => formToken config.ports.peppers cookie.nonce
+          returnTo := held.bind (·.returnTo) }
       if outcome.views.contains .confirmSignIn then
         finish .ok (config.pages.confirm context) []
       else if outcome.views.contains .showVerificationCode then
@@ -300,9 +345,9 @@ so a request that does not hold the cookie has no attempt to name. -/
 private def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let form ← formBody request
-    match (cookieNamed request "auth_attempt").bind (cookieParts (tenant := tenant)) with
+    match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
     | none => notFoundPage config
-    | some (attempt, nonce) =>
+    | some ⟨attempt, nonce, carried⟩ =>
       if !tokenAccepted config.ports.peppers nonce (form.get "token") then
         finish .forbidden config.pages.unknown []
       else
@@ -310,23 +355,28 @@ private def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : S
         match ← (Service.confirmSignIn config.ports tenantConfig attempt nonce : IO _) with
         | .error _ => notFoundPage config
         | .ok outcome =>
-          settled config tenant tenantConfig now outcome (form.get "returnTo")
+          -- The form first, so a client whose confirm page renders `context.returnTo` is
+          -- believed; the cookie behind it, so one that ignores it still lands where the
+          -- person asked, which is the whole of what the cookie carries the target for.
+          let returnTo := (form.get "returnTo").orElse fun _ => carried
+          settled config tenant tenantConfig now outcome returnTo
             { tenantName := tenantConfig.displayName
               action := confirmPath tenant
-              token := some (formToken config.ports.peppers nonce) }
+              token := some (formToken config.ports.peppers nonce)
+              returnTo }
 
 /-- The code typed back into the browser the flow began in. -/
 private def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let form ← formBody request
-    match (cookieNamed request "auth_attempt").bind (cookieParts (tenant := tenant)) with
+    match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
     | none => notFoundPage config
-    | some (attempt, nonce) =>
+    | some ⟨attempt, nonce, carried⟩ =>
       if !tokenAccepted config.ports.peppers nonce (form.get "token") then
         finish .forbidden config.pages.unknown []
       else
         let now ← (Clock.now : IO Timestamp)
-        let returnTo := form.get "returnTo"
+        let returnTo := (form.get "returnTo").orElse fun _ => carried
         let typed := (form.get "code").getD ""
         let requester := requesterOf request
         let context : PageContext :=
@@ -346,14 +396,14 @@ tried both would spend two entries on one submission. -/
 private def submitEmailedCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let form ← formBody request
-    match (cookieNamed request "auth_attempt").bind (cookieParts (tenant := tenant)) with
+    match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
     | none => notFoundPage config
-    | some (attempt, nonce) =>
+    | some ⟨attempt, nonce, carried⟩ =>
       if !tokenAccepted config.ports.peppers nonce (form.get "token") then
         finish .forbidden config.pages.unknown []
       else
         let now ← (Clock.now : IO Timestamp)
-        let returnTo := form.get "returnTo"
+        let returnTo := (form.get "returnTo").orElse fun _ => carried
         let typed := (form.get "code").getD ""
         let requester := requesterOf request
         let context : PageContext :=
@@ -380,8 +430,8 @@ private def acceptInvitation [Clock IO] [RandomBytes IO] (config : Config) (raw 
     | .error _ => notFoundPage config
     | .ok outcome =>
       let cookie := outcome.setCookies.head?
-      let token := (cookie.bind fun spec => cookieParts (tenant := tenant) spec.value).map
-        fun parts => formToken config.ports.peppers parts.2
+      let token := (cookie.bind fun spec => AttemptCookie.parse (tenant := tenant) spec.value).map
+        fun held => formToken config.ports.peppers held.nonce
       finish .ok
         (config.pages.sent
           { tenantName := tenantConfig.displayName, action := codePath tenant, token

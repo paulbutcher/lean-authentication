@@ -26,6 +26,7 @@ def main : IO UInt32 := do
     ++ Tests.Suppression.parserChecks ++ (← Tests.Suppression.checks) ++ (← Tests.System.checks)
     ++ (← Tests.Transport.checks)
     ++ (← Tests.Http.checks) ++ (← Tests.Http.equalisationChecks) ++ (← Tests.Http.returnToChecks)
+    ++ (← Tests.Http.sameDeviceReturnToChecks)
     ++ (← Tests.Http.humanCheckChecks) ++ (← Tests.Http.webhookChecks)
     ++ (← Tests.Http.emailedCodeChecks) ++ (← Tests.Webhooks.snsChecks)
     ++ (← Tests.Webhooks.postmarkChecks)

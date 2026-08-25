@@ -340,6 +340,131 @@ def returnToChecks : IO (List (String × Bool)) := do
         statusOf signedIn == "HTTP/1.1 303 See Other"
           && headerValues signedIn "location" == ["/"]) ]
 
+/-! ## The cookie the target rides in -/
+
+section CookieFormat
+open Authentication.Http Codec.Base64Url
+
+private theorem sextet_range : ∀ n ∈ List.range 64, encodeSextet n ≠ ':' := by decide
+
+private theorem encodeSextet_ne_colon (n : Nat) : encodeSextet n ≠ ':' := by
+  rcases Nat.lt_or_ge n 64 with h | h
+  · exact sextet_range n (List.mem_range.mpr h)
+  · have hlen : alphabet.length ≤ n := by
+      show (64 : Nat) ≤ n
+      omega
+    rw [show encodeSextet n = '=' by simp [encodeSextet, List.getD_eq_getElem?_getD,
+      List.getElem?_eq_none hlen]]
+    decide
+
+/-- The separator must not turn up inside the field the target is encoded into, or the split
+that recovers the attempt and the nonce would find four fields and hand back nothing. -/
+private theorem colon_not_mem_encode (l : List UInt8) : ':' ∉ encode l := by
+  induction l using encode.induct with
+  | case1 => simp [encode]
+  | case2 a => simp [encode, encodeSextet_ne_colon, Ne.symm]
+  | case3 a b => simp [encode, encodeSextet_ne_colon, Ne.symm]
+  | case4 a b c rest ih => simp [encode, encodeSextet_ne_colon, Ne.symm, ih]
+
+private theorem colon_not_mem_encodeString (bytes : ByteArray) :
+    ':' ∉ (encodeString bytes).toList := by
+  simp [encodeString, String.toList_ofList, colon_not_mem_encode]
+
+/--
+Everything the attempt cookie carries survives being written and read back: the attempt and the
+nonce whatever was asked for, and the target itself whenever it was short enough to be carried
+at all. A cookie that lost the first two would not be a broken redirect but a broken sign-in,
+which is why this is a theorem rather than a handful of examples.
+
+The `:` hypotheses hold of what the core mints, both of which are base64url. `codec` is
+`leancrypto`'s base64url round trip: it is proved in that library's own suite but not exported
+from it, and copying the proof here would be this suite testing a dependency. Everything else
+the claim rests on is proved above.
+-/
+theorem parse_withReturnTo {tenant : TenantId} (attempt : AttemptId tenant)
+    (nonce : CredentialValue) (target : Option String)
+    (ha : ':' ∉ attempt.value.toList) (hn : ':' ∉ nonce.encoded.toList)
+    (codec : ∀ s : String, decodeString (encodeString s.toUTF8) = some s.toUTF8) :
+    AttemptCookie.parse (tenant := tenant)
+        (AttemptCookie.withReturnTo (Attempt.cookieValue attempt nonce) target)
+      = some ⟨attempt, nonce, target.filter (·.utf8ByteSize ≤ AttemptCookie.returnToLimit)⟩ := by
+  have dropped : AttemptCookie.parse (tenant := tenant)
+      (Attempt.cookieValue attempt nonce) = some ⟨attempt, nonce, none⟩ := by
+    simp [AttemptCookie.parse, Attempt.cookieValue, String.toList_append,
+      List.splitOn_append_cons_self_of_not_mem ha, List.splitOn_eq_singleton hn]
+  match target with
+  | none => simpa [AttemptCookie.withReturnTo] using dropped
+  | some t =>
+    by_cases h : t.utf8ByteSize > AttemptCookie.returnToLimit
+    · simp only [AttemptCookie.withReturnTo, AttemptCookie.encodeReturnTo, Option.bind_some,
+        if_pos h]
+      simpa [Option.filter, Nat.not_le.mpr h] using dropped
+    · have hc : decodeString (encodeString t.toByteArray) = some t.toByteArray := codec t
+      have hu : String.fromUTF8? t.toByteArray = some t := by
+        simp [String.fromUTF8?, String.fromUTF8, t.isValidUTF8]
+      simp only [AttemptCookie.withReturnTo, AttemptCookie.encodeReturnTo, Option.bind_some,
+        if_neg h]
+      simp [AttemptCookie.parse, Attempt.cookieValue, String.toList_append,
+        List.splitOn_append_cons_self_of_not_mem ha,
+        List.splitOn_append_cons_self_of_not_mem hn,
+        List.splitOn_eq_singleton (colon_not_mem_encodeString t.toByteArray),
+        AttemptCookie.decodeReturnTo, hc, hu, Option.filter, Nat.not_lt.mp h]
+
+end CookieFormat
+
+/-- The same-device path (AUTH-5.2.1): the person opens the mailed link rather than typing the
+code back. The link carries the attempt and its token and nothing else, so the target rides in
+the attempt cookie, and a confirm `POST` naming no target of its own must still land on it. -/
+def sameDeviceReturnToChecks : IO (List (String × Bool)) := do
+  clockRef.set ⟨1700000000⟩
+  let db ← Sqlite.openInMemory
+  let http : Authentication.Http.Config := { ports := portsOn db, tenant := resolver }
+  let headers := "Content-Type: application/x-www-form-urlencoded\x0d\nConnection: close\x0d\n"
+
+  -- Ask for a link, open it on the device that asked, and confirm without naming a target.
+  let confirmed (asked : String) : IO String := do
+    sentRef.set []
+    let begun ← send http
+      (mkPost "/t/acme/signin" s!"email=person%40example.com{asked}" headers)
+    let attemptCookie := (cookiePair begun "auth_attempt").getD ""
+    let mailBody := (((← sentRef.get)[0]?).map (·.textBody)).getD ""
+    let attemptId := (parameterFrom mailBody "attempt").getD ""
+    let magicToken := (parameterFrom mailBody "token").getD ""
+    let opened ← send http
+      (mkGet s!"/t/acme/signin/link?attempt={attemptId}&token={magicToken}"
+        s!"Connection: close\x0d\nCookie: {attemptCookie}\x0d\n")
+    let token := (fieldValue (bodyOf opened) "token").getD ""
+    send http
+      (mkPost "/t/acme/signin/confirm" s!"token={token}"
+        (headers ++ s!"Cookie: {attemptCookie}\x0d\n"))
+
+  let allowed ← confirmed "&returnTo=%2Fdashboard"
+  let refused ← confirmed "&returnTo=https%3A%2F%2Fevil.test%2F"
+  -- The allowlist matches everything before the query, so a padded query is an allowed target
+  -- of any length, which is what tells the cap apart from the allowlist.
+  let within := String.ofList (List.replicate 1000 'a')
+  let beyond := String.ofList (List.replicate 1100 'a')
+  let long ← confirmed s!"&returnTo=%2Fdashboard%3Ffrom%3D{within}"
+  let tooLong ← confirmed s!"&returnTo=%2Fdashboard%3Ffrom%3D{beyond}"
+  let unasked ← confirmed ""
+
+  pure
+    [ ("http: a target asked for at the start survives the mailed link (AUTH-9.8)",
+        statusOf allowed == "HTTP/1.1 303 See Other"
+          && headerValues allowed "location" == ["/dashboard"]),
+      ("http: and one the tenant did not allow becomes the default however it arrived",
+        statusOf refused == "HTTP/1.1 303 See Other"
+          && headerValues refused "location" == ["/"]),
+      ("http: a target within the cap arrives whole, query and all",
+        headerValues long "location" == [s!"/dashboard?from={within}"]),
+      ("http: one past the cap is dropped rather than shortened, and costs the sign-in nothing",
+        statusOf tooLong == "HTTP/1.1 303 See Other"
+          && (cookiePair tooLong "auth_session").isSome
+          && headerValues tooLong "location" == ["/"]),
+      ("http: a cookie of the two fields written before targets rode in one still signs in",
+        statusOf unasked == "HTTP/1.1 303 See Other"
+          && (cookiePair unasked "auth_session").isSome) ]
+
 private def codedConfig : TenantConfig tenant := { config with emailedCodeEnabled := true }
 
 private def codedResolver (t : TenantId) : IO (Option (TenantConfig t)) :=
