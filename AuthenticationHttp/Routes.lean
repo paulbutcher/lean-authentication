@@ -92,6 +92,19 @@ private def requesterOf (request : Request Body.Stream) : RequestContext :=
 private def headerValue (text : String) : Header.Value :=
   (Header.Value.ofString? text).getD default
 
+/-- A relative reference: RFC 3986's `query` characters, which are `pchar` plus `/` and `?`, and
+`#` on top of them, so a fragment the person asked for stays a fragment. -/
+private def locationChar (c : UInt8) : Bool :=
+  Std.Http.Internal.Char.isQueryChar c || c = '#'.toUInt8
+
+/-- The redirect target arrives decoded, from a form field or a query parameter, so it is encoded
+on the way out rather than passed through. A single byte a header value may not hold makes
+`Header.Value.ofString?` refuse the whole thing, and the answer would then be a redirect naming
+nowhere to go; percent-encoding is also what stops anything in the target from ending the header
+line early. -/
+private def locationValue (target : String) : Header.Value :=
+  headerValue (toString (URI.EncodedString.encode (r := locationChar) target))
+
 private def setCookieName : Header.Name := Middleware.Header.Name.setCookie
 
 /-- The attributes are the `CookieSpec`'s, which the core fixed and no caller can weaken
@@ -137,7 +150,7 @@ private def finish (status : Status) (body : String) (cookies : List Header.Valu
   let headers := cookies.foldl (fun hs value => hs.insert setCookieName value) headers
   let headers := match location with
     | none => headers
-    | some target => headers.insert (Header.Name.mk "location") (headerValue target)
+    | some target => headers.insert (Header.Name.mk "location") (locationValue target)
   pure { response with line := { response.line with headers } }
 
 /-! ## The attempt cookie, and the token bound to it -/

@@ -446,6 +446,10 @@ def sameDeviceReturnToChecks : IO (List (String × Bool)) := do
   let beyond := String.ofList (List.replicate 1100 'a')
   let long ← confirmed s!"&returnTo=%2Fdashboard%3Ffrom%3D{within}"
   let tooLong ← confirmed s!"&returnTo=%2Fdashboard%3Ffrom%3D{beyond}"
+  -- Not ASCII, so a header value cannot hold it as it stands. What comes back must be the
+  -- escaped form of what was asked for, with the characters that carry the structure of a URI
+  -- left alone: escaping those would move the query or the fragment rather than preserve it.
+  let multibyte ← confirmed "&returnTo=%2Fdashboard%3Ffrom%3Dcaf%C3%A9%23top"
   let unasked ← confirmed ""
 
   pure
@@ -457,6 +461,9 @@ def sameDeviceReturnToChecks : IO (List (String × Bool)) := do
           && headerValues refused "location" == ["/"]),
       ("http: a target within the cap arrives whole, query and all",
         headerValues long "location" == [s!"/dashboard?from={within}"]),
+      ("http: a target that no header value could hold is escaped, not dropped",
+        statusOf multibyte == "HTTP/1.1 303 See Other"
+          && headerValues multibyte "location" == ["/dashboard?from=caf%C3%A9#top"]),
       ("http: one past the cap is dropped rather than shortened, and costs the sign-in nothing",
         statusOf tooLong == "HTTP/1.1 303 See Other"
           && (cookiePair tooLong "auth_session").isSome
