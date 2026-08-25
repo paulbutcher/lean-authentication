@@ -53,7 +53,7 @@ def config : TenantConfig tenant :=
     sendingIdentity :=
       { address := address "sign-in@auth.example.com", displayName := "Acme sign-in" }
     signupPolicy := .unrestricted
-    returnToAllowlist := ["/dashboard"] }
+    returnToAllowlist := ["/dashboard", "/back"] }
 
 private def resolver (t : TenantId) : IO (Option (TenantConfig t)) :=
   if h : t = tenant then pure (some (h ▸ config)) else pure none
@@ -412,6 +412,34 @@ theorem parse_withReturnTo {tenant : TenantId} (attempt : AttemptId tenant)
 
 end CookieFormat
 
+
+/-! ## The target, on its way into the header -/
+
+section LocationHeader
+open Authentication.Http Std.Http.Internal.Char
+
+/-- The encoded reading of a redirect target: bytes that stand for themselves, and well-formed
+triplets. This is what a caller who encoded a target once leaves behind after the form parser
+decoded it once, and it is what `ReturnTo.base` splits and what a `Location` has to hold. -/
+private def encodedReference : List UInt8 → Bool
+  | [] => true
+  | p :: d₁ :: d₂ :: rest =>
+    if p = '%'.toUInt8 then isHexDigitByte d₁ && isHexDigitByte d₂ && encodedReference rest
+    else locationChar p && encodedReference (d₁ :: d₂ :: rest)
+  | c :: rest => locationChar c && encodedReference rest
+  termination_by bytes => bytes.length
+
+/-- A target that is already a URI reference reaches the browser as it was asked for: nothing in
+it is escaped, so nothing in it is escaped twice. A counterexample is not a redirect that merely
+looks wrong; it is one that arrives at a different place, because the application at the other
+end decodes what it is given once and finds `%3A` where the caller wrote `:`. -/
+theorem escapeLocation_of_encodedReference (bytes : List UInt8) (h : encodedReference bytes) :
+    escapeLocation bytes = bytes.map Char.ofUInt8 := by
+  fun_induction escapeLocation bytes <;> simp_all [encodedReference, escapeByte] <;>
+    first | decide | (split at h <;> simp_all)
+
+end LocationHeader
+
 /-- The same-device path (AUTH-5.2.1): the person opens the mailed link rather than typing the
 code back. The link carries the attempt and its token and nothing else, so the target rides in
 the attempt cookie, and a confirm `POST` naming no target of its own must still land on it. -/
@@ -450,6 +478,14 @@ def sameDeviceReturnToChecks : IO (List (String × Bool)) := do
   -- escaped form of what was asked for, with the characters that carry the structure of a URI
   -- left alone: escaping those would move the query or the fragment rather than preserve it.
   let multibyte ← confirmed "&returnTo=%2Fdashboard%3Ffrom%3Dcaf%C3%A9%23top"
+  -- A caller with a target of its own to preserve encodes it once for the form field, and the
+  -- form parser decodes it once, so what arrives here is a URI reference with its triplets still
+  -- in it. Escaping those again would land the browser somewhere else: the application at the
+  -- far end decodes its query once, and would find the text `https%3A%2F%2Fx.example%2Fcb` where
+  -- a URL was meant.
+  let carried ← confirmed "&returnTo=%2Fback%3Fu%3Dhttps%253A%252F%252Fx.example%252Fcb"
+  -- A target that would end the header line early and start a header of its own.
+  let injected ← confirmed "&returnTo=%2Fdashboard%3Fx%3D%0D%0AX-Injected%3A%20yes"
   let unasked ← confirmed ""
 
   pure
@@ -464,6 +500,13 @@ def sameDeviceReturnToChecks : IO (List (String × Bool)) := do
       ("http: a target that no header value could hold is escaped, not dropped",
         statusOf multibyte == "HTTP/1.1 303 See Other"
           && headerValues multibyte "location" == ["/dashboard?from=caf%C3%A9#top"]),
+      ("http: a target whose query is itself encoded is not encoded a second time (AUTH-9.8)",
+        statusOf carried == "HTTP/1.1 303 See Other"
+          && headerValues carried "location" == ["/back?u=https%3A%2F%2Fx.example%2Fcb"]),
+      ("http: a target carrying CR or LF cannot start a header of its own",
+        statusOf injected == "HTTP/1.1 303 See Other"
+          && headerValues injected "location" == ["/dashboard?x=%0D%0AX-Injected:%20yes"]
+          && !(headerNames injected).contains "x-injected"),
       ("http: one past the cap is dropped rather than shortened, and costs the sign-in nothing",
         statusOf tooLong == "HTTP/1.1 303 See Other"
           && (cookiePair tooLong "auth_session").isSome

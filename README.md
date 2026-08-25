@@ -348,7 +348,10 @@ The `From` domain needs all of these before mail is delivered rather than filed:
 - **Provider callbacks are verified inside the endpoint**, before the payload is read. The SNS
   certificate is fetched only from a recognised host, decided before the fetch, and the topic is
   checked.
-- **`returnTo` is validated** against the tenant's allowlist before any redirect.
+- **`returnTo` is validated** against the tenant's allowlist before any redirect. It travels as a
+  URI reference in its encoded form: a caller with a target whose own query holds encoded values
+  encodes the whole reference once for the form field, and what reaches the browser is that
+  reference, escaped only where a header value could not otherwise hold it.
 - **The audit log and the consent history are append only.** The port offers no update or delete.
 - **An authorization code is redeemed at most once**, a refresh token rotated at most once, and
   either presented twice revokes everything its grant issued. Both are theorems about the state

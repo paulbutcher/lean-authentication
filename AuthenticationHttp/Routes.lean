@@ -93,17 +93,54 @@ private def headerValue (text : String) : Header.Value :=
   (Header.Value.ofString? text).getD default
 
 /-- A relative reference: RFC 3986's `query` characters, which are `pchar` plus `/` and `?`, and
-`#` on top of them, so a fragment the person asked for stays a fragment. -/
-private def locationChar (c : UInt8) : Bool :=
+`#` on top of them, so a fragment the person asked for stays a fragment. `%` is not among them:
+it introduces a triplet rather than standing for itself, which is what `escapeLocation` makes of
+it. -/
+def locationChar (c : UInt8) : Bool :=
   Std.Http.Internal.Char.isQueryChar c || c = '#'.toUInt8
 
-/-- The redirect target arrives decoded, from a form field or a query parameter, so it is encoded
-on the way out rather than passed through. A single byte a header value may not hold makes
+private def hexDigitChar (n : UInt8) : Char :=
+  Char.ofNat (if n < 10 then n.toNat + '0'.toNat else n.toNat - 10 + 'A'.toNat)
+
+/-- One byte, as itself where a URI reference and a header value both allow it to stand, and as a
+triplet otherwise. -/
+def escapeByte (c : UInt8) : List Char :=
+  if locationChar c then [Char.ofUInt8 c]
+  else ['%', hexDigitChar (c >>> 4), hexDigitChar (c &&& 0xF)]
+
+/--
+The bytes of a redirect target, rendered so that a header value can hold them: a `%` that already
+introduces a triplet is copied through with its two digits, and every other byte is escaped or
+kept by `escapeByte`.
+
+Preserving the triplet is what keeps the target the one that was asked for. Escaping it again
+would turn `%3A` into `%253A`, and the application the browser then reached would decode its query
+once and find that literal text rather than the `:` the caller meant. A `%` followed by anything
+else is data, and becomes `%25`.
+
+The output is built from `locationChar` bytes and triplets alone, so it holds no CR, no LF, and
+nothing outside what a header value and a URI reference both allow: ending the header line early
+is impossible whatever the target contains.
+-/
+def escapeLocation : List UInt8 → List Char
+  | [] => []
+  | p :: d₁ :: d₂ :: rest =>
+    if p = '%'.toUInt8 && Std.Http.Internal.Char.isHexDigitByte d₁
+        && Std.Http.Internal.Char.isHexDigitByte d₂ then
+      '%' :: Char.ofUInt8 d₁ :: Char.ofUInt8 d₂ :: escapeLocation rest
+    else escapeByte p ++ escapeLocation (d₁ :: d₂ :: rest)
+  | c :: rest => escapeByte c ++ escapeLocation rest
+  termination_by bytes => bytes.length
+
+/-- The redirect target is a URI reference in its encoded form, which is what a caller with a
+target to preserve puts in the form field and what `ReturnTo.base` and this header both need it
+to be: a `%26` inside a parameter value has no decoded form that a second encoding could put
+back. So what arrives is escaped only where it has to be (`escapeLocation`), rather than encoded
+again from end to end. A single byte a header value may not hold would otherwise make
 `Header.Value.ofString?` refuse the whole thing, and the answer would then be a redirect naming
-nowhere to go; percent-encoding is also what stops anything in the target from ending the header
-line early. -/
+nowhere to go. -/
 private def locationValue (target : String) : Header.Value :=
-  headerValue (toString (URI.EncodedString.encode (r := locationChar) target))
+  headerValue (String.ofList (escapeLocation target.toUTF8.toList))
 
 private def setCookieName : Header.Name := Middleware.Header.Name.setCookie
 
