@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.10.0] - 2026-08-26
 
 - An account can be shown what it has connected.
 - Credentials that permit nothing are no longer granted.
