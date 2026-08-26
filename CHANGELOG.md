@@ -1,0 +1,50 @@
+# Changelog
+
+## [Unreleased]
+
+- Credentials that permit nothing are no longer granted.
+- A code issued from a consent decision is bound to what the page displayed, not what the request
+  said.
+
+## [0.9.1] - 2026-08-25
+
+Stop percent triplets in a redirect target being encoded a second time.
+
+## [0.9.0] - 2026-08-25
+
+- Percent-encode redirect targets in the `Location` header.
+- Stop `returnTo` being dropped on same-device magic links.
+
+## [0.8.0] - 2026-08-24
+
+OAuth 2.1 authorisation server.
+
+## [0.7.0] - 2026-08-22
+
+Fix the development workflow for Safari.
+
+## [0.6.0] - 2026-08-22
+
+Shared connection pool.
+
+## [0.5.0] - 2026-08-21
+
+Trim trailing `/` from `baseUrl`.
+
+## [0.4.0] - 2026-08-21
+
+Switch to `lean-json`.
+
+## [0.3.0] - 2026-08-20
+
+- SQL pool support.
+- Development email transport.
+- Configurable tenant cookie session path.
+
+## [0.2.0] - 2026-08-20
+
+Switch to module system.
+
+## [0.1.0] - 2026-08-20
+
+Initial release.
