@@ -617,8 +617,82 @@ def revoke {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : 
   ports.store.appendAudit tenant ⟨now, .anonymous, .consentWithdrawn account subject⟩
   ports.oauth.revokeGrants tenant now account client resource
 
-/-- What this account has granted, as scopes, per client and resource. The history is the
-authority; this is the reading of it the consent page needs. -/
+/-- One agent an account has connected: everything a page needs to render a row, and everything
+`revoke` needs to act on one. -/
+structure Connection (tenant : TenantId) where
+  client : ClientId
+  /-- What the client called itself. `none` where nothing held here says, which for a metadata
+  document client means its document is not in the cache. -/
+  clientName : Option String
+  /-- Where the name came from. A page that shows one is required to say which of the two
+  mechanisms produced it (AUTH-20.6.10), and a page listing what those pages produced owes the
+  same. -/
+  origin : ClientOrigin
+  resource : ResourceIndicator
+  /-- Read from the live credential rather than from the consent history. What the row is about
+  is what can be done now. -/
+  scopes : List Scope
+  /-- When the consent behind this was recorded, where the history has one. -/
+  since : Option Timestamp
+  /-- When the newest credential under the grant was issued or rotated, which is the honest
+  answer to whether it is still in use. -/
+  lastUsedAt : Timestamp
+  deriving DecidableEq, Repr
+
+private def displayName (metadata : ClientMetadata) : Option String :=
+  if metadata.clientName.isEmpty then none else some metadata.clientName
+
+/-- What to call a client, from what this server already holds. Nothing is fetched: a listing
+that resolved a metadata document would let whoever can name a URL make this server issue a
+request, which is the reasoning already recorded on `token`.
+
+A URL-shaped identifier that resolution would refuse reads as a metadata document client with
+no name. Nothing can hold a grant under one, so this is a shape rather than a case. -/
+private def clientLabel {m : Type → Type} [Monad m] (ports : Ports m) (tenant : TenantId)
+    (now : Timestamp) (id : ClientId) : m (Option String × ClientOrigin) := do
+  match id.registration with
+  | .dynamic =>
+    let record ← ports.oauth.clientById tenant id
+    pure (record.bind fun record => displayName record.metadata, .dynamic)
+  | _ =>
+    let cached ← ports.oauth.cachedDocument tenant id now
+    pure (cached.bind fun cached => displayName cached.metadata, .metadataDocument)
+
+/--
+What this account has connected, one row per client and resource, built from what is live.
+
+A consent entry and a grant are different facts. The history says what somebody agreed to; the
+credentials say what can still be done, and a page offering to disconnect an agent is about the
+second. The two agree except where a withdrawal has not reached everything, which is a state
+`revoke` exists not to produce.
+
+The rows are per client and resource because that is what `revoke` takes. A deployment serving
+one resource sees one row per client and need not care.
+-/
+def connections {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) : m (List (Connection tenant)) := do
+  let now ← Clock.now
+  let live ← ports.oauth.grantsForAccount tenant account now
+  let history ← ports.store.consentHistory tenant account
+  live.mapM fun summary => do
+    let (clientName, origin) ← clientLabel ports tenant now summary.client
+    let subject := Consent.subject summary.client summary.resource
+    let since :=
+      match Authentication.Consent.latest history subject with
+      | some entry => if entry.act == .granted then some entry.recordedAt else none
+      | none => none
+    pure
+      { client := summary.client
+        clientName
+        origin
+        resource := summary.resource
+        scopes := summary.scopes
+        since
+        lastUsedAt := summary.lastIssuedAt }
+
+/-- What this account has granted, as scopes, per client and resource. A different question from
+`connections`: this is what was agreed to, which outlives the credentials agreeing to it
+produced, and a privacy page wants both. -/
 def grants {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
     (account : AccountId tenant) : m (List ConsentState) :=
   Authentication.Consent.state <$> ports.store.consentHistory tenant account

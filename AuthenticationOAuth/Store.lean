@@ -24,6 +24,20 @@ public section
 
 namespace Authentication.OAuth
 
+/-- One grant an account holds, as the credentials issued under it stand.
+
+The scopes are the credential's rather than the consent history's. The history is the authority
+on what was agreed to; a credential is the authority on what can be done with it now, and a
+listing offered so that somebody can disconnect something is about the second. -/
+structure GrantSummary (tenant : TenantId) where
+  client : ClientId
+  resource : ResourceIndicator
+  scopes : List Scope
+  /-- When the newest credential under the grant was issued, which is as close as this server
+  comes to when the grant was last used: a client still working rotates. -/
+  lastIssuedAt : Timestamp
+  deriving DecidableEq, Repr
+
 /-- What a sweep removed. -/
 structure SweepCounts where
   codes : Nat := 0
@@ -77,6 +91,14 @@ structure OAuthStore (m : Type → Type) where
   withdrawing the consent has to reach. -/
   revokeGrants : (tenant : TenantId) → Timestamp → AccountId tenant → ClientId →
     ResourceIndicator → m Unit
+  /-- Every grant this account holds, live: one entry per client and resource that still has a
+  credential under it which has neither expired nor been revoked. A grant whose credentials have
+  all lapsed is not listed, because a row nobody can meaningfully revoke is worse than no row.
+
+  `now` is the caller's, as it is wherever else this port needs one: a store reading a clock of
+  its own would be a second clock in a system that already has one. -/
+  grantsForAccount : (tenant : TenantId) → AccountId tenant → (now : Timestamp) →
+    m (List (GrantSummary tenant))
   /-- Removes the codes and tokens nothing can reach and the documents nothing will serve.
   Everything it removes is already refused on read, so no correctness depends on it having run;
   what it bounds is growth. -/

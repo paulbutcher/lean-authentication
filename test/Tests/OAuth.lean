@@ -627,6 +627,127 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
           entry.subject == Consent.subject ⟨clientDocumentUrl⟩ ⟨resource⟩
             && entry.version == "files:read" && entry.act == .granted) ]
 
+/-! ## What an account can be shown it has connected -/
+
+private def resourceA : String := "https://a.example.test/mcp"
+private def resourceB : String := "https://b.example.test/mcp"
+private def resourceC : String := "https://c.example.test/mcp"
+
+private def rowFor {tenant : TenantId} (rows : List (OAuth.Service.Connection tenant))
+    (client resource : String) : Option (OAuth.Service.Connection tenant) :=
+  rows.find? fun row => row.client.value == client && row.resource.value == resource
+
+/--
+The listing a privacy page renders, against whichever backend it is handed.
+
+Built against the store rather than driven through `authorize`, because the cases that decide
+whether the listing is honest are ones the flow will not produce: a grant whose credentials have
+lapsed, a grant with no consent entry beside it, and somebody else's grant.
+-/
+def connectionChecks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
+    IO (List (String × Bool)) := do
+  let tenant : TenantId := ⟨label ++ "-connections"⟩
+  let ports : OAuth.Service.Ports IO := { store, oauth, documents, peppers }
+  oauth.deleteTenant tenant
+  store.deleteTenant tenant
+  let now ← clockRef.get
+  let live : Timestamp := ⟨now.epochSeconds + 3600⟩
+  let lapsed : Timestamp := ⟨now.epochSeconds - 1⟩
+  let account : AccountId tenant := ⟨"account-1"⟩
+  let other : AccountId tenant := ⟨"account-2"⟩
+  for holder in [account, other] do
+    let person := address s!"{holder.value}@example.com"
+    discard <| store.createAccount tenant
+      { id := holder
+        identity := person.normalise
+        primaryEmail := person
+        createdAt := now }
+  let dynamicId : ClientId := ⟨"a-registered-client"⟩
+  oauth.createClient tenant
+    { id := dynamicId
+      metadata := { clientName := "Legacy Client", redirectUris := [webRedirect] }
+      registeredAt := now
+      lastUsedAt := now }
+  oauth.cacheDocument tenant
+    { client := ⟨clientDocumentUrl⟩
+      metadata := { clientName := "Example MCP Client", redirectUris := [webRedirect] }
+      fetchedAt := now
+      freshUntil := live }
+  -- One credential of each kind per grant, so that a grant's two rows share its identifier the
+  -- way the flow would have written them.
+  let access : AccountId tenant → String → ClientId → String → List Scope → Timestamp →
+      IO Unit :=
+    fun holder grant client target scopes expiresAt =>
+      oauth.createAccessToken tenant
+        { grant := ⟨grant⟩
+          digest := peppers.current.digest ⟨grant ++ "-access"⟩
+          account := holder, client, resource := ⟨target⟩, scopes, issuedAt := now, expiresAt }
+  let refresh : AccountId tenant → String → ClientId → String → List Scope → Timestamp →
+      Option Timestamp → IO Unit :=
+    fun holder grant client target scopes expiresAt replacedAt =>
+      oauth.createRefreshToken tenant
+        { grant := ⟨grant⟩
+          digest := peppers.current.digest ⟨grant ++ "-refresh"⟩
+          account := holder, client, resource := ⟨target⟩, scopes, issuedAt := now, expiresAt,
+          replacedAt }
+  let consented : ClientId → String → String → IO Unit :=
+    fun client target version =>
+      store.recordConsent tenant
+        { account
+          subject := Consent.subject client ⟨target⟩
+          version
+          act := .granted
+          recordedAt := now }
+  -- A refresh token and nothing else, with no consent entry beside it.
+  refresh account "g-refresh-only" dynamicId resourceA [⟨"files:read"⟩] live none
+  -- The same client against a second resource.
+  access account "g-second-resource" dynamicId resourceB [⟨"files:read"⟩, ⟨"files:write"⟩] live
+  consented dynamicId resourceB "files:read files:write"
+  -- A metadata document client against the first.
+  access account "g-document" ⟨clientDocumentUrl⟩ resourceA [⟨"files:read"⟩] live
+  consented ⟨clientDocumentUrl⟩ resourceA "files:read"
+  -- A grant with nothing usable left: one credential expired, the other rotated away.
+  access account "g-lapsed" ⟨clientDocumentUrl⟩ resourceB [⟨"files:read"⟩] lapsed
+  refresh account "g-lapsed" ⟨clientDocumentUrl⟩ resourceB [⟨"files:read"⟩] live (some now)
+  -- Somebody else's grant, against a client and a resource this account has nothing under.
+  refresh other "g-elsewhere" dynamicId resourceC [⟨"files:read"⟩] live none
+  let fetchesBefore ← fetchCount.get
+  let listed ← OAuth.Service.connections ports account
+  let others ← OAuth.Service.connections ports other
+  let fetchesAfter ← fetchCount.get
+  OAuth.Service.revoke ports account dynamicId ⟨resourceB⟩
+  let afterRevoke ← OAuth.Service.connections ports account
+  let refreshOnly := rowFor listed dynamicId.value resourceA
+  let document := rowFor listed clientDocumentUrl resourceA
+  pure
+    [ (s!"{label}: a grant with a live refresh token is listed", refreshOnly.isSome)
+    , (s!"{label}: one whose credentials have all lapsed is not, expired and rotated alike",
+        (rowFor listed clientDocumentUrl resourceB).isNone)
+    , (s!"{label}: a grant with no consent entry beside it is listed all the same",
+        (refreshOnly.map (·.since)) == some none)
+    , (s!"{label}: a row carries the credential's scopes",
+        (refreshOnly.map (·.scopes)) == some [⟨"files:read"⟩])
+    , (s!"{label}: one client against two resources is two rows",
+        (rowFor listed dynamicId.value resourceB).isSome
+          && (listed.filter (·.client == dynamicId)).length == 2)
+    , (s!"{label}: two clients against one resource is two rows",
+        document.isSome && (listed.filter (·.resource.value == resourceA)).length == 2)
+    , (s!"{label}: a dynamic registration is named by what it registered",
+        (refreshOnly.map fun row => (row.clientName, row.origin))
+          == some (some "Legacy Client", ClientOrigin.dynamic))
+    , (s!"{label}: a metadata document client is named from the cache, and nothing is fetched",
+        (document.map fun row => (row.clientName, row.origin))
+            == some (some "Example MCP Client", ClientOrigin.metadataDocument)
+          && fetchesAfter == fetchesBefore)
+    , (s!"{label}: a row says when the consent behind it was recorded",
+        (rowFor listed dynamicId.value resourceB |>.map (·.since)) == some (some now))
+    , (s!"{label}: another account's grants are not listed",
+        listed.all (·.resource.value != resourceC)
+          && others.map (fun row => (row.client.value, row.resource.value))
+            == [(dynamicId.value, resourceC)])
+    , (s!"{label}: revoking a grant takes its row with it",
+        (rowFor afterRevoke dynamicId.value resourceB).isNone && afterRevoke.length == 2) ]
+
 /-- The worked example in RFC 7636 Appendix B. Every other claim about `S256` here compares
 the transform against itself, and this is the one that compares it against somebody else. -/
 def pkceChecks : List (String × Bool) :=
@@ -639,7 +760,9 @@ def pkceChecks : List (String × Bool) :=
 def sqliteChecks : IO (List (String × Bool)) := do
   let db ← Sqlite.openInMemory
   db.exec sqliteSchemaSql
-  checks "oauth" (Sqlite.store db) (sqlOAuthStore Sqlite.dialect (Sqlite.connection db))
+  let store := Sqlite.store db
+  let oauth := sqlOAuthStore Sqlite.dialect (Sqlite.connection db)
+  pure ((← checks "oauth" store oauth) ++ (← connectionChecks "oauth" store oauth))
 
 /-- The reference backend runs the same statements. Failing to reach it is reported as a failure
 rather than a skip, for the reason `Tests.Postgres` gives. -/
@@ -648,9 +771,11 @@ def postgresChecks : IO (List (String × Bool)) := do
       let connection ← Authentication.Postgres.connect (← Tests.Postgres.conninfo)
       Authentication.Postgres.createSchema connection
       _root_.Postgres.execScript connection.conn postgresSchemaSql
-      checks "oauth postgres" (Authentication.Postgres.store connection)
-        (sqlOAuthStore Authentication.Postgres.dialect
-          (Authentication.Postgres.connection connection))).toBaseIO with
+      let store := Authentication.Postgres.store connection
+      let oauth := sqlOAuthStore Authentication.Postgres.dialect
+        (Authentication.Postgres.connection connection)
+      pure ((← checks "oauth postgres" store oauth)
+        ++ (← connectionChecks "oauth postgres" store oauth))).toBaseIO with
   | .ok results => pure results
   | .error e => pure [(s!"oauth postgres: the reference backend was reachable ({e})", false)]
 

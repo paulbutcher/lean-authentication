@@ -324,6 +324,47 @@ private def commitRefreshToken [Monad m] (c : Ctx m) (tenant : TenantId)
             AND digest_bytes = {digestBytesText expected.digest}" ++ unchanged)
   pure (affected == 1)
 
+/-! ## What an account holds -/
+
+private def readLiveGrant {tenant : TenantId} (row : SqlRow) : GrantSummary tenant :=
+  { client := ⟨row.text 0⟩
+    resource := ⟨row.text 1⟩
+    scopes := Scope.parse (row.text 2)
+    lastIssuedAt := ⟨row.int 3⟩ }
+
+/-- Collapses the credentials under one grant into the row a listing shows. Two of them differ
+in their scopes only where a refresh narrowed them, and then the newest is the one that says
+what can be done now. -/
+private def mergeLiveGrant {tenant : TenantId} (summaries : List (GrantSummary tenant))
+    (found : GrantSummary tenant) : List (GrantSummary tenant) :=
+  let sameGrant := fun (s : GrantSummary tenant) =>
+    s.client == found.client && s.resource == found.resource
+  if summaries.any sameGrant then
+    summaries.map fun s =>
+      if sameGrant s && decide (s.lastIssuedAt ≤ found.lastIssuedAt) then found else s
+  else summaries ++ [found]
+
+/--
+The credentials that still permit something, from both tables at once.
+
+A refresh token that has been rotated is excluded as well as one that has been revoked: it
+cannot be exchanged again, and the token that replaced it is a row of its own. Combining the
+two tables in the statement rather than in two round trips is what lets the account and client
+index carry the whole query.
+-/
+private def grantsForAccount [Monad m] (c : Ctx m) (tenant : TenantId)
+    (account : AccountId tenant) (now : Timestamp) : m (List (GrantSummary tenant)) := do
+  let rows ← c.rows
+    sql!"SELECT client_id, resource, scopes, issued_at FROM {accessTokens}
+         WHERE tenant = {tenant.value} AND account_id = {account.value}
+           AND revoked_at IS NULL AND expires_at > {timeText now}
+         UNION ALL
+         SELECT client_id, resource, scopes, issued_at FROM {refreshTokens}
+         WHERE tenant = {tenant.value} AND account_id = {account.value}
+           AND revoked_at IS NULL AND replaced_at IS NULL AND expires_at > {timeText now}
+         ORDER BY issued_at"
+  pure ((rows.toList.map readLiveGrant).foldl mergeLiveGrant [])
+
 /-! ## Revocation and sweeping -/
 
 private def revokeGrant [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
@@ -419,6 +460,7 @@ def sqlOAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : OAuth
     commitRefreshToken := commitRefreshToken c
     revokeGrant := revokeGrant c
     revokeGrants := revokeGrants c
+    grantsForAccount := grantsForAccount c
     purgeExpired := purgeExpired c
     deleteTenant := deleteTenant c }
 

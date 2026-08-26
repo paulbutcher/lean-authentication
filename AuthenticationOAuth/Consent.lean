@@ -31,10 +31,47 @@ namespace Authentication.OAuth.Consent
 
 open Authentication
 
-/-- One person's answer about one client and one resource. The prefix keeps it out of the way of
-the subjects a host names for itself. -/
+/-- What keeps these subjects out of the way of the ones a host names for itself. -/
+private def marker : List Char := "oauth:".toList
+
+private def separator : Char := '|'
+
+/-- One person's answer about one client and one resource. -/
 def subject (client : ClientId) (resource : ResourceIndicator) : ConsentSubject :=
-  ⟨"oauth:" ++ client.value ++ "|" ++ resource.value⟩
+  ⟨String.ofList (marker ++ client.value.toList ++ [separator] ++ resource.value.toList)⟩
+
+/-- The inverse, so that a host holding a `ConsentState` can reach `revoke` without
+reimplementing the encoding. `none` for a subject this file did not write.
+
+The client is everything up to the first separator, which is the half that cannot contain one:
+a dynamic identifier is base64url and a metadata document identifier is a URL, and neither
+admits a bar. A resource indicator is returned whole, bars and all. -/
+def parts (subject : ConsentSubject) : Option (ClientId × ResourceIndicator) :=
+  let chars := subject.name.toList
+  if chars.take marker.length != marker then none
+  else
+    let body := chars.drop marker.length
+    match body.dropWhile (· != separator) with
+    | [] => none
+    | _ :: resource =>
+      some (⟨String.ofList (body.takeWhile (· != separator))⟩, ⟨String.ofList resource⟩)
+
+/--
+The two are inverse wherever the identifier admits no separator, which is every identifier this
+server will see: a dynamic one is base64url and a metadata document one is a URL, and a bar is
+in neither alphabet. What it buys is that a host acting on a subject acts on the client and the
+resource the decision was about rather than on a guess at them, and that the two halves of the
+encoding cannot drift apart.
+-/
+theorem parts_inverts_subject (client : ClientId) (resource : ResourceIndicator)
+    (h : ∀ c ∈ client.value.toList, c ≠ '|') :
+    parts (subject client resource) = some (client, resource) := by
+  have hp : ∀ a ∈ client.value.toList, (a != separator) = true := fun a ha => by
+    simp [separator, h a ha]
+  unfold parts subject
+  simp
+  rw [List.dropWhile_append_of_pos hp, List.takeWhile_append_of_pos hp]
+  simp
 
 /-- What this account has granted this client for this resource, as it stands now. Silence is
 not consent, and neither is a withdrawal. -/

@@ -1278,6 +1278,20 @@ no `openid` scope.
   amending the request; taking both back from the displayed fields is what stops a consent
   recorded about one resource, or one set of scopes, from producing a code bound to another. That
   the code then carries exactly the scopes the entry beside it records is a theorem.
+- **AUTH-20.14.5** An account MUST be able to be shown what it has connected. Revoking a grant is
+  the operation an account holder's own privacy page performs (AUTH-20.14.3), and a page that
+  cannot name a grant cannot offer to revoke one; the listing is what makes that operation
+  reachable. It is built from the credentials that are live rather than from the consent history,
+  because a consent entry and a grant are different facts and it is the second a person is being
+  offered the chance to end. A row carries what the page must display and what the revoke
+  operation takes, so that every row maps onto an action.
+- **AUTH-20.14.6** The listing MUST NOT fetch. A metadata document client's name comes from the
+  cache or from nowhere, for the reason AUTH-20.6.8 gives: whoever can name a URL would otherwise
+  decide when this server issues a request.
+- **AUTH-20.14.7** `Consent.subject` MUST have an inverse, so that a host holding a consent record
+  can reach the revoke operation without reimplementing the encoding. That the two are inverse is
+  a theorem; an encoding a caller has to reproduce is a public interface whether or not anybody
+  decided to have one.
 
 ### 20.15 Storage
 
@@ -1295,6 +1309,10 @@ no `openid` scope.
   keeps its meaning; the authorisation server ships its own alongside.
 - **AUTH-20.15.5** `OAuthStore.deleteTenant` is the other half of AUTH-4.2.5. A client using both
   ports calls both.
+- **AUTH-20.15.6** The port MUST offer an account-scoped read of the grants that are live, which
+  is what AUTH-20.14.5 is served from. Live means a credential that has neither expired nor been
+  revoked nor been rotated away: a row nobody can meaningfully revoke is worse than no row. The
+  reading of the clock is the caller's, as it is elsewhere in the port.
 
 ### 20.16 Out of scope, and testing
 
@@ -1317,6 +1335,10 @@ performs on a token and the challenge it answers with.
   document client and for a dynamically registered client, a replayed code, a wrong
   `code_verifier`, a token presented to the wrong resource, a rotated refresh token, and a
   loopback redirect on an unregistered port.
+- **AUTH-20.16.4** The listing of AUTH-20.14.5 MUST be covered for the cases the flow will not
+  produce: a grant whose credentials have all lapsed, a grant with no consent entry beside it,
+  and another account's grant. The account scoping is a security property and is stated rather
+  than assumed from the query.
 - **AUTH-20.16.3** The driven checks MUST run against both backends, as AUTH-15.8.2 requires of
   the core store. They run the statements production runs; there is no hand-written fake.
 

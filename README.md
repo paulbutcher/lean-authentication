@@ -258,8 +258,19 @@ everything a consent page must show, including the hosts of the `client_id` and 
 `respond` is a redirect the user agent should follow, success or error; `authenticate` means you
 should run the sign-in flow and ask again; `refuse` means the client could not be established and
 nothing may be sent to it. A grant is recorded as a consent record, so revoking one is
-`Service.revoke` and shows up in `Service.consentHistory` beside everything else the person
-agreed to.
+`Service.revoke` and it shows up in `Service.grants` beside everything else the person agreed to.
+
+A privacy page also needs to say what is connected now, which the history cannot answer: it
+records decisions rather than what is live. `Service.connections` answers from the credentials:
+
+```lean
+Service.connections ports account   -- client, name, origin, resource, scopes, since, lastUsedAt
+```
+
+One row per client and resource that still holds a credential which has neither expired nor been
+revoked, which is exactly what `Service.revoke` takes, so every row maps onto a button. Nothing
+is fetched: a metadata document client's name is whatever the cache holds. `Consent.parts` reads
+a subject from `Service.grants` back as the client and resource it names.
 
 A client identifier is either an `https` URL that resolves to a metadata document the client
 hosts, or one this server issued at `/register`. Both reach the same flow. Documents are cached

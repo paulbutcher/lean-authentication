@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- An account can be shown what it has connected.
 - Credentials that permit nothing are no longer granted.
 - A code issued from a consent decision is bound to what the page displayed, not what the request
   said.
