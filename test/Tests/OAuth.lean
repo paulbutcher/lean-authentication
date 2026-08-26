@@ -205,16 +205,34 @@ private def advertised (document : Json) (field : String) : List String :=
       | _ => none
   | _ => []
 
+/-- The boolean of a JSON field, which the claim about the fetcher below is about. -/
+private def flagged (document : Json) (field : String) : Option Bool :=
+  match (document.getObjVal? field).toOption with
+  | some (.bool value) => some value
+  | _ => none
+
 /-- The metadata document always advertises `S256`, whatever the configuration. A client that
 does not find `code_challenge_methods_supported` must refuse to proceed, so this is the field
 that decides whether this server is usable at all. -/
-theorem metadata_advertises_s256 {tenant : TenantId} (config : OAuthConfig tenant) :
-    advertised (metadataDocument config) "code_challenge_methods_supported" = ["S256"] := rfl
+theorem metadata_advertises_s256 {m : Type → Type} (ports : OAuth.Service.Ports m)
+    {tenant : TenantId} (config : OAuthConfig tenant) :
+    advertised (metadataDocument ports config) "code_challenge_methods_supported" = ["S256"] :=
+  rfl
 
-/-- And it always offers `"none"`, which together with the metadata document flag is what a
-client checks before using a URL as its identifier. -/
-theorem metadata_offers_public_clients {tenant : TenantId} (config : OAuthConfig tenant) :
-    advertised (metadataDocument config) "token_endpoint_auth_methods_supported" = ["none"] := rfl
+/-- And it always offers `"none"`, whatever else it offers: a public client needs it whether or
+not this deployment can fetch a metadata document. -/
+theorem metadata_offers_public_clients {m : Type → Type} (ports : OAuth.Service.Ports m)
+    {tenant : TenantId} (config : OAuthConfig tenant) :
+    advertised (metadataDocument ports config) "token_endpoint_auth_methods_supported"
+      = ["none"] := rfl
+
+/-- Whether a client may use a URL as its identifier is a fact about this deployment's ports
+rather than about the protocol, and the document reports that port: the flag is `true` exactly
+where a fetcher is wired, so what is advertised and what can be resolved cannot disagree. -/
+theorem metadata_flag_follows_the_fetcher {m : Type → Type} (ports : OAuth.Service.Ports m)
+    {tenant : TenantId} (config : OAuthConfig tenant) :
+    flagged (metadataDocument ports config) "client_id_metadata_document_supported"
+      = some ports.documents.isSome := rfl
 
 /-! ## The fakes -/
 
@@ -327,6 +345,13 @@ private def refusal {tenant : TenantId} : OAuth.Service.Outcome tenant → Optio
   | .refuse error => some error.error
   | _ => none
 
+/-- What a refusal tells whoever is reading it, rather than the code a client acts on. -/
+private def reason {tenant : TenantId} : OAuth.Service.Outcome tenant → Option String
+  | .refuse error => some error.description
+  | _ => none
+
+private def mentions (text word : String) : Bool := (text.splitOn word).length > 1
+
 private def rejected {tenant : TenantId} (expected : AccessToken.Rejection) :
     Except AccessToken.Rejection (OAuth.Service.TokenClaims tenant) → Bool
   | .error actual => actual == expected
@@ -347,7 +372,7 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
   let tenant : TenantId := ⟨label ++ "-oauth"⟩
   let config : OAuthConfig tenant :=
     OAuthConfig.standard ⟨"https://auth.example.test"⟩ [⟨"files:read"⟩, ⟨"files:write"⟩]
-  let ports : OAuth.Service.Ports IO := { store, oauth, documents, peppers }
+  let ports : OAuth.Service.Ports IO := { store, oauth, documents := some documents, peppers }
   oauth.deleteTenant tenant
   store.deleteTenant tenant
   let now ← clockRef.get
@@ -458,6 +483,13 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
     (authorizeParams "not-a-registered-client" webRedirect "files:read") session
   let privateHost ← OAuth.Service.authorize ports config
     (authorizeParams "https://169.254.169.254/client.json" webRedirect "files:read") session
+  -- The same identifier against a deployment with no fetcher wired, and against one whose
+  -- fetcher has nothing to offer. Both are invalid_client, and the reasons must not read alike:
+  -- one is what this server does not do, the other is a request that failed.
+  let noFetcher ← OAuth.Service.authorize { ports with documents := none } config
+    (authorizeParams clientDocumentUrl webRedirect "files:read") session
+  let fetchFailed ← OAuth.Service.authorize ports config
+    (authorizeParams "https://other.example.test/client.json" webRedirect "files:read") session
   let noResource ← OAuth.Service.authorize ports config
     ((authorizeParams clientDocumentUrl webRedirect "files:read").filter (·.1 != "resource"))
     session
@@ -593,6 +625,10 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
         refusal unknown == some .invalidClient)
     , (s!"{label}: a client identifier naming a private address is refused",
         refusal privateHost == some .invalidClient)
+    , (s!"{label}: a URL client identifier is refused where no fetcher is wired",
+        refusal noFetcher == some .invalidClient && refusal fetchFailed == some .invalidClient)
+    , (s!"{label}: and the refusal names the mechanism rather than a fetch that failed",
+        (reason noFetcher).any (mentions · "register") && reason noFetcher != reason fetchFailed)
     , (s!"{label}: a request with no resource is refused as invalid_target",
         (location noResource).bind (queryValue · "error") == some "invalid_target")
     , (s!"{label}: an error response carries iss too",
@@ -647,7 +683,7 @@ lapsed, a grant with no consent entry beside it, and somebody else's grant.
 def connectionChecks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
     IO (List (String × Bool)) := do
   let tenant : TenantId := ⟨label ++ "-connections"⟩
-  let ports : OAuth.Service.Ports IO := { store, oauth, documents, peppers }
+  let ports : OAuth.Service.Ports IO := { store, oauth, documents := some documents, peppers }
   oauth.deleteTenant tenant
   store.deleteTenant tenant
   let now ← clockRef.get

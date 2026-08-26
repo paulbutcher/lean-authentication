@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import AuthenticationOAuth.Config
+public import AuthenticationOAuth.Ports
 public import Json
 
 /-!
@@ -21,14 +22,20 @@ find it must refuse to proceed; `client_id_metadata_document_supported` together
 identifier; and `authorization_response_iss_parameter_supported` is what makes a missing `iss` a
 reason to reject the response rather than to shrug.
 
-None of the four is configurable, because none of them describes a choice a deployment has.
+Three of the four are not configurable, because none of them describes a choice a deployment has.
+The fourth is not a fact about this library at all: whether a client metadata document can be
+fetched depends on where the server is standing, what egress it has and what was wired into
+`Ports.documents`, so the document reports that port rather than a constant. A client believes a
+metadata document ahead of a refusal, so advertising a mechanism that will be refused does not
+leave it two ways in; it leaves one way in and one that ends there.
 -/
 
 @[expose] public section
 
 namespace Authentication.OAuth
 
-def metadataDocument {tenant : TenantId} (config : OAuthConfig tenant) : Json :=
+def metadataDocument {m : Type → Type} {tenant : TenantId} (ports : Service.Ports m)
+    (config : OAuthConfig tenant) : Json :=
   Json.mkObj
     [ ("issuer", .str config.issuer),
       ("authorization_endpoint", .str config.authorizationEndpoint),
@@ -41,7 +48,7 @@ def metadataDocument {tenant : TenantId} (config : OAuthConfig tenant) : Json :=
       ("grant_types_supported", .arr #[.str "authorization_code", .str "refresh_token"]),
       ("token_endpoint_auth_methods_supported", .arr #[.str "none"]),
       ("code_challenge_methods_supported", .arr #[.str "S256"]),
-      ("client_id_metadata_document_supported", .bool true),
+      ("client_id_metadata_document_supported", .bool ports.documents.isSome),
       ("authorization_response_iss_parameter_supported", .bool true) ]
 
 end Authentication.OAuth

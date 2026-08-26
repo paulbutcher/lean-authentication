@@ -195,8 +195,10 @@ must report the body's size and whatever freshness the response's cache headers 
 loopback addresses, and that is a floor rather than a substitute: a name that resolves to one
 passes it, and only the adapter is in a position to notice.
 
-A deployment that supplies no adapter is not broken. Dynamic registration still works, and every
-metadata document client is refused with `invalid_client`.
+A deployment that supplies no adapter is not broken, and it is no longer silently narrower than
+its metadata document says. `documents` is absent, the document reports that, and a client reads
+it and registers dynamically instead. One that asks anyway is refused with `invalid_client` and
+told that URL client identifiers are not accepted here, rather than that a fetch failed.
 
 ## The authorisation server records no audit events of its own (AUTH-20.17.10)
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+Metadata now consistent with a client's true capabilities
+
 ## [0.10.0] - 2026-08-26
 
 - An account can be shown what it has connected.

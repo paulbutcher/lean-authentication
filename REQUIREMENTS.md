@@ -1051,7 +1051,11 @@ the account that a session identified.
   port is added for either.
 - **AUTH-20.2.2** The only new port is `ClientDocuments.fetch : String → m (Except String
   FetchedDocument)`, which fetches a client's metadata document. The protocol core MUST perform
-  no I/O of its own.
+  no I/O of its own. The port is optional and absent by default: whether there is anywhere to
+  fetch from depends on where the server is standing rather than on the protocol, and a
+  deployment that has not thought about it is claiming no capability. Where it is absent, a URL
+  client identifier MUST be refused for that reason rather than as a fetch that failed, which is
+  what whoever is reading the refusal needs to know.
 - **AUTH-20.2.3** The fetch result MUST carry more than the document. Caching is required to
   respect the response's HTTP cache headers, which do not survive being parsed into JSON, and
   the recommended size limit is on the bytes received; both therefore cross the seam as data and
@@ -1239,10 +1243,15 @@ months. A client that has only the second has no other way to obtain an identifi
 - **AUTH-20.12.2** `code_challenge_methods_supported` MUST always be `["S256"]`, whatever the
   configuration. A client that does not find the field must refuse to proceed, so it is the field
   that decides whether this server is usable at all. That it is always there is a theorem.
-- **AUTH-20.12.3** `token_endpoint_auth_methods_supported` MUST always contain `"none"`, and
-  `client_id_metadata_document_supported` MUST be `true`: a client selects metadata documents only
-  when both are present, and falls back to dynamic registration otherwise.
-- **AUTH-20.12.4** Serving the document is the caller's. It belongs at
+- **AUTH-20.12.3** `token_endpoint_auth_methods_supported` MUST always contain `"none"`, whatever
+  else the document says. Every client here is a public client and needs it, whether or not
+  metadata documents are on offer.
+- **AUTH-20.12.4** `client_id_metadata_document_supported` MUST report whether this deployment can
+  fetch a client metadata document, which is a fact about its ports rather than about the
+  protocol. A client believes the document ahead of a refusal, so advertising a mechanism that
+  will be refused does not leave it two ways in; it leaves one way in and one that ends there. The
+  flag and the port are read from the same field, so they cannot disagree.
+- **AUTH-20.12.5** Serving the document is the caller's. It belongs at
   `/.well-known/oauth-authorization-server` with the issuer's path inserted after the suffix, and
   where a route lives is not this library's business.
 

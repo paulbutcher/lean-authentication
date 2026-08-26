@@ -12,6 +12,7 @@ public import AuthenticationOAuth.Grant
 public import AuthenticationOAuth.Metadata
 public import AuthenticationOAuth.Pkce
 public import AuthenticationOAuth.Port.ClientMetadata
+public import AuthenticationOAuth.Ports
 public import AuthenticationOAuth.Registration
 public import AuthenticationOAuth.Request
 public import AuthenticationOAuth.Scope

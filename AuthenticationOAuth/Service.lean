@@ -10,6 +10,7 @@ public import Authentication.Store
 public import AuthenticationOAuth.Config
 public import AuthenticationOAuth.Consent
 public import AuthenticationOAuth.Port.ClientMetadata
+public import AuthenticationOAuth.Ports
 public import AuthenticationOAuth.Registration
 public import AuthenticationOAuth.Request
 public import AuthenticationOAuth.Store
@@ -34,15 +35,6 @@ public section
 namespace Authentication.OAuth.Service
 
 open Authentication Codec
-
-/-- The implementations chosen at startup, together with the peppers in force. `store` is the
-core port, reached for the browser's session and for consent; a grant is a consent record and
-was never going to live anywhere else. -/
-structure Ports (m : Type → Type) where
-  store : AuthStore m
-  oauth : OAuthStore m
-  documents : ClientDocuments m
-  peppers : PepperRing
 
 private def randomValue {m : Type → Type} [Monad m] [RandomBytes m] (bytes : Nat) :
     m (Except String CredentialValue) := do
@@ -168,12 +160,12 @@ private def refuseWith {tenant : TenantId} (error : OAuthError) (description : S
 cached, which the draft §5 requires: a client that publishes a broken document and fixes it must
 not be refused until a cache entry expires. -/
 private def documentClient {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
-    (config : OAuthConfig tenant) (now : Timestamp) (id : ClientId) (url : String) :
-    m (Except ErrorResponse Client) := do
+    (documents : ClientDocuments m) (config : OAuthConfig tenant) (now : Timestamp) (id : ClientId)
+    (url : String) : m (Except ErrorResponse Client) := do
   match ← ports.oauth.cachedDocument tenant id now with
   | some cached => pure (.ok { id, metadata := cached.metadata, origin := .metadataDocument })
   | none =>
-    match ← ports.documents.fetch url with
+    match ← documents.fetch url with
     | .error _ =>
       pure (.error
         { error := .invalidClient
@@ -208,6 +200,10 @@ mechanisms costs. Everything downstream of here sees a `Client`.
 A URL-shaped identifier that is not a usable metadata document URL is refused rather than looked
 for among the dynamic registrations: otherwise whoever can register dynamically chooses what a
 URL-shaped identifier means.
+
+A deployment with no fetcher has one way in rather than two, and its metadata document says so,
+so a URL identifier is refused for the reason that is true of it rather than as a fetch that
+failed.
 -/
 private def resolveClient {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
     (config : OAuthConfig tenant) (now : Timestamp) (id : ClientId) :
@@ -217,7 +213,13 @@ private def resolveClient {m : Type → Type} [Monad m] {tenant : TenantId} (por
     pure (.error
       { error := .invalidClient
         description := "a URL client identifier must be https, have a path, and name a public host" })
-  | .metadataDocument url => documentClient ports config now id url
+  | .metadataDocument url =>
+    match ports.documents with
+    | none =>
+      pure (.error
+        { error := .invalidClient
+          description := "this server does not accept URL client identifiers; register instead" })
+    | some documents => documentClient ports documents config now id url
   | .dynamic =>
     match ← ports.oauth.clientById tenant id with
     | none => pure (.error { error := .invalidClient, description := "no such client" })
