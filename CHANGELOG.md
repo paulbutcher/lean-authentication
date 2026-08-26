@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.12.0] - 2026-08-26
 
 `metadataDocument` takes the fetcher, not `Ports`
 
