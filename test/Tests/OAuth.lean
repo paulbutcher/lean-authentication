@@ -214,25 +214,25 @@ private def flagged (document : Json) (field : String) : Option Bool :=
 /-- The metadata document always advertises `S256`, whatever the configuration. A client that
 does not find `code_challenge_methods_supported` must refuse to proceed, so this is the field
 that decides whether this server is usable at all. -/
-theorem metadata_advertises_s256 {m : Type → Type} (ports : OAuth.Service.Ports m)
+theorem metadata_advertises_s256 {m : Type → Type} (documents : Option (ClientDocuments m))
     {tenant : TenantId} (config : OAuthConfig tenant) :
-    advertised (metadataDocument ports config) "code_challenge_methods_supported" = ["S256"] :=
-  rfl
+    advertised (metadataDocument documents config) "code_challenge_methods_supported"
+      = ["S256"] := rfl
 
 /-- And it always offers `"none"`, whatever else it offers: a public client needs it whether or
 not this deployment can fetch a metadata document. -/
-theorem metadata_offers_public_clients {m : Type → Type} (ports : OAuth.Service.Ports m)
+theorem metadata_offers_public_clients {m : Type → Type} (documents : Option (ClientDocuments m))
     {tenant : TenantId} (config : OAuthConfig tenant) :
-    advertised (metadataDocument ports config) "token_endpoint_auth_methods_supported"
+    advertised (metadataDocument documents config) "token_endpoint_auth_methods_supported"
       = ["none"] := rfl
 
-/-- Whether a client may use a URL as its identifier is a fact about this deployment's ports
+/-- Whether a client may use a URL as its identifier is a fact about this deployment's fetcher
 rather than about the protocol, and the document reports that port: the flag is `true` exactly
 where a fetcher is wired, so what is advertised and what can be resolved cannot disagree. -/
-theorem metadata_flag_follows_the_fetcher {m : Type → Type} (ports : OAuth.Service.Ports m)
-    {tenant : TenantId} (config : OAuthConfig tenant) :
-    flagged (metadataDocument ports config) "client_id_metadata_document_supported"
-      = some ports.documents.isSome := rfl
+theorem metadata_flag_follows_the_fetcher {m : Type → Type}
+    (documents : Option (ClientDocuments m)) {tenant : TenantId} (config : OAuthConfig tenant) :
+    flagged (metadataDocument documents config) "client_id_metadata_document_supported"
+      = some documents.isSome := rfl
 
 /-! ## The fakes -/
 
@@ -490,6 +490,11 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
     (authorizeParams clientDocumentUrl webRedirect "files:read") session
   let fetchFailed ← OAuth.Service.authorize ports config
     (authorizeParams "https://other.example.test/client.json" webRedirect "files:read") session
+  -- What the document offers, against what the flow does with the offer, for this deployment and
+  -- for the same one with the fetcher taken out.
+  let mechanism := "client_id_metadata_document_supported"
+  let offered := flagged (metadataDocument ports.documents config) mechanism
+  let withheld := flagged (metadataDocument (none : Option (ClientDocuments IO)) config) mechanism
   let noResource ← OAuth.Service.authorize ports config
     ((authorizeParams clientDocumentUrl webRedirect "files:read").filter (·.1 != "resource"))
     session
@@ -629,6 +634,8 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
         refusal noFetcher == some .invalidClient && refusal fetchFailed == some .invalidClient)
     , (s!"{label}: and the refusal names the mechanism rather than a fetch that failed",
         (reason noFetcher).any (mentions · "register") && reason noFetcher != reason fetchFailed)
+    , (s!"{label}: the document offers the mechanism exactly where the flow honours it",
+        offered == some firstPrompt.isSome && withheld == some (prompt? noFetcher).isSome)
     , (s!"{label}: a request with no resource is refused as invalid_target",
         (location noResource).bind (queryValue · "error") == some "invalid_target")
     , (s!"{label}: an error response carries iss too",

@@ -1247,10 +1247,11 @@ months. A client that has only the second has no other way to obtain an identifi
   else the document says. Every client here is a public client and needs it, whether or not
   metadata documents are on offer.
 - **AUTH-20.12.4** `client_id_metadata_document_supported` MUST report whether this deployment can
-  fetch a client metadata document, which is a fact about its ports rather than about the
-  protocol. A client believes the document ahead of a refusal, so advertising a mechanism that
-  will be refused does not leave it two ways in; it leaves one way in and one that ends there. The
-  flag and the port are read from the same field, so they cannot disagree.
+  fetch a client metadata document, which is a fact about the fetcher it was wired with rather
+  than about the protocol. A client believes the document ahead of a refusal, so advertising a
+  mechanism that will be refused does not leave it two ways in; it leaves one way in and one that
+  ends there. The document is built from that fetcher rather than from a second statement of what
+  it can do, so the two cannot disagree.
 - **AUTH-20.12.5** Serving the document is the caller's. It belongs at
   `/.well-known/oauth-authorization-server` with the issuer's path inserted after the suffix, and
   where a route lives is not this library's business.

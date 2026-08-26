@@ -5,7 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import AuthenticationOAuth.Config
-public import AuthenticationOAuth.Ports
+public import AuthenticationOAuth.Port.ClientMetadata
 public import Json
 
 /-!
@@ -24,8 +24,8 @@ reason to reject the response rather than to shrug.
 
 Three of the four are not configurable, because none of them describes a choice a deployment has.
 The fourth is not a fact about this library at all: whether a client metadata document can be
-fetched depends on where the server is standing, what egress it has and what was wired into
-`Ports.documents`, so the document reports that port rather than a constant. A client believes a
+fetched depends on where the server is standing, what egress it has and which fetcher was wired,
+so the document is handed that port and reports whether there is one. A client believes a
 metadata document ahead of a refusal, so advertising a mechanism that will be refused does not
 leave it two ways in; it leaves one way in and one that ends there.
 -/
@@ -34,7 +34,7 @@ leave it two ways in; it leaves one way in and one that ends there.
 
 namespace Authentication.OAuth
 
-def metadataDocument {m : Type → Type} {tenant : TenantId} (ports : Service.Ports m)
+def metadataDocument {m : Type → Type} {tenant : TenantId} (documents : Option (ClientDocuments m))
     (config : OAuthConfig tenant) : Json :=
   Json.mkObj
     [ ("issuer", .str config.issuer),
@@ -48,7 +48,7 @@ def metadataDocument {m : Type → Type} {tenant : TenantId} (ports : Service.Po
       ("grant_types_supported", .arr #[.str "authorization_code", .str "refresh_token"]),
       ("token_endpoint_auth_methods_supported", .arr #[.str "none"]),
       ("code_challenge_methods_supported", .arr #[.str "S256"]),
-      ("client_id_metadata_document_supported", .bool ports.documents.isSome),
+      ("client_id_metadata_document_supported", .bool documents.isSome),
       ("authorization_response_iss_parameter_supported", .bool true) ]
 
 end Authentication.OAuth

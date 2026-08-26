@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+`metadataDocument` takes the fetcher, not `Ports`
+
 ## [0.11.0] - 2026-08-26
 
 Metadata now consistent with a client's true capabilities

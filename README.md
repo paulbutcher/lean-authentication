@@ -242,11 +242,11 @@ def oauthConfig : OAuthConfig tenant :=
   OAuthConfig.standard ⟨"https://auth.example.com"⟩ [⟨"files:read"⟩, ⟨"files:write"⟩]
 ```
 
-`metadataDocument oauthPorts oauthConfig` is the RFC 8414 document to serve at
-`/.well-known/oauth-authorization-server`. It reports `documents` in
-`client_id_metadata_document_supported`, so a deployment with no fetcher advertises no mechanism
-it would then refuse, and a client registers dynamically instead. Serve the three endpoints
-yourself and hand the decoded parameters over:
+`metadataDocument oauthPorts.documents oauthConfig` is the RFC 8414 document to serve at
+`/.well-known/oauth-authorization-server`. The fetcher it is handed is what
+`client_id_metadata_document_supported` reports, so a deployment with no fetcher advertises no
+mechanism it would then refuse, and a client registers dynamically instead. Serve the three
+endpoints yourself and hand the decoded parameters over:
 
 ```lean
 Service.authorize ports config params sessionCookie   -- Outcome: consent, respond, authenticate, refuse
