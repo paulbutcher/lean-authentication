@@ -1185,6 +1185,14 @@ months. A client that has only the second has no other way to obtain an identifi
 - **AUTH-20.9.4** `scopes_supported` is the minimal set for basic functionality. A resource
   server naming more in a challenge is expected rather than an error, so an authorization request
   is not refused for asking for a scope the metadata document does not list.
+- **AUTH-20.9.5** A credential that permits nothing is not issued. AUTH-20.9.2 is satisfied
+  vacuously by a request that named no scope, so it needs its other half: a request naming no
+  scope is not covered by any standing consent and is asked about, an approval that narrows to
+  nothing is taken as a refusal, and an authorization code or refresh token whose scope set is
+  empty is `invalid_grant`. OAuth 2.1 §3.2.2.1 allows a server to answer a scopeless request with
+  a default scope or with a refusal; a default is the host's to choose, so what is left here is
+  the refusal. Granting nothing is neither, and it is the answer that looks like success at every
+  layer.
 
 ### 20.10 Codes and tokens
 

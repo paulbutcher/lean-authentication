@@ -44,6 +44,17 @@ def granted {tenant : TenantId} (history : List (ConsentEntry tenant)) (client :
   | some entry => if entry.act == .granted then Scope.parse entry.version else []
   | none => []
 
+/-- Whether what stands granted answers this request on its own, so that nobody need be asked
+again.
+
+A request that named no scopes is answered by nothing. `Scope.subset` is vacuously true of the
+empty set and would report such a request as covered by a consent that does not exist; the
+question here is not whether one set is contained in another but whether a decision has already
+been taken, and about a request that asked for nothing none has.
+-/
+def covers (requested granted : List Scope) : Bool :=
+  !requested.isEmpty && Scope.subset requested granted
+
 /-- Whether anything at all stands granted, which is what decides whether a refusal is also a
 withdrawal. -/
 def standing {tenant : TenantId} (history : List (ConsentEntry tenant)) (client : ClientId)

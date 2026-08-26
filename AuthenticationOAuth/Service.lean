@@ -110,6 +110,28 @@ inductive ConsentDecision (tenant : TenantId) where
   | granted (prompt : ConsentPrompt tenant) (scopes : List Scope)
   | denied (prompt : ConsentPrompt tenant)
 
+namespace ConsentDecision
+
+@[expose] def prompt {tenant : TenantId} : ConsentDecision tenant → ConsentPrompt tenant
+  | .granted value _ | .denied value => value
+
+/--
+What the answer amounts to: the scopes to record, or nothing at all.
+
+Approval is narrowed to the request, so a host cannot record a consent to more than was asked
+for by passing back a wider set than the page displayed. What survives that narrowing may be
+empty, and an approval of nothing is a refusal spelled the other way: it is what the person's
+answer meant, it takes the withdrawal path a refusal takes, and it sends the client the
+`access_denied` it knows how to act on rather than a credential that reaches nothing.
+-/
+@[expose] def settled {tenant : TenantId} : ConsentDecision tenant → Option (List Scope)
+  | .denied _ => none
+  | .granted value approved =>
+    let consented := Scope.granted value.requestedScopes approved
+    if consented.isEmpty then none else some consented
+
+end ConsentDecision
+
 inductive Outcome (tenant : TenantId) where
   /-- Render a consent page from this and call `conclude` with the answer. -/
   | consent (prompt : ConsentPrompt tenant)
@@ -279,7 +301,7 @@ def authorize {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : 
               let account := live.account
               let history ← ports.store.consentHistory tenant account
               let granted := Consent.granted history request.clientId request.resource
-              if !request.prompt.contains .consent && Scope.subset request.scopes granted then
+              if !request.prompt.contains .consent && Consent.covers request.scopes granted then
                 issueCode ports config now request account granted
               else if silent then
                 pure (.respond (authorizationResponse config redirectUri request.state
@@ -314,10 +336,11 @@ def conclude {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : T
     (ports : Ports m) (config : OAuthConfig tenant) (decision : ConsentDecision tenant) :
     m (Outcome tenant) := do
   let now ← Clock.now
-  match decision with
-  | .denied prompt =>
+  let prompt := decision.prompt
+  let subject := Consent.subject prompt.request.clientId prompt.resource
+  match decision.settled with
+  | none =>
     let history ← ports.store.consentHistory tenant prompt.account
-    let subject := Consent.subject prompt.request.clientId prompt.resource
     if Consent.standing history prompt.request.clientId prompt.resource then
       ports.store.recordConsent tenant
         { account := prompt.account, subject, version := "", act := .withdrawn, recordedAt := now }
@@ -325,11 +348,7 @@ def conclude {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : T
       ports.oauth.revokeGrants tenant now prompt.account prompt.request.clientId prompt.resource
     pure (.respond (authorizationResponse config prompt.request.redirectUri prompt.request.state
       [("error", OAuthError.accessDenied.code)]))
-  | .granted prompt approved =>
-    -- Narrowed to the request, so a host cannot record a consent to more than was asked for by
-    -- passing back a wider set than the page displayed.
-    let consented := Scope.granted prompt.requestedScopes approved
-    let subject := Consent.subject prompt.request.clientId prompt.resource
+  | some consented =>
     ports.store.recordConsent tenant
       { account := prompt.account
         subject
@@ -376,27 +395,33 @@ only where the configuration allows one; RFC 6749 §1.5 leaves that to the serve
 private def issueTokens {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : OAuthConfig tenant) (now : Timestamp)
     (entitlement : Entitlement tenant) : m (Except ErrorResponse TokenResponse) := do
-  match ← randomValue 32 with
-  | .error _ =>
-    pure (.error { error := .serverError, description := "no token could be generated" })
-  | .ok accessValue =>
-    ports.oauth.createAccessToken tenant
-      (entitlement.accessToken (ports.peppers.current.digest accessValue) now
-        config.accessTokenLifetime)
-    let refresh ← if config.refreshTokensEnabled then
-        match ← randomValue 32 with
-        | .error _ => pure none
-        | .ok refreshValue =>
-          ports.oauth.createRefreshToken tenant
-            (entitlement.refreshToken (ports.peppers.current.digest refreshValue) now
-              config.refreshTokenLifetime)
-          pure (some refreshValue)
-      else pure none
-    pure (.ok
-      { accessToken := accessValue
-        expiresIn := config.accessTokenLifetime.seconds
-        scope := entitlement.scopes
-        refreshToken := refresh })
+  -- A credential that permits nothing is not a credential. Refusing it here rather than issuing
+  -- it is what lets a client recover: `invalid_grant` sends it back to the authorization
+  -- endpoint, where it is asked again, and every other answer leaves it refreshing forever.
+  if entitlement.scopes.isEmpty then
+    pure (.error { error := .invalidGrant, description := "the grant permits nothing" })
+  else
+    match ← randomValue 32 with
+    | .error _ =>
+      pure (.error { error := .serverError, description := "no token could be generated" })
+    | .ok accessValue =>
+      ports.oauth.createAccessToken tenant
+        (entitlement.accessToken (ports.peppers.current.digest accessValue) now
+          config.accessTokenLifetime)
+      let refresh ← if config.refreshTokensEnabled then
+          match ← randomValue 32 with
+          | .error _ => pure none
+          | .ok refreshValue =>
+            ports.oauth.createRefreshToken tenant
+              (entitlement.refreshToken (ports.peppers.current.digest refreshValue) now
+                config.refreshTokenLifetime)
+            pure (some refreshValue)
+        else pure none
+      pure (.ok
+        { accessToken := accessValue
+          expiresIn := config.accessTokenLifetime.seconds
+          scope := entitlement.scopes
+          refreshToken := refresh })
 
 /-- A code presented twice, or two requests racing to spend one, is evidence that somebody other
 than the client has it. Everything issued under the grant goes (OAuth 2.1 §4.1.3). -/

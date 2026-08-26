@@ -143,6 +143,42 @@ theorem access_token_scopes {tenant : TenantId} (entitlement : Entitlement tenan
     (digest : Digest) (now : Timestamp) (lifetime : Duration) :
     (entitlement.accessToken digest now lifetime).scopes = entitlement.scopes := rfl
 
+/-- A consent that is recorded as granted grants something. An approval that narrows away to
+nothing takes the refusal path instead, so no entry is ever written whose scopes reach nothing
+and which every later request would then read back as a standing consent. -/
+theorem settled_grants_something {tenant : TenantId}
+    {decision : OAuth.Service.ConsentDecision tenant} {scopes : List Scope}
+    (h : decision.settled = some scopes) : scopes.isEmpty = false := by
+  unfold OAuth.Service.ConsentDecision.settled at h
+  split at h
+  · simp at h
+  · dsimp only at h
+    split at h
+    · simp at h
+    · rename_i condition
+      simp only [Option.some.injEq] at h
+      subst h
+      simpa using condition
+
+/-- And it grants no more than was asked for: what is recorded is a subset of what the page
+displayed, whatever the host passes back. -/
+theorem settled_is_within_the_request {tenant : TenantId}
+    {decision : OAuth.Service.ConsentDecision tenant} {scopes : List Scope}
+    (h : decision.settled = some scopes) :
+    Scope.subset scopes decision.prompt.requestedScopes = true := by
+  unfold OAuth.Service.ConsentDecision.settled at h
+  split at h
+  · simp at h
+  · dsimp only at h
+    split at h
+    · simp at h
+    · simp only [Option.some.injEq] at h
+      subst h
+      simp only [OAuth.Service.ConsentDecision.prompt, Scope.subset, Scope.granted,
+        List.all_eq_true]
+      intro scope member
+      simpa using (List.mem_filter.mp member).left
+
 /-- The strings of a JSON array field, which is what the metadata claims below are about. -/
 private def advertised (document : Json) (field : String) : List String :=
   match (document.getObjVal? field).toOption with
@@ -229,6 +265,19 @@ private def authorizeParams (client redirect scope : String) : Params :=
     ("code_challenge_method", "S256"),
     ("resource", resource) ]
 
+/-- The same request with the resource and the scope parameter both open. `none` omits `scope`
+altogether, which is the case that matters, and the resource is open so that a scope test does
+not share a consent subject with the flow above it. -/
+private def scopeParams (client redirect target : String) (scope : Option String) : Params :=
+  [ ("response_type", "code"),
+    ("client_id", client),
+    ("redirect_uri", redirect),
+    ("state", "opaque-state"),
+    ("code_challenge", Pkce.challengeOf verifier),
+    ("code_challenge_method", "S256"),
+    ("resource", target) ]
+  ++ (match scope with | none => [] | some value => [("scope", value)])
+
 private def exchangeParams (client code redirect : String) : Params :=
   [ ("grant_type", "authorization_code"),
     ("client_id", client),
@@ -263,6 +312,10 @@ private def rejected {tenant : TenantId} (expected : AccessToken.Rejection) :
     Except AccessToken.Rejection (OAuth.Service.TokenClaims tenant) → Bool
   | .error actual => actual == expected
   | .ok _ => false
+
+private def tokenError : Except ErrorResponse OAuth.Service.TokenResponse → Option OAuthError
+  | .error response => some response.error
+  | .ok _ => none
 
 /--
 Everything that has to be driven, against whichever backend it is handed.
@@ -392,6 +445,60 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
   let plainChallenge ← OAuth.Service.authorize ports config
     (((authorizeParams clientDocumentUrl webRedirect "files:read").filter
       (·.1 != "code_challenge_method")) ++ [("code_challenge_method", "plain")]) session
+  -- A request that names no scope, against two resources this account has decided nothing about
+  -- and then one it has.
+  let scopeTarget := "https://scoped.example.test/mcp"
+  let emptyTarget := "https://empty.example.test/mcp"
+  let scopeless ← OAuth.Service.authorize ports config
+    (scopeParams clientDocumentUrl webRedirect emptyTarget none) session
+  let bothAsked ← OAuth.Service.authorize ports config
+    (scopeParams clientDocumentUrl webRedirect scopeTarget (some "files:read files:write")) session
+  let bothGranted ← match prompt? bothAsked with
+    | none => pure none
+    | some p =>
+      location <$> OAuth.Service.conclude ports config
+        (.granted p [⟨"files:read"⟩, ⟨"files:write"⟩])
+  let scopelessAgain ← OAuth.Service.authorize ports config
+    (scopeParams clientDocumentUrl webRedirect scopeTarget none) session
+  let narrower ← OAuth.Service.authorize ports config
+    (scopeParams clientDocumentUrl webRedirect scopeTarget (some "files:read")) session
+  -- An approval that narrows away to nothing, against the resource nothing stands granted for,
+  -- so that what the history gains is the whole of what the decision wrote.
+  let approvedNothing ← match prompt? scopeless with
+    | none => pure none
+    | some p => location <$> OAuth.Service.conclude ports config (.granted p [])
+  let emptySubject := Consent.subject ⟨clientDocumentUrl⟩ ⟨emptyTarget⟩
+  let afterApprovingNothing ← store.consentHistory tenant account
+  -- Credentials that permit nothing, which nothing above this can produce any more. They are
+  -- built against the store directly because a grant recorded before the refusals above went in
+  -- is exactly what outlives them.
+  let emptyCodeValue : CredentialValue := ⟨"a-code-that-permits-nothing"⟩
+  oauth.createCode tenant
+    { grant := ⟨"empty-grant-code"⟩
+      digest := peppers.current.digest emptyCodeValue
+      account
+      client := ⟨clientDocumentUrl⟩
+      redirectUri := webRedirect
+      redirectUriGiven := true
+      codeChallenge := Pkce.challengeOf verifier
+      resource := ⟨resource⟩
+      scopes := []
+      issuedAt := now
+      expiresAt := ⟨now.epochSeconds + 300⟩ }
+  let emptyCodeTokens ← OAuth.Service.token ports config
+    (exchangeParams clientDocumentUrl emptyCodeValue.encoded webRedirect)
+  let emptyRefreshValue : CredentialValue := ⟨"a-refresh-token-that-permits-nothing"⟩
+  oauth.createRefreshToken tenant
+    { grant := ⟨"empty-grant-refresh"⟩
+      digest := peppers.current.digest emptyRefreshValue
+      account
+      client := ⟨clientDocumentUrl⟩
+      resource := ⟨resource⟩
+      scopes := []
+      issuedAt := now
+      expiresAt := ⟨now.epochSeconds + 3600⟩ }
+  let emptyRefreshTokens ← OAuth.Service.token ports config
+    (refreshParams emptyRefreshValue.encoded)
   let pruned ← oauth.pruneClients tenant ⟨now.epochSeconds + 1000⟩
   let prunedClient ← oauth.clientById tenant ⟨dynamicId⟩
   let history ← store.consentHistory tenant account
@@ -461,6 +568,22 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
         (location plainChallenge).bind (queryValue · "error") == some "invalid_request")
     , (s!"{label}: unused dynamic registrations can be pruned",
         pruned == 1 && prunedClient.isNone)
+    , (s!"{label}: a request naming no scope is asked about rather than granted silently",
+        (prompt? scopeless).isSome)
+    , (s!"{label}: and the page is told the request named nothing",
+        (prompt? scopeless).map (·.requestedScopes) == some [])
+    , (s!"{label}: a request naming no scope is asked about even where a consent stands",
+        bothGranted.isSome && (prompt? scopelessAgain).isSome)
+    , (s!"{label}: a request within a standing consent is still not asked about again",
+        (location narrower).bind (queryValue · "code") |>.isSome)
+    , (s!"{label}: an approval that narrows to nothing is a refusal",
+        approvedNothing.bind (queryValue · "error") == some "access_denied")
+    , (s!"{label}: and it records no consent",
+        !afterApprovingNothing.any fun entry => entry.subject == emptySubject)
+    , (s!"{label}: a code that permits nothing is refused rather than exchanged",
+        tokenError emptyCodeTokens == some .invalidGrant)
+    , (s!"{label}: a refresh token that permits nothing is refused rather than rotated",
+        tokenError emptyRefreshTokens == some .invalidGrant)
     , (s!"{label}: the grant is a consent record",
         history.any fun entry =>
           entry.subject == Consent.subject ⟨clientDocumentUrl⟩ ⟨resource⟩
