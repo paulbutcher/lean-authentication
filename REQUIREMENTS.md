@@ -1272,6 +1272,12 @@ no `openid` scope.
 - **AUTH-20.14.3** Revoking a grant is `withdrawConsent`, and it revokes everything issued under
   the grant in the same call. A consent nobody has and a token that still works is the worst of
   both.
+- **AUTH-20.14.4** A code issued from a consent decision MUST be bound to what the page displayed
+  rather than to what the request said, wherever the two differ. The prompt restates the resource
+  and the requested scopes because a page has to show them, and a host that amends either is
+  amending the request; taking both back from the displayed fields is what stops a consent
+  recorded about one resource, or one set of scopes, from producing a code bound to another. That
+  the code then carries exactly the scopes the entry beside it records is a theorem.
 
 ### 20.15 Storage
 

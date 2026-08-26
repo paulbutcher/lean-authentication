@@ -81,9 +81,11 @@ def authorizationResponse {tenant : TenantId} (config : OAuthConfig tenant) (tar
 /-- What a consent page has to show. Everything on it is either the person's own decision to
 make or something a specification requires be displayed. -/
 structure ConsentPrompt (tenant : TenantId) where
-  /-- Handed back to `conclude` unchanged. It carries no signature because whoever receives it
-  is this process: a host that would tamper with it can call `conclude` with anything it likes
-  anyway, and it is the host that decides who may consent to what. -/
+  /-- Handed back to `conclude`. It carries no signature because whoever receives it is this
+  process: a host that would tamper with it can call `conclude` with anything it likes anyway,
+  and it is the host that decides who may consent to what. What a host has reason to change is
+  `resource` or `requestedScopes` rather than anything in here, and `answered` is what carries
+  such a change through to the code. -/
   request : AuthorizationRequest
   account : AccountId tenant
   client : Client
@@ -103,6 +105,19 @@ structure ConsentPrompt (tenant : TenantId) where
   /-- What this account has already granted this client for this resource, so a page can show
   what is new about the request. -/
   grantedScopes : List Scope
+
+/--
+The request the answer was given about.
+
+`resource` and `requestedScopes` are restated above because a page has to display them, and a
+host that amends either is amending the request: a page that offers the deployment's own default
+scope set where the client named none does exactly that. Taking both back from the fields that
+were displayed is what stops a consent recorded about one resource, or about one set of scopes,
+from producing a code bound to another.
+-/
+def ConsentPrompt.answered {tenant : TenantId} (prompt : ConsentPrompt tenant) :
+    AuthorizationRequest :=
+  { prompt.request with resource := prompt.resource, scopes := prompt.requestedScopes }
 
 /-- What the person said. The scopes are what they approved, which may be fewer than were asked
 for and is narrowed to the request either way. -/
@@ -356,7 +371,7 @@ def conclude {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : T
         act := .granted
         recordedAt := now }
     ports.store.appendAudit tenant ⟨now, .anonymous, .consentGranted prompt.account subject⟩
-    issueCode ports config now prompt.request prompt.account consented
+    issueCode ports config now prompt.answered prompt.account consented
 
 /-! ## Tokens -/
 

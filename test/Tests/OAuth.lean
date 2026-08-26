@@ -179,6 +179,22 @@ theorem settled_is_within_the_request {tenant : TenantId}
       intro scope member
       simpa using (List.mem_filter.mp member).left
 
+/--
+Narrowing twice against the same request narrows no further.
+
+`conclude` records what `settled` returns and issues a code from `ConsentPrompt.answered`, which
+narrows it a second time against the scopes the page displayed. This is why the two agree: the
+code a person's answer produces carries exactly the scopes the entry written beside it records,
+so the consent history is a reading of what was issued rather than an account of it.
+-/
+theorem granted_narrows_once (requested approved : List Scope) :
+    Scope.granted requested (Scope.granted requested approved)
+      = Scope.granted requested approved := by
+  simp only [Scope.granted]
+  apply List.filter_congr
+  intro scope member
+  simp only [List.contains_eq_mem, List.mem_filter, member, true_and, decide_eq_true_eq]
+
 /-- The strings of a JSON array field, which is what the metadata claims below are about. -/
 private def advertised (document : Json) (field : String) : List String :=
   match (document.getObjVal? field).toOption with
@@ -278,13 +294,16 @@ private def scopeParams (client redirect target : String) (scope : Option String
     ("resource", target) ]
   ++ (match scope with | none => [] | some value => [("scope", value)])
 
-private def exchangeParams (client code redirect : String) : Params :=
+private def exchangeParamsAt (client code redirect target : String) : Params :=
   [ ("grant_type", "authorization_code"),
     ("client_id", client),
     ("code", code),
     ("redirect_uri", redirect),
     ("code_verifier", verifier),
-    ("resource", resource) ]
+    ("resource", target) ]
+
+private def exchangeParams (client code redirect : String) : Params :=
+  exchangeParamsAt client code redirect resource
 
 /-- Reads one parameter out of a redirect. The values these tests look at are base64url or a
 fixed string, so nothing here has to decode. -/
@@ -469,6 +488,20 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
     | some p => location <$> OAuth.Service.conclude ports config (.granted p [])
   let emptySubject := Consent.subject ⟨clientDocumentUrl⟩ ⟨emptyTarget⟩
   let afterApprovingNothing ← store.consentHistory tenant account
+  -- The other answer OAuth 2.1 §3.2.2.1 allows a scopeless request: a page that offers the
+  -- deployment's own default set amends the prompt, and what is issued is what it displayed.
+  let withDefaults ← match prompt? scopeless with
+    | none => pure none
+    | some p =>
+      location <$> OAuth.Service.conclude ports config
+        (.granted { p with requestedScopes := [⟨"files:read"⟩] } [⟨"files:read"⟩])
+  let defaulted : Except ErrorResponse OAuth.Service.TokenResponse ←
+    match withDefaults.bind (queryValue · "code") with
+    | none => pure (.error { error := .serverError, description := "no code" })
+    | some code =>
+      OAuth.Service.token ports config
+        (exchangeParamsAt clientDocumentUrl code webRedirect emptyTarget)
+  let afterDefaults ← store.consentHistory tenant account
   -- Credentials that permit nothing, which nothing above this can produce any more. They are
   -- built against the store directly because a grant recorded before the refusals above went in
   -- is exactly what outlives them.
@@ -580,6 +613,11 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
         approvedNothing.bind (queryValue · "error") == some "access_denied")
     , (s!"{label}: and it records no consent",
         !afterApprovingNothing.any fun entry => entry.subject == emptySubject)
+    , (s!"{label}: a page supplying a default scope set has that set issued",
+        (defaulted.toOption.map (·.scope)) == some [⟨"files:read"⟩])
+    , (s!"{label}: and the code carries exactly what the entry beside it records",
+        (Authentication.Consent.latest afterDefaults emptySubject).map (·.version)
+          == some (Scope.render ((defaulted.toOption.map (·.scope)).getD [])))
     , (s!"{label}: a code that permits nothing is refused rather than exchanged",
         tokenError emptyCodeTokens == some .invalidGrant)
     , (s!"{label}: a refresh token that permits nothing is refused rather than rotated",
