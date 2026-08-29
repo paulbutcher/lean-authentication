@@ -662,15 +662,33 @@ def refusalDocument (rejection : AccessToken.Rejection)
 /-- Withdrawing a grant, which is what an account holder's own page calls. The entry that
 granted stays where it is and a withdrawal is added beside it; everything issued under the grant
 is revoked in the same call, because a consent nobody has and a token that still works is the
-worst of both. -/
+worst of both.
+
+Reports whether there was anything to withdraw, and writes nothing where there was not. The
+consent history is what an account holder's own page reads back, so a withdrawal of something
+never granted is a decision they never made shown to them as one, and a form submitted twice or
+a row that was true when the page rendered is enough to produce it.
+
+Either a live credential or a standing consent counts. Consent outlives the credentials issued
+under it, and withdrawing one whose credentials have all lapsed is a decision a person is
+entitled to make, though nothing in `connections` would show them it was open to them. -/
 def revoke {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
-    (account : AccountId tenant) (client : ClientId) (resource : ResourceIndicator) : m Unit := do
+    (account : AccountId tenant) (client : ClientId) (resource : ResourceIndicator) : m Bool := do
   let now ← Clock.now
   let subject := Consent.subject client resource
-  ports.store.recordConsent tenant
-    { account, subject, version := "", act := .withdrawn, recordedAt := now }
-  ports.store.appendAudit tenant ⟨now, .anonymous, .consentWithdrawn account subject⟩
-  ports.oauth.revokeGrants tenant now account client resource
+  let history ← ports.store.consentHistory tenant account
+  let withdrawable ←
+    if Authentication.Consent.granted history subject then pure true
+    else do
+      let live ← ports.oauth.grantsForAccount tenant account now
+      pure (live.any fun summary => summary.client == client && summary.resource == resource)
+  if !withdrawable then pure false
+  else do
+    ports.store.recordConsent tenant
+      { account, subject, version := "", act := .withdrawn, recordedAt := now }
+    ports.store.appendAudit tenant ⟨now, .anonymous, .consentWithdrawn account subject⟩
+    ports.oauth.revokeGrants tenant now account client resource
+    pure true
 
 /-- One agent an account has connected: everything a page needs to render a row, and everything
 `revoke` needs to act on one. -/

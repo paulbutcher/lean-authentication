@@ -675,6 +675,7 @@ def checks (label : String) (store : AuthStore IO) (oauth : OAuthStore IO) :
 private def resourceA : String := "https://a.example.test/mcp"
 private def resourceB : String := "https://b.example.test/mcp"
 private def resourceC : String := "https://c.example.test/mcp"
+private def resourceD : String := "https://d.example.test/mcp"
 
 private def rowFor {tenant : TenantId} (rows : List (OAuth.Service.Connection tenant))
     (client resource : String) : Option (OAuth.Service.Connection tenant) :=
@@ -754,12 +755,22 @@ def connectionChecks (label : String) (store : AuthStore IO) (oauth : OAuthStore
   refresh account "g-lapsed" ⟨clientDocumentUrl⟩ resourceB [⟨"files:read"⟩] live (some now)
   -- Somebody else's grant, against a client and a resource this account has nothing under.
   refresh other "g-elsewhere" dynamicId resourceC [⟨"files:read"⟩] live none
+  -- A consent with no credential under it at all: nothing lists it, and it is still the account
+  -- holder's to withdraw.
+  consented dynamicId resourceD "files:read"
   let fetchesBefore ← fetchCount.get
   let listed ← OAuth.Service.connections ports account
   let others ← OAuth.Service.connections ports other
   let fetchesAfter ← fetchCount.get
-  OAuth.Service.revoke ports account dynamicId ⟨resourceB⟩
+  let revoked ← OAuth.Service.revoke ports account dynamicId ⟨resourceB⟩
   let afterRevoke ← OAuth.Service.connections ports account
+  let revokedAgain ← OAuth.Service.revoke ports account dynamicId ⟨resourceB⟩
+  let revokedNothing ← OAuth.Service.revoke ports account ⟨clientDocumentUrl⟩ ⟨resourceB⟩
+  let revokedStanding ← OAuth.Service.revoke ports account dynamicId ⟨resourceD⟩
+  let history ← store.consentHistory tenant account
+  let withdrawals : ClientId → String → Nat := fun client target =>
+    (history.filter fun entry =>
+      entry.subject == Consent.subject client ⟨target⟩ && entry.act == .withdrawn).length
   let refreshOnly := rowFor listed dynamicId.value resourceA
   let document := rowFor listed clientDocumentUrl resourceA
   pure
@@ -789,7 +800,15 @@ def connectionChecks (label : String) (store : AuthStore IO) (oauth : OAuthStore
           && others.map (fun row => (row.client.value, row.resource.value))
             == [(dynamicId.value, resourceC)])
     , (s!"{label}: revoking a grant takes its row with it",
-        (rowFor afterRevoke dynamicId.value resourceB).isNone && afterRevoke.length == 2) ]
+        revoked && (rowFor afterRevoke dynamicId.value resourceB).isNone
+          && afterRevoke.length == 2)
+    , (s!"{label}: revoking it again reports nothing to withdraw and records nothing",
+        !revokedAgain && withdrawals dynamicId resourceB == 1)
+    , (s!"{label}: a lapsed grant with no consent behind it is nothing to withdraw",
+        !revokedNothing && withdrawals ⟨clientDocumentUrl⟩ resourceB == 0)
+    , (s!"{label}: a consent outliving its credentials is withdrawable all the same",
+        revokedStanding && withdrawals dynamicId resourceD == 1
+          && !Authentication.Consent.granted history (Consent.subject dynamicId ⟨resourceD⟩)) ]
 
 /-- The worked example in RFC 7636 Appendix B. Every other claim about `S256` here compares
 the transform against itself, and this is the one that compares it against somebody else. -/

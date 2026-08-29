@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.14.0] - 2026-08-29
+
+`OAuth.Service.revoke` writes only where there is something to withdraw.
+
 ## [0.13.0] - 2026-08-29
 
 - A refusal is available as a JSON document (`Service.refusalDocument`) as well as a header.
