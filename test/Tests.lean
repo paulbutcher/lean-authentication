@@ -12,6 +12,7 @@ import Tests.Http
 import Tests.Invitation
 import Tests.Migrations
 import Tests.OAuth
+import Tests.OAuthHttp
 import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres

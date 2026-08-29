@@ -11,9 +11,9 @@ public import Json
 /-!
 The authorisation server metadata document of RFC 8414 §2 (§20.12).
 
-Serving it is the caller's: it belongs at `/.well-known/oauth-authorization-server`, with the
-issuer's path inserted after the suffix, and where a route lives is not this library's business.
-What is here is the document.
+It belongs at `/.well-known/oauth-authorization-server`, with the issuer's path inserted after the
+suffix. What is here is the document alone; `AuthenticationHttp` serves it, from a mount that
+decides which of those two URLs it answers at.
 
 Four of its fields are what a client reads to decide how to talk to this server at all.
 `code_challenge_methods_supported` is how PKCE support is discovered, and a client that does not

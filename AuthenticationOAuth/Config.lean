@@ -55,14 +55,42 @@ structure OAuthConfig (tenant : TenantId) where
 
 namespace OAuthConfig
 
-/-- The endpoints below the tenant's own path, which is where a deployment that has not moved
-them will put them. -/
+/-! ### Where the endpoints answer
+
+The paths the shipped routes answer on, below wherever they are mounted. They are named here
+rather than beside the routes because a metadata document advertising a URL nothing answers on is
+discovered and then unusable, and separate statements of one fact drift. -/
+
+def authorizePath : String := "/oauth/authorize"
+def tokenPath : String := "/oauth/token"
+def registrationPath : String := "/oauth/register"
+
+/-- RFC 8414 §3 inserts the well-known suffix ahead of the issuer's path rather than after it, so
+this is a prefix the issuer's path is appended to and not a path a deployment may move. An issuer
+with no path is discovered at the suffix alone, which is the URL a client holding only an origin
+constructs. -/
+def metadataPrefix : String := "/.well-known/oauth-authorization-server"
+
+/-- The endpoints below the tenant's own path, where `BaseUrl.url` puts everything else. The
+issuer then has a path, so its document is at `metadataPrefix` followed by that path, which a
+client reaches only by constructing it from the issuer it was given. -/
 def standard {tenant : TenantId} (base : BaseUrl) (scopesSupported : List Scope := []) :
     OAuthConfig tenant :=
   { issuer := (base.url tenant "").value
-    authorizationEndpoint := (base.url tenant "/oauth/authorize").value
-    tokenEndpoint := (base.url tenant "/oauth/token").value
-    registrationEndpoint := (base.url tenant "/oauth/register").value
+    authorizationEndpoint := (base.url tenant authorizePath).value
+    tokenEndpoint := (base.url tenant tokenPath).value
+    registrationEndpoint := (base.url tenant registrationPath).value
+    scopesSupported }
+
+/-- The endpoints at the origin, for a deployment serving one tenant. The issuer is the origin
+itself, so the document is at the well-known suffix with nothing after it. -/
+def atOrigin {tenant : TenantId} (base : BaseUrl) (scopesSupported : List Scope := []) :
+    OAuthConfig tenant :=
+  let origin := BaseUrl.trimTrailingSlashes base.origin
+  { issuer := origin
+    authorizationEndpoint := origin ++ authorizePath
+    tokenEndpoint := origin ++ tokenPath
+    registrationEndpoint := origin ++ registrationPath
     scopesSupported }
 
 end OAuthConfig

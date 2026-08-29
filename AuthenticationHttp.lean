@@ -6,3 +6,5 @@ module
 
 public import AuthenticationHttp.Pages
 public import AuthenticationHttp.Routes
+public import AuthenticationHttp.OAuthPages
+public import AuthenticationHttp.OAuthRoutes

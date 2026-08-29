@@ -122,4 +122,23 @@ is written and read in one place. -/
 @[expose] def Scope.approved (requested : List Scope) (ticked : String → Bool) : List Scope :=
   requested.filter fun scope => ticked scope.approvalField
 
+/-! ### The rest of the consent form
+
+The field the answer itself rides in, beside the one field per scope `Scope.approvalField` names.
+Both are read by whatever serves the consent page and written by whatever renders it, so both are
+here rather than in either. -/
+
+namespace ConsentForm
+
+def answerField : String := "consent"
+
+def approveValue : String := "approve"
+
+/-- Anything else, and anything missing, is a refusal. A page whose deny button submits a form
+carrying no answer is read the way it reads to the person who pressed it, and a request that
+reached the endpoint without passing through the page grants nothing. -/
+def approved (submitted : Option String) : Bool := submitted == some approveValue
+
+end ConsentForm
+
 end Authentication.OAuth

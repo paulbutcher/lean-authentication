@@ -94,7 +94,9 @@ blank.
   query.toArray.toList.filterMap fun (name, value) =>
     name.decode.map fun name => (name, (value.bind (·.decode)).getD "")
 
-private def cookieNamed (request : Request Body.Stream) (name : String) : Option String :=
+/-- The value a named cookie arrived with, or `none`. Shared with the authorisation server's
+routes, which read the session cookie these issue. -/
+def cookieNamed (request : Request Body.Stream) (name : String) : Option String :=
   match request.line.headers.get? Middleware.Header.Name.cookie with
   | none => none
   | some value => (Middleware.parseCookieHeader value.value).lookup name

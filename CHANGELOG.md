@@ -6,6 +6,7 @@
 - A consent page's scope checkboxes have a field name that survives whatever the client put in the scope (`Scope.approvalField`, `Scope.approved`).
 - A client that named no scopes can be offered the deployment's own set (`ConsentPrompt.withDefaultScopes`).
 - Query and form parameters are read without losing the duplicates §4.1.1 refuses (`Params.ofQuery`).
+- The authorisation server's four endpoints are shipped as routes (`OAuth.Http.routes`, `OAuth.Http.handler`), with a replaceable consent page (`OAuthPages`) and a mount that the metadata document's URL follows (`OAuthConfig.atOrigin`).
 
 ## [0.12.0] - 2026-08-26
 

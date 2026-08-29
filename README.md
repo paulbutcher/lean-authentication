@@ -26,7 +26,7 @@ Each target is a separate `lean_lib`. Depend only on what you use.
 | `AuthenticationPostgres` | Postgres backend (needs `libpq`) |
 | `AuthenticationPostmark` | Postmark transport and webhook endpoint |
 | `AuthenticationSes` | Amazon SES transport and SNS callback endpoint |
-| `AuthenticationHttp` | Ready-made sign-in routes |
+| `AuthenticationHttp` | Ready-made sign-in routes, and the authorisation server's own endpoints |
 | `AuthenticationOAuth` | OAuth 2.1 authorisation server, for MCP clients and anything else |
 
 ## The flow
@@ -242,11 +242,11 @@ def oauthConfig : OAuthConfig tenant :=
   OAuthConfig.standard ⟨"https://auth.example.com"⟩ [⟨"files:read"⟩, ⟨"files:write"⟩]
 ```
 
-`metadataDocument oauthPorts.documents oauthConfig` is the RFC 8414 document to serve at
-`/.well-known/oauth-authorization-server`. The fetcher it is handed is what
-`client_id_metadata_document_supported` reports, so a deployment with no fetcher advertises no
-mechanism it would then refuse, and a client registers dynamically instead. Serve the three
-endpoints yourself and hand the decoded parameters over:
+`metadataDocument oauthPorts.documents oauthConfig` is the RFC 8414 document. The fetcher it is
+handed is what `client_id_metadata_document_supported` reports, so a deployment with no fetcher
+advertises no mechanism it would then refuse, and a client registers dynamically instead.
+
+`AuthenticationOAuth` decides and renders nothing. These four are the whole of it:
 
 ```lean
 Service.authorize ports config params sessionCookie   -- Outcome: consent, respond, authenticate, refuse
@@ -263,8 +263,6 @@ nothing may be sent to it. A grant is recorded as a consent record, so revoking 
 `Service.revoke` and it shows up in `Service.grants` beside everything else the person agreed to.
 
 `Params.ofQuery`, which lives in `AuthenticationHttp` because it is the one place this server names a transport, turns a query or a form body into those parameters. It keeps duplicates, which is what lets a parameter sent twice be refused as OAuth 2.1 §4.1.1 requires, and it decodes names and values once, so that nothing downstream compares a percent-encoded form against a decoded one.
-
-Rendering the consent page is yours, and two pieces of it are here. `Scope.approvalField` names the checkbox a scope carries, encoded so that whatever the client put in the scope the field name is still one a browser sends back and `Scope.approved` can find. `ConsentPrompt.withDefaultScopes` answers a client that named no scopes at all with the deployment's own set, which OAuth 2.1 §3.2.2.1 allows in place of a refusal; the page still asks, and a box left unticked is a scope withheld.
 
 A privacy page also needs to say what is connected now, which the history cannot answer: it
 records decisions rather than what is live. `Service.connections` answers from the credentials:
@@ -298,6 +296,68 @@ operation that needs more scope comes back as `insufficientScope`, which `Servic
 turns into the `WWW-Authenticate` value naming what to ask for.
 
 `Service.refusalDocument` is the same refusal as a JSON body. Serve it alongside the header wherever a hop might rewrite headers on the way out: an AWS Lambda function URL renames `WWW-Authenticate`, and a client that never sees the refusal, or the `resource_metadata` in it, reconnects forever against a grant it cannot learn is wrong.
+
+## Mounting the authorisation server
+
+`AuthenticationHttp` serves the four endpoints, for the reason the sign-in routes are there:
+what an application gets wrong about OAuth is almost never the protocol, it is the transport
+around it. Calling the four functions above yourself remains supported and is what a deployment
+whose framework owns the request does.
+
+```lean
+def oauth : OAuth.Http.Config :=
+  { ports := oauthPorts
+    tenant := fun t => pure (some (config t))   -- the sign-in routes' own lookup
+    oauth := fun t => pure (some (oauthConfig t))
+    defaultScopes := some [⟨"files:read"⟩] }    -- unset refuses a request naming no scope
+```
+
+| Path | Method |
+| --- | --- |
+| `/t/<tenant>/oauth/authorize` | `GET` the consent page, `POST` the answer |
+| `/t/<tenant>/oauth/token` | `POST`, form encoded |
+| `/t/<tenant>/oauth/register` | `POST`, RFC 7591 JSON |
+| `/.well-known/oauth-authorization-server/t/<tenant>` | `GET` |
+
+`Config.mountedAt` chooses between those paths and the same four at the origin, which is what a
+deployment serving one tenant wants: RFC 8414 §3 puts the well-known suffix *ahead* of an issuer's
+path, so an issuer with a path is discovered only at a URL a client constructs, while an issuer
+with none is discovered at the URL every client tries. `OAuthConfig.standard` pairs with
+`.perTenant` and `OAuthConfig.atOrigin` with `.origin`; nothing detects a mismatch at run time,
+because everything works except discovery.
+
+`OAuth.Http.routes` returns the routes in two lists rather than one, and the split is the point:
+
+- **`browser`** is `/oauth/authorize`, answered by a person. Its `POST` must be unpostable from
+  another site, so mount it inside `Middleware.session` and `Middleware.antiForgery` if you have
+  them. If you do not, the consent form carries a token derived from the session cookie under the
+  current pepper and the route checks it, exactly as the sign-in routes do with theirs.
+- **`client`** is the token, registration and metadata endpoints, answered by a program carrying
+  no cookie. Anti-forgery middleware refuses those by design, so they must be mounted outside it.
+
+`OAuth.Http.handler config wrap` mounts both, applying `wrap` to the browser half alone. Neither
+list may be mounted under a further prefix: the metadata document advertises where they answer.
+
+`OAuthPages` replaces the rendering, with `consent` and `refusedClient` and unstyled defaults. The
+form's field names are the library's, not the page's: `Scope.approvalField` names the checkbox a
+scope carries, encoded so that whatever the client put in the scope the field name is still one a
+browser sends back, and `ConsentForm.answerField` carries the answer itself. `Scope.approved` and
+`ConsentForm.approved` read them back, so the two encodings cannot disagree.
+
+`Config.defaultScopes` is what a request naming no `scope` at all is asked about. OAuth 2.1
+§3.2.2.1 allows a default set or a refusal; unset is the refusal, and it is unset rather than
+quietly `scopesSupported` because those are two different statements. The page asks either way,
+and a box left unticked is a scope withheld.
+
+`authorize` is not behind a sign-in guard, and must not be put behind one: whether a request with
+no session should sign somebody in, refuse, or redirect an error to the client is the
+authorisation server's answer, and `prompt=none` is the case where a sign-in page is the wrong
+one. `Config.signIn` says where the requests that do need somebody signed in are sent, and its
+default needs the authorization endpoint's path in the tenant's `returnToAllowlist`.
+
+Every response carries `Cache-Control: no-store`, the query and the form body are read apart and
+never merged, and the `POST` to `/oauth/authorize` re-reads the request rather than reassembling
+it from hidden fields.
 
 ## Housekeeping
 

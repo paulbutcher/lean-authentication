@@ -1252,9 +1252,9 @@ months. A client that has only the second has no other way to obtain an identifi
   mechanism that will be refused does not leave it two ways in; it leaves one way in and one that
   ends there. The document is built from that fetcher rather than from a second statement of what
   it can do, so the two cannot disagree.
-- **AUTH-20.12.5** Serving the document is the caller's. It belongs at
-  `/.well-known/oauth-authorization-server` with the issuer's path inserted after the suffix, and
-  where a route lives is not this library's business.
+- **AUTH-20.12.5** The document belongs at `/.well-known/oauth-authorization-server` with the
+  issuer's path inserted after the suffix. What is in this target is the document; §20.19 is the
+  route, and it is in the HTTP target rather than here so that AUTH-20.1.2 still holds.
 
 ### 20.13 Room for OpenID Connect
 
@@ -1326,10 +1326,11 @@ no `openid` scope.
 
 ### 20.16 Out of scope, and testing
 
-Out entirely: the consent page, authenticating the person, HTTP routing, and outbound HTTP. The
-resource server side of RFC 9728, the protected resource metadata document, is the resource
-server's to serve and is not here either; what is here is the verification a resource server
-performs on a token and the challenge it answers with.
+Out of *this target* entirely: the consent page, authenticating the person, HTTP routing, and
+outbound HTTP. The first three are shipped by the HTTP target instead (§20.19), which is what
+keeps AUTH-20.1.2 true of this one. The resource server side of RFC 9728, the protected resource
+metadata document, is the resource server's to serve and is nowhere here; what is here is the
+verification a resource server performs on a token and the challenge it answers with.
 
 - **AUTH-20.16.1** These MUST be theorems rather than tests, for the reason AUTH-16.1 gives:
   each is a pure total function over decidable structure and each is a security defect rather
@@ -1410,3 +1411,46 @@ a difference should find it explained here rather than have to decide whether it
 - **AUTH-20.18.4** What pruning a dynamic registration should do to the consent records naming
   it. They are left where they are today, on the grounds that evidence of what somebody agreed to
   does not stop being true when an accumulated registration goes away.
+
+### 20.19 The shipped routes
+
+The endpoint layer is where an application's OAuth defects live, and each of them is a thing got
+right once and then never thought about again. It is therefore shipped, in `AuthenticationHttp`
+beside the sign-in routes, so that AUTH-20.1.2 stays true of `AuthenticationOAuth`. Calling
+§20.1's four functions directly remains supported, and the requirements below then become the
+caller's to reproduce.
+
+- **AUTH-20.19.1** The mount MUST be a parameter, and the metadata document's URL MUST follow it.
+  RFC 8414 §3 inserts the well-known suffix ahead of the issuer's path, so an issuer with a path
+  is discovered only at a URL a client constructs, and a deployment serving one tenant at the
+  origin wants the URL every client tries. That the paths the routes answer on are the paths the
+  configuration builds its endpoint URLs from is a theorem, because a disagreement is silent:
+  everything works except discovery.
+- **AUTH-20.19.2** Every response MUST carry `Cache-Control: no-store` (OAuth 2.1 §3.2.3). An
+  authorization response carries a code in its `Location`, a token response carries the token, and
+  a consent page names an account.
+- **AUTH-20.19.3** A query and a form body MUST be read apart and never merged. A token request
+  that took a parameter from the query string would be reading one the client did not agree to
+  send there. Both are read through the reader of AUTH-20.4.2, which keeps duplicates.
+- **AUTH-20.19.4** The `POST` to the authorization endpoint MUST re-read the request rather than
+  reassemble it from hidden fields, so that what is concluded is the request as it arrived. It
+  costs a client lookup, which is cached.
+- **AUTH-20.19.5** The routes MUST be published split by what may wrap them. The authorization
+  endpoint is answered by a person and its `POST` must be unpostable from another site; the token
+  and registration endpoints are answered by a program carrying no cookie, and anti-forgery
+  middleware refuses those by design. One flat list is what makes it easy to get one of the two
+  halves wrong.
+- **AUTH-20.19.6** The consent form MUST be unpostable from another site whether or not the
+  application wrapped these routes in anti-forgery middleware. Where it did, the page carries that
+  middleware's token; where it did not, the token is derived from the session cookie under the
+  pepper ring, as AUTH-14.1.4 already derives one from the attempt cookie.
+- **AUTH-20.19.7** The authorization endpoint MUST NOT be put behind a sign-in guard. Whether a
+  request with no session signs somebody in, is refused, or redirects an error to the client is
+  the answer AUTH-20.13.2 gives, and `prompt=none` is the case a sign-in page is wrong for.
+- **AUTH-20.19.8** A request naming no `scope` MUST be refused unless the deployment has said what
+  to offer instead. The default set of AUTH-20.9.5 is a separate statement from
+  `scopes_supported`, and reading one as the other is how a scopeless request comes to be answered
+  with a set nobody chose.
+- **AUTH-20.19.9** The consent page is the client's to replace, as the sign-in pages are
+  (AUTH-10.7), but the form's field names are not: the encoding of AUTH-20.9's approval field and
+  the field carrying the answer ship with the reader that reads them back.
