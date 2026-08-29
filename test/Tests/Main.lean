@@ -28,11 +28,11 @@ def main : IO UInt32 := do
     ++ (← Tests.Http.checks) ++ (← Tests.Http.equalisationChecks) ++ (← Tests.Http.returnToChecks)
     ++ (← Tests.Http.sameDeviceReturnToChecks)
     ++ (← Tests.Http.humanCheckChecks) ++ (← Tests.Http.webhookChecks)
-    ++ (← Tests.Http.emailedCodeChecks) ++ (← Tests.Webhooks.snsChecks)
+    ++ (← Tests.Http.emailedCodeChecks) ++ Tests.Http.paramChecks ++ (← Tests.Webhooks.snsChecks)
     ++ (← Tests.Webhooks.postmarkChecks)
     ++ (← Tests.Ses.flowChecks) ++ (← Tests.Postgres.conformanceChecks)
     ++ (← Tests.Postgres.poolConformanceChecks) ++ (← Tests.Postgres.poolTransactionChecks)
-    ++ Tests.OAuth.pkceChecks ++ (← Tests.OAuth.sqliteChecks)
+    ++ Tests.OAuth.pkceChecks ++ Tests.OAuth.refusalChecks ++ (← Tests.OAuth.sqliteChecks)
     ++ (← Tests.OAuth.postgresChecks)
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do

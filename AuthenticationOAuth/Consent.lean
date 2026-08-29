@@ -7,6 +7,7 @@ module
 public import Authentication.Consent
 public import AuthenticationOAuth.Client
 public import AuthenticationOAuth.Scope
+public import Codec.Base64Url
 
 /-!
 A grant is a consent record (§20.14).
@@ -23,6 +24,9 @@ is this file.
 
 The consequence worth stating: revoking a grant is `withdrawConsent`, and it is the same
 operation an account holder's own privacy page already performs.
+
+What a person was asked is also here, in the field a scope's checkbox carries. `Scope` itself
+imports nothing at all, deliberately, and an encoding needs one.
 -/
 
 public section
@@ -99,3 +103,23 @@ def standing {tenant : TenantId} (history : List (ConsentEntry tenant)) (client 
   Authentication.Consent.granted history (subject client resource)
 
 end Authentication.OAuth.Consent
+
+namespace Authentication.OAuth
+
+/-- The form field a scope's checkbox carries: one name per scope, so each answer is read back
+with an ordinary single-valued lookup, and encoded so that whatever the client put in the scope,
+what reaches the form is `A-Za-z0-9_-`.
+
+A scope is an opaque string the client chose, and a page that named the field after it would be
+letting the client choose the field name too. A colon is enough for the browser's answer never
+to be found again. -/
+@[expose] def Scope.approvalField (scope : Scope) : String :=
+  "approve-" ++ Codec.Base64Url.encodeString scope.value.toUTF8
+
+/-- Which of `requested` the submitted form left ticked. `ticked` is the host's own lookup into
+the body it parsed, asked once per scope under the name `approvalField` gave it, so the encoding
+is written and read in one place. -/
+@[expose] def Scope.approved (requested : List Scope) (ticked : String → Bool) : List Scope :=
+  requested.filter fun scope => ticked scope.approvalField
+
+end Authentication.OAuth

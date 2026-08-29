@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import AuthenticationHttp.Pages
+public import AuthenticationOAuth.Request
 public import Routing
 import Crypto.Compare
 import Middleware
@@ -70,6 +71,28 @@ private def formBody (request : Request Body.Stream) : ContextAsync URI.Query :=
   else pure .empty
 
 private def queryOf (request : Request Body.Stream) : URI.Query := request.line.uri.query
+
+/--
+Every name and value a query or a form body carries, decoded, duplicates and all.
+
+This is what `AuthenticationOAuth` means by `Params`, and the reason it is built here rather
+than there is that it is the one place the authorisation server names a transport: everything
+downstream of it reads pairs.
+
+Both halves matter. A reader that collapsed the query into a lookup and kept the first value
+would accept a parameter sent twice, which OAuth 2.1 §4.1.1 makes `invalid_request`, and it
+would do so in exactly the case where somebody is trying something. And decoding happens here,
+once, because a lookup that compares percent-encoded bytes compares a form that is not
+canonical: `code%5Fverifier` and `code_verifier` are the same name, and only one of them
+survives being matched as text.
+
+A name that is not a valid encoding names no parameter this server has, so it is dropped. A name
+present with no value at all is the empty string, which is what a form sends for a field left
+blank.
+-/
+@[expose] def _root_.Authentication.OAuth.Params.ofQuery (query : URI.Query) : OAuth.Params :=
+  query.toArray.toList.filterMap fun (name, value) =>
+    name.decode.map fun name => (name, (value.bind (·.decode)).getD "")
 
 private def cookieNamed (request : Request Body.Stream) (name : String) : Option String :=
   match request.line.headers.get? Middleware.Header.Name.cookie with

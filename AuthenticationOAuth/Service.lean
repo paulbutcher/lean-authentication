@@ -111,6 +111,25 @@ def ConsentPrompt.answered {tenant : TenantId} (prompt : ConsentPrompt tenant) :
     AuthorizationRequest :=
   { prompt.request with resource := prompt.resource, scopes := prompt.requestedScopes }
 
+/--
+What a client that named no scopes is asked about.
+
+OAuth 2.1 §3.2.2.1 leaves a server two answers to a request carrying no `scope`, a default set
+or a refusal, and the refusal is what happens without this: agents that name none are ordinary
+rather than odd, and a deployment with nothing to offer them turns all of them away.
+
+The amendment is to the prompt rather than to the request it came from, which is the difference
+between offering a default and pretending one was asked for. `answered` carries it into the
+code, so what is issued is what the page displayed, while `request` still records what the
+client actually sent.
+
+Offering a scope is not granting it. The page still asks, and a box left unticked there is a
+scope withheld, as it is for a request that named its own.
+-/
+@[expose] def ConsentPrompt.withDefaultScopes {tenant : TenantId} (prompt : ConsentPrompt tenant)
+    (default : List Scope) : ConsentPrompt tenant :=
+  if prompt.requestedScopes.isEmpty then { prompt with requestedScopes := default } else prompt
+
 /-- What the person said. The scopes are what they approved, which may be fewer than were asked
 for and is narrowed to the request either way. -/
 inductive ConsentDecision (tenant : TenantId) where
@@ -578,6 +597,12 @@ def rejectionStatus : AccessToken.Rejection → Nat
   | .insufficientScope _ => 403
   | _ => 401
 
+/-- The code a rejection is reported with (RFC 6750 §3.1), whichever of the two shapes carries
+it. -/
+def rejectionCode : AccessToken.Rejection → String
+  | .insufficientScope _ => "insufficient_scope"
+  | _ => "invalid_token"
+
 /--
 The `WWW-Authenticate` value that goes with a rejection.
 
@@ -591,18 +616,46 @@ can guess.
 def challenge (rejection : AccessToken.Rejection) (resourceMetadata : Option String := none) :
     String :=
   let quoted := fun (name value : String) => name ++ "=\"" ++ value ++ "\""
-  let parts := (match rejection with
-      | .unknown => [quoted "error" "invalid_token"]
-      | .expired => [quoted "error" "invalid_token", quoted "error_description" "the token has expired"]
-      | .revoked => [quoted "error" "invalid_token", quoted "error_description" "the token has been revoked"]
-      | .wrongAudience =>
-        [quoted "error" "invalid_token", quoted "error_description" "the token is for another resource"]
-      | .insufficientScope needed =>
-        [quoted "error" "insufficient_scope", quoted "scope" (Scope.render needed)])
+  let parts := quoted "error" (rejectionCode rejection) :: (match rejection with
+      | .unknown => []
+      | .expired => [quoted "error_description" "the token has expired"]
+      | .revoked => [quoted "error_description" "the token has been revoked"]
+      | .wrongAudience => [quoted "error_description" "the token is for another resource"]
+      | .insufficientScope needed => [quoted "scope" (Scope.render needed)])
     ++ (match resourceMetadata with
         | none => []
         | some uri => [quoted "resource_metadata" uri])
   "Bearer " ++ String.intercalate ", " parts
+
+/--
+The same refusal as a document, for a deployment whose headers do not survive the way out.
+
+A hop that renames `WWW-Authenticate`, as an AWS Lambda function URL does, leaves a resource
+server refusing correctly and saying nothing at all: the client cannot learn that its token is
+for the wrong resource, nor where the metadata that would get it a working one lives, and it
+reconnects forever against a grant it has no way to discover is wrong. Both shapes are built
+from `rejectionCode` and from the same scopes, so what a client is told does not depend on which
+of them reached it.
+
+The document says more than the header does in one place. All four of `unknown`, `expired`,
+`revoked` and `wrongAudience` are `invalid_token`, and the description is what separates them
+for whoever is reading it while working out why.
+-/
+def refusalDocument (rejection : AccessToken.Rejection)
+    (resourceMetadata : Option String := none) : Json :=
+  let described := fun (description : String) => [("error_description", description)]
+  let members := ("error", rejectionCode rejection) :: (match rejection with
+      | .unknown => described "the token is not one this server issued"
+      | .expired => described "the token has expired"
+      | .revoked => described "the token has been revoked"
+      | .wrongAudience => described "the token was issued for a different resource"
+      | .insufficientScope needed =>
+        described "the token does not carry the scopes this operation needs"
+          ++ [("scope", Scope.render needed)])
+    ++ (match resourceMetadata with
+        | none => []
+        | some uri => [("resource_metadata", uri)])
+  Json.mkObj (members.map fun (name, value) => (name, Json.str value))
 
 /-! ## Housekeeping -/
 

@@ -557,4 +557,35 @@ def emailedCodeChecks : IO (List (String × Bool)) := do
         statusOf signedIn == "HTTP/1.1 303 See Other"
           && (cookiePair signedIn "auth_session").isSome) ]
 
+/-! ## Reading parameters -/
+
+private def queryFrom (raw : String) : Std.Http.URI.Query :=
+  Middleware.ContentType.FormUrlEncoded.parse raw
+
+private def refusedAs (expected : OAuth.OAuthError) {α : Type} : Except OAuth.OAuthError α → Bool
+  | .error code => code == expected
+  | .ok _ => false
+
+private def yielded (expected : String) : Except OAuth.OAuthError String → Bool
+  | .ok value => value == expected
+  | .error _ => false
+
+/-- Both of these would be theorems, but what they run through is the query parser of a
+dependency, whose body does not reach this module: nothing here reduces at elaboration.
+
+The first is the one that matters. A parameter sent twice has to arrive as two pairs, because
+that is what lets `Params.single?` refuse it (OAuth 2.1 §4.1.1); a reader that collapsed the
+query into a lookup would accept it, in exactly the case where somebody is trying something.
+The second is why the decoding happens here rather than downstream: a lookup comparing
+percent-encoded bytes compares a form that is not canonical. -/
+def paramChecks : List (String × Bool) :=
+  [ ("http: a parameter sent twice reaches the reader twice",
+      refusedAs .invalidRequest
+        ((OAuth.Params.ofQuery
+          (queryFrom "resource=https%3A%2F%2Fa.test&resource=https%3A%2F%2Fb.test")).single?
+            "resource"))
+  , ("http: names and values are decoded before anything matches them",
+      yielded "a b"
+        ((OAuth.Params.ofQuery (queryFrom "code%5Fverifier=a%20b")).required "code_verifier")) ]
+
 end Tests.Http

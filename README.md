@@ -262,6 +262,10 @@ should run the sign-in flow and ask again; `refuse` means the client could not b
 nothing may be sent to it. A grant is recorded as a consent record, so revoking one is
 `Service.revoke` and it shows up in `Service.grants` beside everything else the person agreed to.
 
+`Params.ofQuery`, which lives in `AuthenticationHttp` because it is the one place this server names a transport, turns a query or a form body into those parameters. It keeps duplicates, which is what lets a parameter sent twice be refused as OAuth 2.1 §4.1.1 requires, and it decodes names and values once, so that nothing downstream compares a percent-encoded form against a decoded one.
+
+Rendering the consent page is yours, and two pieces of it are here. `Scope.approvalField` names the checkbox a scope carries, encoded so that whatever the client put in the scope the field name is still one a browser sends back and `Scope.approved` can find. `ConsentPrompt.withDefaultScopes` answers a client that named no scopes at all with the deployment's own set, which OAuth 2.1 §3.2.2.1 allows in place of a refusal; the page still asks, and a box left unticked is a scope withheld.
+
 A privacy page also needs to say what is connected now, which the history cannot answer: it
 records decisions rather than what is live. `Service.connections` answers from the credentials:
 
@@ -292,6 +296,8 @@ Service.verify ports presented ⟨"https://mcp.example.com/mcp"⟩ [⟨"files:wr
 The audience is checked against the `resource` the token was issued for and nothing else, and an
 operation that needs more scope comes back as `insufficientScope`, which `Service.challenge`
 turns into the `WWW-Authenticate` value naming what to ask for.
+
+`Service.refusalDocument` is the same refusal as a JSON body. Serve it alongside the header wherever a hop might rewrite headers on the way out: an AWS Lambda function URL renames `WWW-Authenticate`, and a client that never sees the refusal, or the `resource_metadata` in it, reconnects forever against a grant it cannot learn is wrong.
 
 ## Housekeeping
 

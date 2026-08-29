@@ -798,6 +798,90 @@ def pkceChecks : List (String × Bool) :=
       Pkce.challengeOf "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
         == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM") ]
 
+/-! ## The refusal as a document -/
+
+private def protectedResourceMetadata : String :=
+  "https://mcp.example.test/.well-known/oauth-protected-resource"
+
+/-- The value of one `WWW-Authenticate` parameter, found the way a client finds it: `name="` and
+everything up to the closing quote. -/
+private def headerParam (header name : String) : Option String :=
+  let rec scan (marker : List Char) : List Char → Option (List Char)
+    | [] => none
+    | c :: rest =>
+      if (c :: rest).take marker.length == marker then
+        some (((c :: rest).drop marker.length).takeWhile (· != '"'))
+      else scan marker rest
+  (scan (name.toList ++ ['=', '"']) header.toList).map String.ofList
+
+private def documentMember (document : Json) (name : String) : Option String :=
+  match (document.getObjVal? name).toOption with
+  | some (.str value) => some value
+  | _ => none
+
+private def everyRejection : List AccessToken.Rejection :=
+  [.unknown, .expired, .revoked, .wrongAudience,
+    .insufficientScope [⟨"files:read"⟩, ⟨"files:write"⟩]]
+
+/-- The header and the document are one mapping with two outputs, and what a deployment behind a
+hop that renames headers reads is whichever of them survived. A code or a scope in one and not
+the other is a client acting on less than it was told.
+
+`everyRejection` is every constructor; one added to `Rejection` belongs there too. -/
+def refusalChecks : List (String × Bool) :=
+  everyRejection.map (fun rejection =>
+    let header := OAuth.Service.challenge rejection protectedResourceMetadata
+    let document := OAuth.Service.refusalDocument rejection protectedResourceMetadata
+    (s!"oauth: the document says what the header says about {repr rejection}",
+      (headerParam header "error").isSome
+        && headerParam header "error" == documentMember document "error"
+        && headerParam header "scope" == documentMember document "scope"
+        && headerParam header "resource_metadata" == documentMember document "resource_metadata"))
+  ++ [ ("oauth: the four invalid_token refusals are told apart by their descriptions",
+          (([.unknown, .expired, .revoked, .wrongAudience] : List AccessToken.Rejection).filterMap
+            fun rejection =>
+              documentMember (OAuth.Service.refusalDocument rejection) "error_description").eraseDups.length
+            == 4)
+     , ("oauth: a document with nowhere to send a client omits resource_metadata rather than guessing",
+          (documentMember (OAuth.Service.refusalDocument .unknown) "resource_metadata").isNone) ]
+
+/-! ## The consent form -/
+
+/-- A scope holding everything an unencoded field name would break on. -/
+private def trickyScope : Scope := ⟨"files:read/write =now"⟩
+
+/-- Whatever the client put in the scope, what reaches the form is a name a browser will send
+back and a lookup will find. -/
+theorem approval_field_is_url_safe :
+    trickyScope.approvalField.toList.all
+      (fun c => c.isAlpha || c.isDigit || c == '-' || c == '_') = true := by decide
+
+/-- The encoding is written and read in one place, so the scope that comes back ticked is the
+one the checkbox was about. -/
+theorem approved_reads_back_what_was_ticked :
+    Scope.approved [trickyScope, ⟨"files:read"⟩] (· == trickyScope.approvalField)
+      = [trickyScope] := by decide
+
+/-- Two scopes are two fields, so the box that was ticked is the box that scope's checkbox was.
+The theorem above reads one of them back; this is why it is not reading the other. -/
+theorem distinct_scopes_get_distinct_fields :
+    (trickyScope.approvalField == Scope.approvalField ⟨"files:read"⟩) = false := by decide
+
+/-! ## A default for a client that named no scopes -/
+
+theorem defaults_fill_a_silence {tenant : TenantId} (prompt : OAuth.Service.ConsentPrompt tenant)
+    (defaults : List Scope) (h : prompt.requestedScopes = []) :
+    (prompt.withDefaultScopes defaults).requestedScopes = defaults := by
+  simp [OAuth.Service.ConsentPrompt.withDefaultScopes, h]
+
+/-- A client that named its own scopes is asked about those and no others. The default fills a
+silence; it does not widen a request. -/
+theorem defaults_never_widen_a_request {tenant : TenantId}
+    (prompt : OAuth.Service.ConsentPrompt tenant) (defaults : List Scope)
+    (h : prompt.requestedScopes ≠ []) :
+    prompt.withDefaultScopes defaults = prompt := by
+  simp [OAuth.Service.ConsentPrompt.withDefaultScopes, List.isEmpty_iff, h]
+
 /-! ## The backends -/
 
 def sqliteChecks : IO (List (String × Bool)) := do
