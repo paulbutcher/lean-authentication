@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.13.0] - 2026-08-29
 
 - A refusal is available as a JSON document (`Service.refusalDocument`) as well as a header.
 - A consent page's scope checkboxes have a field name that survives whatever the client put in the scope (`Scope.approvalField`, `Scope.approved`).
