@@ -30,8 +30,18 @@ private def sample (key : String) : OutboundEmail :=
     textBody := body
     idempotencyKey := key }
 
-/-- Whatever the message and whatever the sink, the id is the message's own idempotency key, so
-a caller keying off it sees what a real transport would have returned. -/
+/--
+Whatever the message and whatever the sink, the id is the message's own idempotency key, so a
+caller keying off it sees what a real transport would have returned. A capturing transport that
+invented an id would let a test pass while the code under it lost the key that makes a resend
+safe.
+
+`EmailTransport.capturing` builds a transport from a sink that swallows the message, and `.send`
+is what the service calls. `sink` is any function of the right type and `mail` any outbound
+message, so no particular sink or message is being relied on. The conclusion is `.ok` of the
+message's own `idempotencyKey`: a success, and one carrying the key that was set rather than a
+fresh value. It holds by `rfl`.
+-/
 theorem capturing_reports_idempotencyKey (sink : OutboundEmail → Id Unit) (mail : OutboundEmail) :
     (EmailTransport.capturing sink).send mail = .ok ⟨mail.idempotencyKey⟩ := rfl
 

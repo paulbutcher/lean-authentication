@@ -27,6 +27,17 @@ open Authentication Authentication.OAuth
 
 /-! ## Theorems -/
 
+/--
+Folding the pairwise comparison of a list against itself leaves the accumulator alone. This is
+the whole content of the theorem below, isolated so that the induction can generalise over the
+accumulator, which the statement about `ByteArray` cannot.
+
+`l` is the byte list and `b` the value the fold starts from, left arbitrary so the induction step
+can apply the hypothesis at the value the previous step produced. `List.zipWith (fun x y => x ==
+y) l l` pairs the list with itself, so every element compares equal and every result is `true`,
+and folding `Bool.and` over `true`s returns `b` unchanged. It is stated as an equality with `b`
+rather than with `true` for exactly that reason.
+-/
 private theorem zipWith_self_foldl (l : List UInt8) (b : Bool) :
     (List.zipWith (fun x y => x == y) l l).foldl Bool.and b = b := by
   induction l generalizing b with
@@ -34,21 +45,48 @@ private theorem zipWith_self_foldl (l : List UInt8) (b : Bool) :
   | cons x xs ih =>
     simp only [List.zipWith_cons_cons, List.foldl_cons, beq_self_eq_true, Bool.and_true, ih]
 
-/-- Comparing every byte is what makes a verifier check free of an early exit, and an early exit
-is what would report how long a correct prefix a guess had. -/
+/--
+Comparing every byte is what makes a verifier check free of an early exit, and an early exit is
+what would report how long a correct prefix a guess had. This is the half of the claim a theorem
+can reach: that the comparison written to avoid one still accepts what it should.
+
+`a` is an arbitrary `ByteArray` and `Crypto.bytesEqual` is the constant-time comparison. The
+conclusion is that it answers `true` on equal arrays, so `pkce_accepts_its_own_challenge` below
+can rest on it. The converse, that it answers `false` on unequal ones, is `bytesEqual_iff` in
+`Tests.Digest`; what is needed here is only that a correct verifier is not turned away.
+-/
 theorem bytesEqual_self (a : ByteArray) : Crypto.bytesEqual a a = true := by
   unfold Crypto.bytesEqual
   simp only [beq_self_eq_true, Bool.true_and, zipWith_self_foldl]
 
-/-- The transform and the comparison agree: whatever the verifier, the challenge derived from it
-is the one that accepts it. -/
+/--
+The PKCE transform and the comparison agree: whatever the verifier, the challenge derived from it
+is the one that accepts it. A mismatch would not be a subtle failure; every authorization would
+fail at the token endpoint, and the temptation would be to weaken the check.
+
+`Pkce.challengeOf` is what a client computes and sends with its authorization request, and
+`Pkce.verify` is what this server runs when the verifier arrives at the token endpoint. The
+conclusion is that verification answers `true` for the pair. `verifier` is an arbitrary string,
+with no restriction on length or alphabet, so this is agreement between the two functions rather
+than agreement on the values that were tried. That a wrong verifier is rejected is not stated
+here; it is the collision resistance of the hash, which nothing in this codebase proves.
+-/
 theorem pkce_accepts_its_own_challenge (verifier : String) :
     Pkce.verify (Pkce.challengeOf verifier) verifier = true := by
   simp only [Pkce.verify]
   exact bytesEqual_self _
 
-/-- The port-agnostic match admits no host that is not a loopback address. Everything else about
-a redirect URI is compared as a string, so this is the whole of the exception. -/
+/--
+The port-agnostic match admits no host that is not a loopback address. Everything else about a
+redirect URI is compared as a string, so this is the whole of the exception, and an exception
+that admitted a host on the internet would hand authorization codes to it.
+
+`Uri.loopback?` reads a URI and returns `some host` when it is one this exception covers. `h`
+says the read succeeded, so the claim is about URIs the function accepted. The conclusion is
+that the host is in `Uri.loopbackHosts`, the fixed list of addresses that resolve to the machine
+itself. Nothing is assumed about `uri`'s scheme, path or port, so a URI that dresses a public
+host up in any other way still has to pass this check.
+-/
 theorem loopback_is_loopback {uri : String} {host : Uri.Loopback}
     (h : Uri.loopback? uri = some host) : Uri.loopbackHosts.contains host.host = true := by
   unfold Uri.loopback? at h
@@ -66,8 +104,18 @@ theorem loopback_is_loopback {uri : String} {host : Uri.Loopback}
           exact condition.left
         · simp at h
 
-/-- And it is reached only when both URIs are loopback ones, so no pair of ordinary URIs can
-match on anything but the string comparison. -/
+/--
+And the port-agnostic match is reached only when both URIs are loopback ones, so no pair of
+ordinary URIs can match on anything but the string comparison. This is what confines the whole
+exception to addresses that cannot be reached from the internet.
+
+`Uri.matchesIgnoringPort` is the comparison used for a registered redirect URI against a
+presented one. `h` says it answered `true`. The existential produces the loopback readings of
+both URIs together with the fact that each host is in `Uri.loopbackHosts`. So a match that
+ignored the port implies both sides parsed as loopback, which with `loopback_is_loopback` above
+means neither host is a public one. Whether the rest of either URI matched is not stated here;
+that part is the string comparison the function does anyway.
+-/
 theorem matchesIgnoringPort_is_loopback {registered presented : String}
     (h : Uri.matchesIgnoringPort registered presented = true) :
     ∃ r p, Uri.loopback? registered = some r ∧ Uri.loopback? presented = some p
@@ -78,8 +126,16 @@ theorem matchesIgnoringPort_is_loopback {registered presented : String}
     exact ⟨r, p, heqr, heqp, loopback_is_loopback heqr, loopback_is_loopback heqp⟩
   · simp at h
 
-/-- An authorization code is redeemed at most once. The store's compare-and-set is conditioned
-on the stamp this writes, so what holds of the state here holds of two concurrent requests. -/
+/--
+An authorization code is redeemed at most once. The store's compare-and-set is conditioned on
+the stamp this writes, so what holds of the state here holds of two concurrent requests.
+
+`AuthorizationCode.redeem` takes the moment and the code and returns the code as it now stands.
+`h` says a first redemption at `now` succeeded and produced `next`. The conclusion is that
+redeeming `next` fails with `.alreadyRedeemed` exactly, rather than with some error a caller
+might read as an ordinary failure. `later` is an arbitrary moment and is not required to be
+after `now`, so a clock that runs backwards does not reopen the code.
+-/
 theorem code_redeemed_at_most_once {tenant : TenantId} {now later : Timestamp}
     {code next : AuthorizationCode tenant} (h : AuthorizationCode.redeem now code = .ok next) :
     AuthorizationCode.redeem later next = .error .alreadyRedeemed := by
@@ -92,7 +148,17 @@ theorem code_redeemed_at_most_once {tenant : TenantId} {now later : Timestamp}
       subst h
       simp
 
-/-- A rotated refresh token is dead in the same way. -/
+/--
+A rotated refresh token is dead in the same way as a redeemed code. Refresh tokens are long
+lived, so one that could be rotated twice would give a stolen copy an indefinite life alongside
+the legitimate holder's.
+
+`RefreshToken.rotate` exchanges a token for its successor, and `h` says one rotation succeeded,
+leaving `next`. The conclusion is that rotating `next` fails with `.alreadyRedeemed` exactly, so
+the caller can tell reuse from an expired or unknown token, which is what detects a stolen copy.
+`later` is any moment, earlier ones included, so no clock skew reopens it. Nothing here says the
+rotation's successor cannot itself be rotated once; `next` is the token this rotation retired.
+-/
 theorem refresh_rotated_at_most_once {tenant : TenantId} {now later : Timestamp}
     {token next : RefreshToken tenant} (h : RefreshToken.rotate now token = .ok next) :
     RefreshToken.rotate later next = .error .alreadyRedeemed := by
@@ -107,19 +173,57 @@ theorem refresh_rotated_at_most_once {tenant : TenantId} {now later : Timestamp}
         subst h
         simp
 
-/-- A token's audience is the `resource` its request named, at every step between the two. -/
+/--
+A token's audience is the `resource` its request named, at every step between the two. This is
+the first of those steps: the code a grant decision mints names the resource the decision was
+about, so a code cannot be spent at an audience the person was never asked about.
+
+`decision.code` mints an authorization code from a grant decision, taking the digest of the code
+value, the moment, and the lifetime. The conclusion equates the code's `resource` with the
+decision's. None of `digest`, `now` or `lifetime` appears on either side, so nothing about the
+minting can substitute an audience. It holds by `rfl`, so this is the definition rather than a
+consequence that a later edit could quietly break without failing here.
+-/
 theorem code_audience_is_the_named_resource {tenant : TenantId} (decision : GrantDecision tenant)
     (digest : Digest) (now : Timestamp) (lifetime : Duration) :
     (decision.code digest now lifetime).resource = decision.resource := rfl
 
+/--
+And the entitlement a redeemed code becomes carries the code's resource, which is the second of
+the three steps the audience has to survive.
+
+`code.entitlement` is what redemption turns an authorization code into, the value a refresh
+token is later rotated against. The conclusion equates its `resource` with the code's. `code` is
+any authorization code, so this holds however the code was minted. It holds by `rfl`, so the
+resource is carried rather than re-derived.
+-/
 theorem entitlement_keeps_the_audience {tenant : TenantId} (code : AuthorizationCode tenant) :
     code.entitlement.resource = code.resource := rfl
 
+/--
+And the access token minted from an entitlement carries the entitlement's resource, which is the
+last of the three steps between the request and the credential a resource server sees.
+
+`entitlement.accessToken` mints the token from the digest of its value, the moment, and the
+lifetime. The conclusion equates the token's `resource` with the entitlement's. `digest`, `now`
+and `lifetime` are unconstrained, so nothing supplied at the token endpoint can move the
+audience. It holds by `rfl`.
+-/
 theorem access_token_audience {tenant : TenantId} (entitlement : Entitlement tenant)
     (digest : Digest) (now : Timestamp) (lifetime : Duration) :
     (entitlement.accessToken digest now lifetime).resource = entitlement.resource := rfl
 
-/-- And it is used for nothing else: a token accepted at an audience is a token issued for it. -/
+/--
+And an audience is used for nothing else: a token accepted at an audience is a token issued for
+it. The three theorems above carry the resource forward; this is the check at the far end that
+gives them their force, since without it a token could be presented anywhere.
+
+`AccessToken.admits` is what a resource server calls, taking the moment, the audience it is
+answering for, and the scopes it requires. `h` restricts the claim to acceptance. The conclusion
+is that the token's own `resource` is that audience, so a token minted for one resource is
+refused by every other. `required` and `now` are unconstrained: the theorem says nothing about
+scope or expiry, which are separate branches of the same check.
+-/
 theorem admits_only_its_own_audience {tenant : TenantId} {token accepted : AccessToken tenant}
     {now : Timestamp} {audience : ResourceIndicator} {required : List Scope}
     (h : token.admits now audience required = .ok accepted) : token.resource = audience := by
@@ -133,19 +237,47 @@ theorem admits_only_its_own_audience {tenant : TenantId} {token accepted : Acces
       · rename_i condition
         simpa using condition
 
-/-- An issued token's scopes are a subset of those consented to. -/
+/--
+An issued token's scopes are a subset of those consented to. The scopes a client asks for at the
+token endpoint are its own claim, so a code that carried more than the person agreed to would
+turn a consent page into a formality.
+
+`decision.code` mints the authorization code from a grant decision, and `decision.consentedScopes`
+is what the person agreed to. `Scope.subset` answers `true` when every scope of the first list
+occurs in the second, so the conclusion says the code's scopes are contained in the consented
+ones. `digest`, `now` and `lifetime` are unconstrained, so nothing about the minting moment or
+the credential can widen the set.
+-/
 theorem code_scopes_were_consented {tenant : TenantId} (decision : GrantDecision tenant)
     (digest : Digest) (now : Timestamp) (lifetime : Duration) :
     Scope.subset (decision.code digest now lifetime).scopes decision.consentedScopes = true := by
   simp [GrantDecision.code, Scope.subset, Scope.granted, List.all_eq_true]
 
+/--
+And an access token minted from an entitlement carries that entitlement's scopes, so the
+narrowing done at consent is the last one: nothing is added between the code and the token.
+
+`entitlement.accessToken` is the mint, taking the digest of the token value, the moment and the
+lifetime. The conclusion equates the token's `scopes` with the entitlement's. `digest`, `now` and
+`lifetime` are unconstrained and none of them can move the scopes. It holds by `rfl`, so the
+field is carried across rather than recomputed from anything the request supplied.
+-/
 theorem access_token_scopes {tenant : TenantId} (entitlement : Entitlement tenant)
     (digest : Digest) (now : Timestamp) (lifetime : Duration) :
     (entitlement.accessToken digest now lifetime).scopes = entitlement.scopes := rfl
 
-/-- A consent that is recorded as granted grants something. An approval that narrows away to
-nothing takes the refusal path instead, so no entry is ever written whose scopes reach nothing
-and which every later request would then read back as a standing consent. -/
+/--
+A consent that is recorded as granted grants something. An approval that narrows away to nothing
+takes the refusal path instead, so no entry is ever written whose scopes reach nothing and which
+every later request would then read back as a standing consent.
+
+`ConsentDecision.settled` reduces an answer to the scopes to record, or `none` for a refusal.
+`h` says it returned `some scopes`, so this is about entries that are actually written. The
+conclusion is that `scopes` is not empty. The value being `some` is what carries the meaning: a
+refusal and an approval that survived nothing are both `none`, so the two cases a later reader
+must not confuse are collapsed deliberately rather than left to be distinguished by an empty
+list.
+-/
 theorem settled_grants_something {tenant : TenantId}
     {decision : OAuth.Service.ConsentDecision tenant} {scopes : List Scope}
     (h : decision.settled = some scopes) : scopes.isEmpty = false := by
@@ -160,8 +292,18 @@ theorem settled_grants_something {tenant : TenantId}
       subst h
       simpa using condition
 
-/-- And it grants no more than was asked for: what is recorded is a subset of what the page
-displayed, whatever the host passes back. -/
+/--
+A recorded consent grants no more than was asked for: what is recorded is a subset of what the
+page displayed, whatever the host passes back. The host supplies the approved set from a form it
+parsed, so without this a request could record a consent to scopes the person never saw.
+
+`decision.settled` is the answer reduced to what should be recorded, and `h` restricts the claim
+to the case where something is. `decision.prompt.requestedScopes` is what the page displayed, and
+`Scope.subset` answers `true` when every element of the first list is in the second. So the
+recorded set is contained in the displayed one. The empty case cannot make this vacuous, because
+`settled_grants_something` above rules out an empty result, and the containment is what
+`settled` computes by filtering rather than something checked afterwards.
+-/
 theorem settled_is_within_the_request {tenant : TenantId}
     {decision : OAuth.Service.ConsentDecision tenant} {scopes : List Scope}
     (h : decision.settled = some scopes) :
@@ -211,24 +353,50 @@ private def flagged (document : Json) (field : String) : Option Bool :=
   | some (.bool value) => some value
   | _ => none
 
-/-- The metadata document always advertises `S256`, whatever the configuration. A client that
-does not find `code_challenge_methods_supported` must refuse to proceed, so this is the field
-that decides whether this server is usable at all. -/
+/--
+The metadata document always advertises `S256`, whatever the configuration. A client that does
+not find `code_challenge_methods_supported` must refuse to proceed, so this is the field that
+decides whether this server is usable at all.
+
+`advertised` reads a JSON array field back as its strings. The conclusion is the singleton
+`["S256"]`, which says both that the strong method is offered and that the plain one is not, so
+a client cannot be talked down to it. `documents` is the optional metadata fetcher and `config`
+the deployment's own settings; both are unconstrained, so this holds of every deployment. It
+holds by `rfl`, so the field is a constant of the document rather than something derived that
+could come out empty.
+-/
 theorem metadata_advertises_s256 {m : Type → Type} (documents : Option (ClientDocuments m))
     {tenant : TenantId} (config : OAuthConfig tenant) :
     advertised (metadataDocument documents config) "code_challenge_methods_supported"
       = ["S256"] := rfl
 
-/-- And it always offers `"none"`, whatever else it offers: a public client needs it whether or
-not this deployment can fetch a metadata document. -/
+/--
+The metadata document always offers `"none"`, whatever else it offers: a public client needs it
+whether or not this deployment can fetch a metadata document. An MCP client has no secret to
+present, so a server advertising only authenticated methods is one it cannot use.
+
+`advertised` reads a JSON array field back as its strings, and the field is
+`token_endpoint_auth_methods_supported`. The conclusion is the singleton `["none"]`, so the
+method is not merely present but the only one, and a client need not choose. `documents`,
+`config` and `tenant` are all unconstrained, so no configuration removes it. It holds by `rfl`.
+-/
 theorem metadata_offers_public_clients {m : Type → Type} (documents : Option (ClientDocuments m))
     {tenant : TenantId} (config : OAuthConfig tenant) :
     advertised (metadataDocument documents config) "token_endpoint_auth_methods_supported"
       = ["none"] := rfl
 
-/-- Whether a client may use a URL as its identifier is a fact about this deployment's fetcher
+/--
+Whether a client may use a URL as its identifier is a fact about this deployment's fetcher
 rather than about the protocol, and the document reports that port: the flag is `true` exactly
-where a fetcher is wired, so what is advertised and what can be resolved cannot disagree. -/
+where a fetcher is wired, so what is advertised and what can be resolved cannot disagree.
+
+`documents` is the optional port that fetches a client's metadata document, and `flagged` reads
+a boolean field out of the JSON. The conclusion equates the advertised
+`client_id_metadata_document_supported` with `documents.isSome`, so the field is `true` when a
+fetcher is present and `false` when it is not, rather than being absent in either case. `config`
+and `tenant` are unconstrained, so no deployment can advertise the capability by configuration
+alone. It holds by `rfl`, so the document is built from the port rather than checked against it.
+-/
 theorem metadata_flag_follows_the_fetcher {m : Type → Type}
     (documents : Option (ClientDocuments m)) {tenant : TenantId} (config : OAuthConfig tenant) :
     flagged (metadataDocument documents config) "client_id_metadata_document_supported"
@@ -869,32 +1037,77 @@ def refusalChecks : List (String × Bool) :=
 /-- A scope holding everything an unencoded field name would break on. -/
 private def trickyScope : Scope := ⟨"files:read/write =now"⟩
 
-/-- Whatever the client put in the scope, what reaches the form is a name a browser will send
-back and a lookup will find. -/
+/--
+Whatever the client put in the scope, what reaches the form is a name a browser will send back
+and a lookup will find. A scope is an opaque string the client chose, so a page naming its
+fields after scopes directly would let the client choose the field names.
+
+`trickyScope` holds a slash, a space and an equals sign, which is what an unencoded field name
+would break on. `approvalField` is the name the checkbox is given, and the conclusion is that
+every character of it is a letter, a digit, a hyphen or an underscore. That alphabet is the one
+that survives a form encoding unchanged. One scope is not the general claim, but it is the case
+that would fail first: the encoding is base64url, whose output alphabet is precisely this.
+-/
 theorem approval_field_is_url_safe :
     trickyScope.approvalField.toList.all
       (fun c => c.isAlpha || c.isDigit || c == '-' || c == '_') = true := by decide
 
-/-- The encoding is written and read in one place, so the scope that comes back ticked is the
-one the checkbox was about. -/
+/--
+The encoding is written and read in one place, so the scope that comes back ticked is the one
+the checkbox was about. Without this a scope whose name a browser mangles could be approved and
+recorded as a different scope, or as none.
+
+`Scope.approved` takes the scopes the page displayed and the host's lookup into the submitted
+form, and returns those left ticked. Here the lookup answers `true` for exactly
+`trickyScope.approvalField`, which is what a browser sends back when that one checkbox is
+ticked. The conclusion is `[trickyScope]`: the awkward scope is recovered, and `files:read`,
+whose box was not ticked, is not. Both halves matter, since a lookup that matched everything
+would satisfy the first alone.
+-/
 theorem approved_reads_back_what_was_ticked :
     Scope.approved [trickyScope, ⟨"files:read"⟩] (· == trickyScope.approvalField)
       = [trickyScope] := by decide
 
-/-- Two scopes are two fields, so the box that was ticked is the box that scope's checkbox was.
-The theorem above reads one of them back; this is why it is not reading the other. -/
+/--
+Two scopes are two fields, so the box that was ticked is the box that scope's checkbox was.
+`approved_reads_back_what_was_ticked` reads one of them back; this is why it is not reading the
+other.
+
+`trickyScope` and `⟨"files:read"⟩` are two distinct scopes, and the conclusion is that their
+`approvalField` names compare unequal. Injectivity in general is not claimed, only this pair;
+the encoding is base64url of the scope text, so the general fact holds, but what the theorem
+above needs is that these two do not collide. The case is finite, so `decide` settles it.
+-/
 theorem distinct_scopes_get_distinct_fields :
     (trickyScope.approvalField == Scope.approvalField ⟨"files:read"⟩) = false := by decide
 
 /-! ## A default for a client that named no scopes -/
 
+/--
+A deployment's own scopes stand in where a client asked for none, so a request that named
+nothing produces a page with something on it rather than a consent to nothing.
+
+`h` says the prompt's `requestedScopes` is empty, which is the silence in question. The
+conclusion is that the prompt's scopes are then `defaults` exactly, so what the person is asked
+about is what the deployment chose, neither narrowed nor added to. `defaults` is unconstrained
+and may itself be empty, in which case the page still asks about nothing; choosing what to
+default to is the deployment's business, and this says only that the choice is honoured.
+-/
 theorem defaults_fill_a_silence {tenant : TenantId} (prompt : OAuth.Service.ConsentPrompt tenant)
     (defaults : List Scope) (h : prompt.requestedScopes = []) :
     (prompt.withDefaultScopes defaults).requestedScopes = defaults := by
   simp [OAuth.Service.ConsentPrompt.withDefaultScopes, h]
 
-/-- A client that named its own scopes is asked about those and no others. The default fills a
-silence; it does not widen a request. -/
+/--
+A client that named its own scopes is asked about those and no others. The default fills a
+silence; it does not widen a request.
+
+`withDefaultScopes` is what a deployment calls to put its own scopes on a consent page. `h` is
+the case this theorem is about: the request named at least one scope. The conclusion is equality
+of the whole prompt, not just of its scopes, so the default changes nothing else about the page
+either. Together with `defaults_fill_a_silence` above the two cases are exhaustive, so the
+function's whole behaviour is pinned.
+-/
 theorem defaults_never_widen_a_request {tenant : TenantId}
     (prompt : OAuth.Service.ConsentPrompt tenant) (defaults : List Scope)
     (h : prompt.requestedScopes ≠ []) :

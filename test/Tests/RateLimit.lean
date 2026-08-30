@@ -18,20 +18,52 @@ open Authentication Authentication.Service
 
 /-! ## The window -/
 
+/--
+The sliding window's count rises with the current bucket's count. This is the fact the limiter's
+monotonicity rests on, isolated from the budget comparison so that the arithmetic of the two
+buckets is settled once.
+
+`slidingCount` adds the current bucket to the part of the previous one the window still covers.
+`h` says `a` is at most `b`, and the conclusion says the counts they produce are ordered the same
+way. `previous`, `now` and `limit` are held fixed across the two sides, so the comparison is
+between two counts of the same window; the weighting applied to `previous` is therefore the
+same on both, which is what makes the inequality hold whatever that weighting is.
+-/
 theorem slidingCount_monotone (limit : Limit) (now : Timestamp) {a b previous : Nat}
     (h : a ≤ b) : slidingCount limit now a previous ≤ slidingCount limit now b previous := by
   simp only [slidingCount]
   split <;> omega
 
-/-- Counting more uses never turns a refusal into an admission. -/
+/--
+Counting more uses never turns a refusal into an admission. This is the property AUTH-16.3 asks
+for, in the direction that matters: a limiter that grew more permissive as the count rose would
+admit exactly the caller it exists to stop.
+
+`within` answers `true` when the sliding count is inside the budget. `h` says `a` is at most
+`b`, and `hb` says the larger count `b` was admitted; the conclusion is that the smaller count
+`a` is admitted too. It is stated this way round because that is the form a proof about an
+earlier request needs. The contrapositive is the sentence above: if `a` were refused, `b` would
+be refused as well. `previous`, `now` and `limit` are shared between the two sides, so what
+varies is the current count alone.
+-/
 theorem within_antitone (limit : Limit) (now : Timestamp) {a b previous : Nat} (h : a ≤ b)
     (hb : within limit now b previous = true) : within limit now a previous = true := by
   have := slidingCount_monotone limit now (previous := previous) h
   simp only [within, decide_eq_true_eq] at hb ⊢
   omega
 
-/-- The previous bucket still counts, which is the whole reason for keeping two of them: a fixed
-window would let a caller spend a full budget either side of a boundary. -/
+/--
+The previous bucket still counts, which is the whole reason for keeping two of them: a fixed
+window would let a caller spend a full budget either side of a boundary. Without this the second
+counter could be weighted away to nothing and the limiter would still look monotone.
+
+`slidingCount` combines the current bucket's count with the part of the previous bucket the
+window still covers. The conclusion is that the result is at least `current`, so the previous
+bucket's contribution is never negative and never subtracts from what has just been counted.
+`previous` is unconstrained, so this holds when the previous bucket is empty as well as when it
+is full, and `now` is unconstrained, so it holds at every position within the bucket, including
+the moment the window has just turned over.
+-/
 theorem previous_bucket_counts (limit : Limit) (now : Timestamp) (current previous : Nat) :
     current ≤ slidingCount limit now current previous := by
   simp only [slidingCount]

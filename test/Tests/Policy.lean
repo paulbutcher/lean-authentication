@@ -11,13 +11,33 @@ open Authentication
 /--
 AUTH-16.1 and AUTH-7.3.1: matching is a relation between label lists, so a domain is accepted
 only when the allowed domain's labels are a whole suffix of its own. A text suffix that falls
-inside a label, which is the failure that turns a domain restriction into no restriction, is
-not expressible as an outcome of this function.
+inside a label, which is the failure that turns a domain restriction into no restriction, is not
+expressible as an outcome of this function.
+
+`Domain.allows allowed candidate true` is the matcher with subdomains permitted, and `<:+` is
+suffix on lists, which compares whole labels and cannot end part-way through one. The
+biconditional is what makes this exhaustive rather than a sample: acceptance implies the suffix
+relation, so nothing else is ever admitted, and the suffix relation implies acceptance, so a
+genuine subdomain is not turned away. `allowed` and `candidate` are arbitrary domains, the empty
+label list included; what that case admits is everything, and it is a domain the parser never
+produces.
 -/
 theorem allows_iff_label_suffix (allowed candidate : Domain) :
     allowed.allows candidate true = true ↔ allowed.labels <:+ candidate.labels := by
   simp [Domain.allows]
 
+/--
+Without subdomains the relation is equality of label lists, so a restriction that named a domain
+admits that domain and nothing under it. This is the other half of the switch, and it is worth
+stating because a match that fell back to suffix behaviour would silently admit every subdomain
+of an allowlisted domain.
+
+`Domain.allows allowed candidate false` is the matcher with subdomains turned off. The
+biconditional gives both directions: the label lists are equal exactly when the domain is
+accepted, so nothing is accepted that is not the domain itself, and the domain itself is not
+turned away. Equality is between label lists rather than rendered text, which is what makes the
+statement independent of how a domain was spelled.
+-/
 theorem allows_exactly_iff_equal (allowed candidate : Domain) :
     allowed.allows candidate false = true ↔ allowed.labels = candidate.labels := by
   simp [Domain.allows]
@@ -25,8 +45,16 @@ theorem allows_exactly_iff_equal (allowed candidate : Domain) :
 /--
 The same statement about the text rather than the labels, which is the form AUTH-7.3.1 is
 written in: an accepted domain either is the allowed domain or ends with it after a separator.
-There is no accepted domain whose text merely ends with the allowed text, which is the case
-that would let `evilexample.com` past a restriction to `example.com`.
+There is no accepted domain whose text merely ends with the allowed text, which is the case that
+would let `evilexample.com` past a restriction to `example.com`.
+
+`h` says the candidate was accepted with subdomains allowed, and `hne` says the allowed domain
+has at least one label. The disjunction is over the rendered text: either the two render alike,
+which is the exact match, or the candidate's text is something followed by a dot and then the
+allowed text, which is the subdomain case. The dot is written explicitly, so a candidate whose
+text ends with the allowed text without one is in neither branch and therefore was not accepted.
+`hne` is what rules out the empty allowed domain, for which every domain would trivially end
+with nothing and the statement would say less than it appears to.
 -/
 theorem allows_implies_separated_suffix (allowed candidate : Domain) (hne : allowed.labels ≠ [])
     (h : allowed.allows candidate true = true) :

@@ -23,9 +23,19 @@ open Authentication Authentication.Service
 
 /-! ## The invariant -/
 
-/-- Once suppressed, only the client lifts it (AUTH-12.4). Everything the providers report can
-add a suppression and nothing they report takes one away, which is what makes a bounce storm
-followed by one soft bounce safe. -/
+/--
+Once suppressed, only the client lifts it (AUTH-12.4). Everything the providers report can add a
+suppression and nothing they report takes one away, which is what makes a bounce storm followed
+by one soft bounce safe.
+
+`record.afterFailure` folds a reported failure into the delivery record. The conclusion equates
+the record's `suppressed` afterwards with `failure.suppression.isSome || record.suppressed`, a
+disjunction, and a disjunction can only grow: whatever the new failure says, an already
+suppressed address stays suppressed. `failure` ranges over the whole of `DeliveryFailure`, so
+the soft cases, whose `suppression` is `none`, are covered along with the hard ones, and `now`
+and `detail` do not appear on the right, so nothing about when or how the failure was reported
+can clear the flag.
+-/
 theorem afterFailure_suppressed {tenant : TenantId} (record : DeliveryRecord tenant)
     (failure : DeliveryFailure) (now : Timestamp) (detail : String) :
     (record.afterFailure failure now detail).suppressed

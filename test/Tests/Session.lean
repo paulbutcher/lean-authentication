@@ -22,8 +22,17 @@ open Authentication Authentication.Service
 
 /-! ## The invariants -/
 
-/-- The absolute lifetime is a ceiling, not a suggestion. Without this a session used every day
-never ends, which is the failure AUTH-9.4 asks for two timeouts in order to avoid. -/
+/--
+The absolute lifetime is a ceiling, not a suggestion. Without this a session used every day
+never ends, which is the failure AUTH-9.4 asks for two timeouts in order to avoid.
+
+`Session.refreshedIdleExpiry` is what a request that finds a live session writes back: the idle
+timeout slid forward from the current moment. The conclusion is that the result is at or before
+`s.absoluteExpiresAt`, the session's fixed end. `now` and `idleTimeout` are both unconstrained,
+so no configured timeout and no moment, including one past the absolute expiry, produces a
+refreshed expiry beyond the ceiling. It is stated on the seconds rather than on `Timestamp` so
+that the comparison is the arithmetic one the proof closes.
+-/
 theorem refreshedIdleExpiry_within_absolute {tenant : TenantId} (s : Session tenant)
     (now : Timestamp) (idleTimeout : Duration) :
     (s.refreshedIdleExpiry now idleTimeout).epochSeconds ≤ s.absoluteExpiresAt.epochSeconds := by
@@ -34,9 +43,18 @@ theorem refreshedIdleExpiry_within_absolute {tenant : TenantId} (s : Session ten
     simp only [h, if_false]
     omega
 
-/-- An open redirect is a phishing amplifier precisely because the link comes from the tenant's
-own domain, so what matters is not that allowed targets pass but that nothing else does
-(AUTH-9.8). -/
+/--
+An open redirect is a phishing amplifier precisely because the link comes from the tenant's own
+domain, so what matters is not that allowed targets pass but that nothing else does (AUTH-9.8).
+
+`ReturnTo.resolve` decides where to send someone after signing in, given the deployment's
+allowlist, its fallback, and whatever the request asked for. The disjunction is exhaustive over
+what it can return: either the fallback, which the deployment chose and is not a target a request
+can supply, or something `ReturnTo.permits` answers `true` for. `requested` is unconstrained,
+`none` included, so a missing target and a hostile one are both covered. Nothing here says an
+allowed target is honoured; that is the useful behaviour, and it is what the driven checks
+cover.
+-/
 theorem resolve_permitted (allowlist : List String) (fallback : String)
     (requested : Option String) :
     ReturnTo.resolve allowlist fallback requested = fallback

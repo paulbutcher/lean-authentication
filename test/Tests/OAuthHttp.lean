@@ -47,6 +47,19 @@ def tenant : TenantId := ⟨"acme"⟩
 the path a tenant's URLs are built from rather than against a copy of itself. -/
 private def anyTenant : TenantId := ⟨":tenant:String"⟩
 
+/--
+The three endpoints a per-tenant document advertises are the three paths the per-tenant routes
+answer on. The document's URLs and the route table are built independently, and a disagreement
+between them is silent: every flow already under way keeps working, and only a client
+discovering the server afresh fails.
+
+Each `Routing.renderPattern` prints a declared route as the path it matches, and each right-hand
+side is what `OAuthConfig` puts in the document, the tenant's path followed by the endpoint's
+own. Comparing the three as one tuple means each is compared with its own counterpart.
+`anyTenant` holds a route capture rather than a tenant name, so what is checked is that the
+tenant segment falls in the same place on both sides; a real tenant would compare a path against
+a copy of itself and pass whatever the table said.
+-/
 theorem perTenantPathsAgree :
     (Routing.renderPattern OAuth.Http.PerTenant.patterns.authorize,
       Routing.renderPattern OAuth.Http.PerTenant.patterns.token,
@@ -55,15 +68,33 @@ theorem perTenantPathsAgree :
       BaseUrl.tenantPath anyTenant ++ OAuthConfig.tokenPath,
       BaseUrl.tenantPath anyTenant ++ OAuthConfig.registrationPath) := by decide
 
-/-- RFC 8414 §3 puts the well-known suffix ahead of the issuer's path, and the route answers
-there, so a client that constructs the URL from the issuer it was given reaches it. -/
+/--
+RFC 8414 §3 puts the well-known suffix ahead of the issuer's path, and the route answers there,
+so a client that constructs the URL from the issuer it was given reaches it. Getting the two
+around the wrong way is the mistake that leaves everything working except discovery.
+
+The left side is the pattern the metadata route answers on, printed as a path. The right side is
+`metadataPrefix` followed by the tenant's path, in that order, which is the order the
+specification fixes. `anyTenant` is a capture rather than a real identifier, so what is compared
+is the shape of the path and the position of the tenant segment within it, not one tenant's
+spelling. It is decided rather than proved, the paths being closed terms.
+-/
 theorem perTenantMetadataAgrees :
     Routing.renderPattern OAuth.Http.PerTenant.patterns.metadata
       = OAuthConfig.metadataPrefix ++ BaseUrl.tenantPath anyTenant := by decide
 
-/-- At the origin the issuer has no path, so every endpoint is the bare path and the document is
-at the bare suffix, which is the URL a client holding only an origin constructs. That is the whole
-reason the mount is a parameter. -/
+/--
+At the origin the issuer has no path, so every endpoint is the bare path and the document is at
+the bare suffix, which is the URL a client holding only an origin constructs. That is the whole
+reason the mount is a parameter.
+
+`Routing.renderPattern` prints a route's pattern as the path it matches, and the four on the
+left are the routes the `AtOrigin` mount declares. The four on the right are the constants
+`OAuthConfig` builds an origin-mounted document's URLs from. Equating the tuples compares all
+four at once and pairwise, so no endpoint can agree by accident with another's path. Unlike the
+per-tenant case there is no capture to stand in for a tenant, because at the origin there is no
+tenant segment at all.
+-/
 theorem atOriginPathsAgree :
     (Routing.renderPattern OAuth.Http.AtOrigin.patterns.authorize,
       Routing.renderPattern OAuth.Http.AtOrigin.patterns.token,

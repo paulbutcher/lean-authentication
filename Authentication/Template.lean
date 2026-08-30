@@ -16,6 +16,9 @@ in a string with holes in it. What it is given carries nothing the requester typ
 AUTH-5.2.12 is kept here as well as at the port: there is nowhere to put it.
 
 The text part is not optional, and the HTML part escapes everything it interpolates.
+
+`escapeHtml_removes_markup` is here rather than beside the other theorems because its proof needs
+`escapeChar`, and moving it would mean exporting an escape table nobody outside should call.
 -/
 
 public section
@@ -62,6 +65,18 @@ def escapeHtml (s : String) : String := String.ofList (s.toList.flatMap escapeCh
 /-- The characters an interpolated value would need to open a tag or close an attribute. -/
 def markupChars : List Char := ['<', '>', '"', '\'']
 
+/--
+Escaping a single character emits no markup character, whichever character was escaped. This is
+the whole content of the statement about strings below; separating it does the case analysis over
+the escape table once, against one character, instead of inside a proof about lists.
+
+`h` says `c` is one of `markupChars`, the four characters `<`, `>`, `"` and `'`. `b` ranges over
+the whole of `Char` under no side condition, so it covers both the five characters `escapeChar`
+rewrites and the characters it returns unchanged. The conclusion is that `c` is absent from
+`escapeChar b`, the list that replaces `b`: no replacement reintroduces a character markup could
+be built from. The unchanged case is not a gap, because all four of `markupChars` are among the
+five that are rewritten, so a character returned as itself is never one of them.
+-/
 private theorem not_mem_escapeChar {c : Char} (h : c ∈ markupChars) (b : Char) :
     c ∉ escapeChar b := by
   simp only [markupChars, List.mem_cons, List.not_mem_nil, or_false] at h
@@ -73,6 +88,15 @@ private theorem not_mem_escapeChar {c : Char} (h : c ∈ markupChars) (b : Char)
 No escaped value can open a tag or close an attribute, whatever it contains. This is what makes
 one HTML template safe for every value a template interpolates through `escapeHtml`, rather than
 safe for the values that were tried.
+
+`markupChars` is the four characters that would be needed to do either, `<`, `>`, `"` and `'`,
+and `h` says `c` is one of them. `s` is an arbitrary string, restricted neither in length nor in
+content, so the claim covers hostile input and not merely input that happens to escape cleanly.
+The conclusion is that `c` does not occur among the characters of `escapeHtml s`: escaping emits
+none of the four, which is what having no markup to open amounts to for a value dropped into a
+template. That the templates place their values where those four are the only dangerous ones,
+element text or a quoted attribute rather than an unquoted one or a `href`, is a property of the
+templates that nothing here proves.
 -/
 theorem escapeHtml_removes_markup {c : Char} (h : c ∈ markupChars) (s : String) :
     c ∉ (escapeHtml s).toList := by

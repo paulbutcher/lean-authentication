@@ -31,7 +31,18 @@ theorem grant_address_is_invitation_address {grant : InvitationGrant tenant}
       · simp only [Except.ok.injEq] at h
         simp [← h]
 
-/-- Single use: what acceptance leaves behind is no longer pending (AUTH-8.5). -/
+/--
+Single use: what acceptance leaves behind is no longer pending (AUTH-8.5). An invitation is a
+grant of access to a tenant, so one that stayed pending after being accepted would admit
+everyone the link reached rather than the person it was sent to.
+
+`consume` verifies the presented secret and returns the invitation as it now stands together
+with the grant. `h` restricts the claim to the successful case, which is the only one that
+changes anything. The conclusion pins `next.state` at `.accepted` exactly, rather than merely
+denying `.pending`, so a consumed invitation cannot be left in a state a later revocation or
+expiry check would read differently. `now`, `invitation` and `presented` are the section
+variables and are otherwise arbitrary.
+-/
 theorem consumed_is_not_pending
     {next : Authentication.Invitation tenant} {grant : InvitationGrant tenant}
     (h : Authentication.Invitation.consume now invitation presented = .ok (next, grant)) :

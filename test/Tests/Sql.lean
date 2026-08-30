@@ -18,7 +18,15 @@ open Authentication.Sql
 /--
 Parameters are numbered by their position among parameters, not among fragments. A statement
 built by appending therefore numbers its parameters as though it had been written in one piece,
-which is what lets the shared statements be assembled from a `SELECT` and a `WHERE`.
+which is what lets the shared statements be assembled from a `SELECT` and a `WHERE`. Getting this
+wrong binds a value to the wrong placeholder, which the database executes without complaint.
+
+`Statement.renderFrom d next` renders a fragment list with parameter numbering starting at
+`next`. The conclusion is that rendering `fs ++ gs` is the two renderings concatenated, with the
+second starting at `next + Statement.paramCount fs`: the second half picks up exactly where the
+first half's parameters left off. `next` is arbitrary rather than fixed at one, which is what
+makes the induction go through and what makes the statement usable at a nested append. `d` is any
+dialect, so nothing here depends on how a particular backend spells a placeholder.
 -/
 theorem renderFrom_append (d : Dialect) (next : Nat) (fs gs : List Fragment) :
     Statement.renderFrom d next (fs ++ gs)
@@ -31,8 +39,18 @@ theorem renderFrom_append (d : Dialect) (next : Nat) (fs gs : List Fragment) :
       simp [Statement.renderFrom, Statement.paramCount, ih, String.append_assoc,
         Nat.add_assoc, Nat.add_comm]
 
-/-- The consequence that matters at a call site: appending a parameter gives it the next number,
-whatever mixture of text and table names precedes it. -/
+/--
+The consequence that matters at a call site: appending a parameter gives it the next number,
+whatever mixture of text and table names precedes it. This is the form the shared statements are
+assembled in, so it is the form worth stating separately from the general append.
+
+`Statement.renderFrom d 1` renders a fragment list starting from parameter one, which is how a
+statement is rendered in production. `fs` is any prefix and `[.param v]` a single parameter
+appended to it. The conclusion is that the rendering is the prefix's own followed by the
+dialect's placeholder for `1 + paramCount fs`, so the number given is one past however many
+parameters the prefix held, rather than one past however many fragments it held. `d` is any
+dialect, so this is the seam and not one backend's numbering.
+-/
 theorem placeholder_of_appended_param (d : Dialect) (fs : List Fragment) (v : SqlValue) :
     Statement.renderFrom d 1 (fs ++ [.param v])
       = Statement.renderFrom d 1 fs ++ d.placeholder (1 + Statement.paramCount fs) := by

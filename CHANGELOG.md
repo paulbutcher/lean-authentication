@@ -24,8 +24,7 @@ Metadata now consistent with a client's true capabilities
 
 - An account can be shown what it has connected.
 - Credentials that permit nothing are no longer granted.
-- A code issued from a consent decision is bound to what the page displayed, not what the request
-  said.
+- A code issued from a consent decision is bound to what the page displayed, not what the request said.
 
 ## [0.9.1] - 2026-08-25
 

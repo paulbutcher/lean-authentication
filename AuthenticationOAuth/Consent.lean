@@ -27,6 +27,9 @@ operation an account holder's own privacy page already performs.
 
 What a person was asked is also here, in the field a scope's checkbox carries. `Scope` itself
 imports nothing at all, deliberately, and an encoding needs one.
+
+`parts_inverts_subject` is here for the same reason `Authentication.Template` keeps its own: the
+proof needs `separator`, and moving it would mean exporting the encoding's private detail.
 -/
 
 public section
@@ -66,6 +69,16 @@ server will see: a dynamic one is base64url and a metadata document one is a URL
 in neither alphabet. What it buys is that a host acting on a subject acts on the client and the
 resource the decision was about rather than on a guess at them, and that the two halves of the
 encoding cannot drift apart.
+
+`subject` is the encoder, building a `ConsentSubject` from a client and a resource, and `parts`
+is the reader that takes one apart again. `h` is the side condition and the only one: no
+character of the client identifier is a bar, which is the separator the encoding writes between
+the halves. `resource` carries no condition at all, so an indicator full of bars still reads
+back whole. The conclusion is that reading an encoded subject yields `some` of the very pair it
+was built from, so the round trip neither fails nor returns a different client or resource. That
+the identifiers this server issues really do exclude a bar is argued in the paragraph above from
+their alphabets; it is not proved here, and a client identifier that broke it would fall outside
+`h` rather than be misread.
 -/
 theorem parts_inverts_subject (client : ClientId) (resource : ResourceIndicator)
     (h : ∀ c ∈ client.value.toList, c ≠ '|') :
