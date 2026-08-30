@@ -40,7 +40,7 @@ implementation and review can refer to them.
 
 ## 2. Target environment
 
-- **AUTH-2.1** Toolchain `leanprover/lean4:v4.33.0`, matching the ecosystem libraries below.
+- **AUTH-2.1** Toolchain `leanprover/lean4:v4.33.1`, matching the ecosystem libraries below.
 - **AUTH-2.2** The core library MUST NOT depend on any HTTP server framework, nor on any
   database driver. Framework and driver bindings live in separate `lean_lib` targets so that
   the core is usable with either and requires neither.

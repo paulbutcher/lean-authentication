@@ -13,22 +13,22 @@ package authentication where
     ⟨`warningAsError, true⟩]
 
 require json from git
-  "https://github.com/paulbutcher/lean-json" @ "v0.1.0"
+  "https://github.com/paulbutcher/lean-json" @ "v0.2.1"
 
 require leansqlite from git
   "https://github.com/leanprover/leansqlite" @ "v4.33.0"
 
 require leanpostgres from git
-  "https://github.com/paulbutcher/leanpostgres" @ "v0.6.0"
+  "https://github.com/paulbutcher/leanpostgres" @ "v0.7.2"
 
 require leancurl from git
-  "https://github.com/paulbutcher/leancurl" @ "v0.3.0"
+  "https://github.com/paulbutcher/leancurl" @ "v0.3.1"
 
 require leancrypto from git
-  "https://github.com/paulbutcher/leancrypto" @ "v0.3.0"
+  "https://github.com/paulbutcher/leancrypto" @ "v0.3.1"
 
 require leanaws from git
-  "https://github.com/paulbutcher/lean-aws" @ "v0.2.0"
+  "https://github.com/paulbutcher/lean-aws" @ "v0.2.1"
 
 /-
 The HTTP integration target's dependencies, and only its (AUTH-2.3). `lean-forms` and `lean-htmx`
@@ -36,13 +36,13 @@ are not among them: `Middleware.params` already decodes a form body, and nothing
 needs a partial page update.
 -/
 require routing from git
-  "https://github.com/paulbutcher/lean-routing" @ "v0.7.0"
+  "https://github.com/paulbutcher/lean-routing" @ "v0.7.1"
 
 require html from git
-  "https://github.com/paulbutcher/lean-html" @ "v0.7.0"
+  "https://github.com/paulbutcher/lean-html" @ "v0.9.0"
 
 require middleware from git
-  "https://github.com/paulbutcher/lean-middleware" @ "v0.11.0"
+  "https://github.com/paulbutcher/lean-middleware" @ "v0.13.0"
 
 /-- The submodules are globbed because `Authentication.Instances` is deliberately not imported by
 the root: importing it is what turns the default `Clock` and `RandomBytes` on. -/
