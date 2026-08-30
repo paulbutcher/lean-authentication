@@ -22,6 +22,11 @@ inductive SignupRejection where
   | notInvited
   deriving DecidableEq, Repr, Inhabited
 
+/-- The operator's name for one, for a log record or a span attribute. -/
+def SignupRejection.name : SignupRejection → String
+  | .domainNotAllowed => "domain-not-allowed"
+  | .notInvited => "not-invited"
+
 /-- Why an address that has proven itself was not signed in. Signup policy is one reason and a
 deactivated account is the other; they are held apart because only the first is a decision about
 whether an account may be made, and only the second concerns one that already exists
@@ -30,6 +35,12 @@ inductive SignInRefusal where
   | signup (reason : SignupRejection)
   | accountDeactivated
   deriving DecidableEq, Repr, Inhabited
+
+/-- The operator's name for one, for a log record or a span attribute. A signup reason keeps the
+name it has there, so all three refusals are one set of names to group a query by. -/
+def SignInRefusal.name : SignInRefusal → String
+  | .signup reason => reason.name
+  | .accountDeactivated => "account-deactivated"
 
 inductive SignupDecision where
   | permitted

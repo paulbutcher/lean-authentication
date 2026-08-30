@@ -246,6 +246,8 @@ The audience is checked against the `resource` the token was issued for and noth
 
 `Service.refusalDocument` is the same refusal as a JSON body. Serve it alongside the header wherever a hop might rewrite headers on the way out: an AWS Lambda function URL renames `WWW-Authenticate`, and a client that never sees the refusal, or the `resource_metadata` in it, reconnects forever against a grant it cannot learn is wrong.
 
+`AccessToken.Rejection.name` is that same refusal for the operator. `unknown`, `expired`, `revoked` and `wrongAudience` all reach the client as `invalid_token`, so a resource server logging why it refused has nothing else to tell them apart; `GrantRejection.name`, `MetadataRejection.name` and `SignInRefusal.name` do the same for their own refusals.
+
 ## Mounting the authorisation server
 
 `AuthenticationHttp` serves the four endpoints, for the reason the sign-in routes are there: what an application gets wrong about OAuth is almost never the protocol, it is the transport around it. Calling the four functions above yourself remains supported and is what a deployment whose framework owns the request does.

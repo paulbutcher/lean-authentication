@@ -47,6 +47,20 @@ inductive GrantRejection where
   | scopeExceeded
   deriving DecidableEq, Repr, Inhabited
 
+/-- The operator's name for one, for a log record or a span attribute. What the client is told
+collapses all but two of these into `invalid_grant`, so this is what a log query has to group on
+instead. -/
+def GrantRejection.name : GrantRejection → String
+  | .unknown => "unknown"
+  | .expired => "expired"
+  | .alreadyRedeemed => "already-redeemed"
+  | .revoked => "revoked"
+  | .clientMismatch => "client-mismatch"
+  | .redirectMismatch => "redirect-mismatch"
+  | .resourceMismatch => "resource-mismatch"
+  | .verifierMismatch => "verifier-mismatch"
+  | .scopeExceeded => "scope-exceeded"
+
 /-- Bound to its client, its redirect URI, its challenge, its resource and the scopes that were
 consented to, and to nothing the token request gets to choose. -/
 structure AuthorizationCode (tenant : TenantId) where
@@ -243,6 +257,19 @@ inductive Rejection where
   | wrongAudience
   | insufficientScope (needed : List Scope)
   deriving DecidableEq, Repr, Inhabited
+
+/-- The operator's name for one, for a log record or a span attribute. What the client is told
+answers `invalid_token` for four of these, and a resource server logging its own refusal has
+only that; this is what tells the four apart for whoever is working out why one happened.
+
+The scopes `insufficientScope` carries are left out. `Scope.render` renders them where they are
+wanted, and an attribute whose value varies with what was asked for is not one to group by. -/
+def Rejection.name : Rejection → String
+  | .unknown => "unknown"
+  | .expired => "expired"
+  | .revoked => "revoked"
+  | .wrongAudience => "wrong-audience"
+  | .insufficientScope _ => "insufficient-scope"
 
 /-- Whether this token may be used at `audience` for an operation needing `required`. -/
 def admits {tenant : TenantId} (token : AccessToken tenant) (now : Timestamp)

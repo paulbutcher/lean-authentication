@@ -1032,6 +1032,37 @@ def refusalChecks : List (String × Bool) :=
      , ("oauth: a document with nowhere to send a client omits resource_metadata rather than guessing",
           (documentMember (OAuth.Service.refusalDocument .unknown) "resource_metadata").isNone) ]
 
+/-! ## The operator's name for a refusal -/
+
+private def everyGrantRejection : List GrantRejection :=
+  [.unknown, .expired, .alreadyRedeemed, .revoked, .clientMismatch, .redirectMismatch,
+    .resourceMismatch, .verifierMismatch, .scopeExceeded]
+
+private def everyMetadataRejection : List MetadataRejection :=
+  [.notAnObject, .clientIdMismatch, .missingName, .missingRedirectUris, .unusableRedirectUri,
+    .unsupportedAuthMethod, .unsupportedGrantType, .unsupportedResponseType]
+
+private def named (names : List String) : Bool :=
+  names.all (!·.isEmpty) && names.eraseDups.length == names.length
+
+/--
+Every refusal these three types express has a name of its own for whoever is reading a log. Both
+halves matter and for different reasons: an empty name is a log line that says a refusal
+happened and not which, and a shared one is two causes a query cannot separate, which is the
+whole reason the names exist where the code the client is told already collapses them.
+
+`named` answers `true` when no name in a list is empty and no two are equal, and each list is
+every constructor of one type mapped through its `name`. The three lists are written out rather
+than derived, so a constructor added to a type and not to the list beside it is the one thing
+this does not catch. `insufficientScope` carries scopes and the representative in
+`everyRejection` carries two of them, which loses nothing: `name` does not read them.
+-/
+theorem rejection_names_are_distinct :
+    named (everyRejection.map AccessToken.Rejection.name)
+      ∧ named (everyGrantRejection.map GrantRejection.name)
+      ∧ named (everyMetadataRejection.map MetadataRejection.name) := by
+  decide
+
 /-! ## The consent form -/
 
 /-- A scope holding everything an unencoded field name would break on. -/

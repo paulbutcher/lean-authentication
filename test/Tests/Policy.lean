@@ -99,4 +99,23 @@ example :
     SignupPolicy.evaluate .inviteOnly ⟨"person", ⟨["example", "com"]⟩⟩ false true
       = .rejected .notInvited := by decide
 
+private def everyRefusal : List SignInRefusal :=
+  [.signup .domainNotAllowed, .signup .notInvited, .accountDeactivated]
+
+/--
+The three ways an address that has proven itself is still not signed in are three names in a log,
+and not two. A refusal names a decision somebody has to be able to look up afterwards, and one
+name covering two of them is a question about which decision was made that the log cannot answer.
+
+`everyRefusal` is every value the type has, the two a signup policy can decide and the one about
+an account that already exists. Mapping it through `SignInRefusal.name` and comparing the length
+after `eraseDups` says no two of them share a name, and `all` over `isEmpty` says none of them
+is nameless. The list is written out rather than derived, so a constructor added to the type and
+not here is what this does not catch.
+-/
+theorem refusal_names_are_distinct :
+    (everyRefusal.map SignInRefusal.name).eraseDups.length = everyRefusal.length
+      ∧ everyRefusal.all (!·.name.isEmpty) := by
+  decide
+
 end Tests.Policy

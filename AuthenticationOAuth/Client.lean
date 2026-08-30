@@ -83,6 +83,18 @@ inductive MetadataRejection where
   | unsupportedResponseType
   deriving DecidableEq, Repr, Inhabited
 
+/-- The operator's name for one, for a log record or a span attribute. A registration request is
+answered with one of two codes, so this is what says which of the eight it was. -/
+def MetadataRejection.name : MetadataRejection → String
+  | .notAnObject => "not-an-object"
+  | .clientIdMismatch => "client-id-mismatch"
+  | .missingName => "missing-name"
+  | .missingRedirectUris => "missing-redirect-uris"
+  | .unusableRedirectUri => "unusable-redirect-uri"
+  | .unsupportedAuthMethod => "unsupported-auth-method"
+  | .unsupportedGrantType => "unsupported-grant-type"
+  | .unsupportedResponseType => "unsupported-response-type"
+
 namespace ClientMetadata
 
 def grantTypesSupported : List String := ["authorization_code", "refresh_token"]
