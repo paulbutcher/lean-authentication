@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.14.1] - 2026-08-30
+
+Tidyups.
+
 ## [0.14.0] - 2026-08-29
 
 `OAuth.Service.revoke` writes only where there is something to withdraw.
