@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.15.1] - 2026-09-08
+
+Update dependencies.
+
 ## [0.15.0] - 2026-08-30
 
 A refusal has an operator-facing name for a log record or a span attribute (`AccessToken.Rejection.name`, `GrantRejection.name`, `MetadataRejection.name`, `SignInRefusal.name`).
