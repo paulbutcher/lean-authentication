@@ -5,7 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Authentication.Digest
-import Crypto.Hmac
+import Leancrypto.Hmac
 
 public section
 
@@ -22,13 +22,13 @@ structure Pepper where
 namespace Pepper
 
 def digest (pepper : Pepper) (value : CredentialValue) : Digest :=
-  ⟨pepper.keyId, Crypto.hmac pepper.secret value.encoded.toUTF8⟩
+  ⟨pepper.keyId, Leancrypto.hmac .sha256 pepper.secret value.encoded.toUTF8⟩
 
 /-- Derives one credential from another. The revealed code is derived from the magic token this
 way, so that opening the link always shows the same code without the code ever being stored
 (AUTH-5.2.2, AUTH-5.3.4). -/
 def derive (pepper : Pepper) (label : String) (source : CredentialValue) : ByteArray :=
-  Crypto.hmac pepper.secret (label.toUTF8 ++ source.encoded.toUTF8)
+  Leancrypto.hmac .sha256 pepper.secret (label.toUTF8 ++ source.encoded.toUTF8)
 
 end Pepper
 

@@ -114,10 +114,10 @@ instance : Clock IO where
 instance : RandomBytes IO where
   draw count := do
     let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Crypto.Sha256.hashUtf8 s!"oauth-http-seed-{index}").extract 0 count))
+    pure (.ok ((Leancrypto.Sha256.hashUtf8 s!"oauth-http-seed-{index}").extract 0 count))
 
 def peppers : PepperRing :=
-  { current := { keyId := ⟨"pepper-1"⟩, secret := Crypto.Sha256.hashUtf8 "test pepper" } }
+  { current := { keyId := ⟨"pepper-1"⟩, secret := Leancrypto.Sha256.hashUtf8 "test pepper" } }
 
 private def address (raw : String) : EmailAddress := (EmailAddress.parse raw).toOption.getD default
 

@@ -64,7 +64,8 @@ private def postmarkDelivery : String :=
   "\"DeliveredAt\":\"2026-08-18T16:33:54Z\"}"
 
 private def sesTag (key : String) : String :=
-  "\"tags\":{\"idempotency-key\":[\"" ++ Codec.Base64Url.encodeString key.toUTF8 ++ "\"]}"
+  "\"tags\":{\"idempotency-key\":[\"" ++ Leancrypto.Codec.Base64Url.encodeString key.toUTF8
+    ++ "\"]}"
 
 /-- SES publishes to SNS, which posts an envelope whose `Message` is the payload as a string. -/
 private def wrapped (message : String) : String :=
@@ -145,7 +146,7 @@ instance : Clock IO where
 instance : RandomBytes IO where
   draw count := do
     let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Crypto.Sha256.hashUtf8 s!"suppression-seed-{index}").extract 0 count))
+    pure (.ok ((Leancrypto.Sha256.hashUtf8 s!"suppression-seed-{index}").extract 0 count))
 
 def capturing : EmailTransport IO where
   send mail := do
@@ -155,7 +156,7 @@ def capturing : EmailTransport IO where
 private def address (raw : String) : EmailAddress := (EmailAddress.parse raw).toOption.getD default
 
 def peppers : PepperRing :=
-  { current := { keyId := ⟨"pepper-1"⟩, secret := Crypto.Sha256.hashUtf8 "test pepper" } }
+  { current := { keyId := ⟨"pepper-1"⟩, secret := Leancrypto.Sha256.hashUtf8 "test pepper" } }
 
 def tenant : TenantId := ⟨"acme"⟩
 

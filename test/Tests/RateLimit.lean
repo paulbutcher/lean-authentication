@@ -86,7 +86,7 @@ instance : Clock IO where
 instance : RandomBytes IO where
   draw count := do
     let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Crypto.Sha256.hashUtf8 s!"ratelimit-seed-{index}").extract 0 count))
+    pure (.ok ((Leancrypto.Sha256.hashUtf8 s!"ratelimit-seed-{index}").extract 0 count))
 
 private def now : Timestamp := ⟨1700000000⟩
 
@@ -161,7 +161,7 @@ def serviceChecks : IO (List (String × Bool)) := do
       responseFloor := ResponseFloor.immediate IO
       humanCheck := HumanCheck.unchecked IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
-                                secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
+                                secret := Leancrypto.Sha256.hashUtf8 "test pepper" } } }
   let person := address "person@example.com"
   let requester : RequestContext := { ip := some "198.51.100.7" }
   let mut responses := []
@@ -203,7 +203,7 @@ def floorChecks : IO (List (String × Bool)) := do
       responseFloor := recording floored
       humanCheck := HumanCheck.unchecked IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
-                                secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
+                                secret := Leancrypto.Sha256.hashUtf8 "test pepper" } } }
   let person := address "person.com"
   let attempts := 5
   for _ in [0 : attempts] do

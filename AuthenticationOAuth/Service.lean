@@ -14,7 +14,7 @@ public import AuthenticationOAuth.Ports
 public import AuthenticationOAuth.Registration
 public import AuthenticationOAuth.Request
 public import AuthenticationOAuth.Store
-public import Codec.Base64Url
+public import Leancrypto.Codec.Base64Url
 
 /-!
 The interpreter at the edge (§20.1).
@@ -34,7 +34,7 @@ public section
 
 namespace Authentication.OAuth.Service
 
-open Authentication Codec
+open Authentication Leancrypto.Codec
 
 private def randomValue {m : Type → Type} [Monad m] [RandomBytes m] (bytes : Nat) :
     m (Except String CredentialValue) := do

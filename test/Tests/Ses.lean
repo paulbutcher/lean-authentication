@@ -119,7 +119,7 @@ def checks : List (String × Bool) :=
     -- send otherwise. Substituting the offending characters would map two attempts onto one tag.
     ("ses: the idempotency key survives SES's tag alphabet intact",
       (Ses.tagValue "attempt:a1").all allowedTagChar
-        && Codec.Base64Url.decodeString (Ses.tagValue "attempt:a1")
+        && Leancrypto.Codec.Base64Url.decodeString (Ses.tagValue "attempt:a1")
              == some "attempt:a1".toUTF8),
     ("ses: an accepted send yields the provider's message id",
       sentIdOf (Ses.outcome (responding 200 "{\"MessageId\":\"0100018b-abc\"}"))
@@ -152,7 +152,7 @@ instance : Clock IO where
 instance : RandomBytes IO where
   draw count := do
     let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Crypto.Sha256.hashUtf8 s!"ses-seed-{index}").extract 0 count))
+    pure (.ok ((Leancrypto.Sha256.hashUtf8 s!"ses-seed-{index}").extract 0 count))
 
 def tenant : TenantId := ⟨"acme-ses"⟩
 
@@ -177,7 +177,7 @@ def flowChecks : IO (List (String × Bool)) := do
       responseFloor := ResponseFloor.immediate IO
       humanCheck := HumanCheck.unchecked IO
       peppers := { current := { keyId := ⟨"pepper-1"⟩,
-                                secret := Crypto.Sha256.hashUtf8 "test pepper" } } }
+                                secret := Leancrypto.Sha256.hashUtf8 "test pepper" } } }
   let _ ← begin ports tenantConfig (address "person@example.com") { ip := some "198.51.100.7" }
   let request := (← recorded.get).getD { url := "" }
   let body := bodyText request

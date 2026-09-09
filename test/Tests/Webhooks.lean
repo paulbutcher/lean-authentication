@@ -125,12 +125,12 @@ def postmarkChecks : IO (List (String × Bool)) := do
     "\"Description\":\"550\"}"
   let withHeader (value : Option String) (field : String) : Option String :=
     if field == "authorization" then value else none
-  let right := "Basic " ++ Codec.Base64.encodeString "hook:s3cret".toUTF8
+  let right := "Basic " ++ Leancrypto.Codec.Base64.encodeString "hook:s3cret".toUTF8
 
   let admitted ← endpoint.accept tenant (withHeader (some right)) bounce
   let missing ← endpoint.accept tenant (withHeader none) bounce
-  let wrong ← endpoint.accept tenant
-    (withHeader (some ("Basic " ++ Codec.Base64.encodeString "hook:wrong".toUTF8))) bounce
+  let wrongHeader := "Basic " ++ Leancrypto.Codec.Base64.encodeString "hook:wrong".toUTF8
+  let wrong ← endpoint.accept tenant (withHeader (some wrongHeader)) bounce
   let unencoded ← endpoint.accept tenant (withHeader (some "Basic hook:s3cret")) bounce
 
   pure

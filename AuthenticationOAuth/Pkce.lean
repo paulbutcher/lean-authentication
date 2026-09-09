@@ -4,9 +4,9 @@ Released under Apache 2.0 license as described in the file LICENSE.
 -/
 module
 
-public import Codec.Base64Url
-public import Crypto.Sha256
-public import Crypto.Compare
+public import Leancrypto.Codec.Base64Url
+public import Leancrypto.Sha2
+public import Leancrypto.Compare
 
 /-!
 PKCE, `S256` only (§20.5).
@@ -26,7 +26,7 @@ namespace Authentication.OAuth.Pkce
 
 /-- `BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))`, which is the whole of `S256`. -/
 def challengeOf (verifier : String) : String :=
-  Codec.Base64Url.encodeString (Crypto.Sha256.hashUtf8 verifier)
+  Leancrypto.Codec.Base64Url.encodeString (Leancrypto.Sha256.hashUtf8 verifier)
 
 /-- The unreserved characters OAuth 2.1 §7.5.2 permits, and only those. -/
 def isVerifierChar (c : Char) : Bool :=
@@ -40,10 +40,10 @@ def isVerifier (verifier : String) : Bool :=
 /--
 Whether the verifier is the one the challenge was derived from.
 
-`Crypto.bytesEqual` rather than `==` because the latter stops at the first differing byte, and
+`Leancrypto.bytesEqual` rather than `==` because the latter stops at the first differing byte, and
 what it would then be reporting is how long a correct prefix a guessed verifier had.
 -/
 def verify (challenge verifier : String) : Bool :=
-  Crypto.bytesEqual (challengeOf verifier).toUTF8 challenge.toUTF8
+  Leancrypto.bytesEqual (challengeOf verifier).toUTF8 challenge.toUTF8
 
 end Authentication.OAuth.Pkce

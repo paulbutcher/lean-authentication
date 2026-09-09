@@ -46,10 +46,11 @@ private def domainText (d : Domain) : String := d.render
 so splitting on the separator recovers the labels it was built from. -/
 private def domainOfText (text : String) : Domain := ⟨text.splitOn "."⟩
 
-private def digestBytesText (d : Digest) : String := Codec.Base64Url.encodeString d.bytes
+private def digestBytesText (d : Digest) : String :=
+  Leancrypto.Codec.Base64Url.encodeString d.bytes
 
 private def digestOf (keyId : String) (bytes : String) : Digest :=
-  ⟨⟨keyId⟩, (Codec.Base64Url.decodeString bytes).getD ⟨#[]⟩⟩
+  ⟨⟨keyId⟩, (Leancrypto.Codec.Base64Url.decodeString bytes).getD ⟨#[]⟩⟩
 
 private def timeOf (i : Int) : Timestamp := ⟨i⟩
 

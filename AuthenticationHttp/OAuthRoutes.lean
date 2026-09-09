@@ -9,7 +9,7 @@ public import AuthenticationHttp.Routes
 public import AuthenticationOAuth.Metadata
 public import AuthenticationOAuth.Service
 public import Routing
-import Crypto.Compare
+import Leancrypto.Compare
 import Middleware
 
 /-!
@@ -203,7 +203,7 @@ private def guardOf (config : Config) (request : Request Body.Stream)
   match request.extensions.get Middleware.AntiForgeryToken with
   | some established => .middleware established.value
   | none =>
-    .derived (Codec.Base64Url.encodeString
+    .derived (Leancrypto.Codec.Base64Url.encodeString
       (config.ports.peppers.current.derive "oauth-consent" (session.getD ⟨""⟩)))
 
 private def Guard.token : Guard → String
@@ -212,7 +212,7 @@ private def Guard.token : Guard → String
 private def Guard.accepts : Guard → Option String → Bool
   | .middleware _, _ => true
   | .derived _, none => false
-  | .derived expected, some offered => Crypto.bytesEqual offered.toUTF8 expected.toUTF8
+  | .derived expected, some offered => Leancrypto.bytesEqual offered.toUTF8 expected.toUTF8
 
 /-! ## Handlers -/
 

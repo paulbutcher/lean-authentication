@@ -6,10 +6,10 @@ module
 
 public import Authentication
 public import AuthenticationSes.Transport
-public import Codec.Base64
-public import Codec.Base64Url
-public import Crypto.Rsa
-public import Der
+public import Leancrypto.Codec.Base64
+public import Leancrypto.Codec.Base64Url
+public import Leancrypto.Rsa
+public import Leancrypto.Der
 import Json
 
 /-!
@@ -55,7 +55,7 @@ private def reference (mail : Json) : Option String := do
   let values ← (tags.getObjVal? "idempotency-key").toOption
   let encoded ← (values.getArr?.toOption).bind fun entries =>
     entries[0]?.bind fun entry => entry.getStr?.toOption
-  let decoded ← Codec.Base64Url.decodeString encoded
+  let decoded ← Leancrypto.Codec.Base64Url.decodeString encoded
   String.fromUTF8? decoded
 
 /-- `Permanent` is the only bounce SES will not retry. `Transient` and `Undetermined` are
@@ -223,9 +223,10 @@ def verify {m : Type → Type} [Monad m] (subscription : Subscription m) (envelo
       match ← subscription.certificate url with
       | none => return .error .certificateUnavailable
       | some pem =>
-        match Der.publicKeyOfPem pem, Codec.Base64.decodeString signature with
+        match Leancrypto.Der.publicKeyOfPem pem, Leancrypto.Codec.Base64.decodeString signature with
         | some key, some signatureBytes =>
-          if Crypto.Rsa.verifyPkcs1v15Sha256 key (stringToSign envelope).toUTF8 signatureBytes then
+          if Leancrypto.Rsa.verifyPkcs1v15 .sha256 key
+              (stringToSign envelope).toUTF8 signatureBytes then
             -- Only now is the topic worth reading: an unverified one is whatever the sender
             -- typed.
             let topic := (field "TopicArn").getD ""

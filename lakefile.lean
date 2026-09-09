@@ -25,10 +25,10 @@ require leancurl from git
   "https://github.com/paulbutcher/leancurl" @ "v0.3.1"
 
 require leancrypto from git
-  "https://github.com/paulbutcher/leancrypto" @ "v0.3.1"
+  "https://github.com/paulbutcher/leancrypto" @ "v0.4.0"
 
 require leanaws from git
-  "https://github.com/paulbutcher/lean-aws" @ "v0.3.0"
+  "https://github.com/paulbutcher/lean-aws" @ "v0.3.1"
 
 /-
 The HTTP integration target's dependencies, and only its (AUTH-2.3). `lean-forms` and `lean-htmx`

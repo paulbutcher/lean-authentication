@@ -5,8 +5,8 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Authentication
-import Codec.Base64
-import Crypto.Compare
+import Leancrypto.Codec.Base64
+import Leancrypto.Compare
 import Json
 
 /-!
@@ -88,16 +88,17 @@ structure Credentials where
   username : String
   password : String
 
-/-- Compared whole rather than field by field, and with `Crypto.bytesEqual` rather than `==`: the
-latter stops at the first differing byte, which reports how long a correct prefix a guess had
+/-- Compared whole rather than field by field, and with `Leancrypto.bytesEqual` rather than `==`:
+the latter stops at the first differing byte, which reports how long a correct prefix a guess had
 (AUTH-5.3.4). This one is a password, so unlike the rest of this library's comparisons the
 property is doing real work. -/
 def authorised (credentials : Credentials) (header : Option String) : Bool :=
   let expected :=
-    "Basic " ++ Codec.Base64.encodeString (credentials.username ++ ":" ++ credentials.password).toUTF8
+    "Basic " ++ Leancrypto.Codec.Base64.encodeString
+      (credentials.username ++ ":" ++ credentials.password).toUTF8
   match header with
   | none => false
-  | some offered => Crypto.bytesEqual offered.toUTF8 expected.toUTF8
+  | some offered => Leancrypto.bytesEqual offered.toUTF8 expected.toUTF8
 
 /-- The route-facing endpoint (AUTH-12.1.1). Nothing reaches the parser until the credentials
 match, which is why this is one call and not two. -/

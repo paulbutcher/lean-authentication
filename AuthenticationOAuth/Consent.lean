@@ -7,7 +7,7 @@ module
 public import Authentication.Consent
 public import AuthenticationOAuth.Client
 public import AuthenticationOAuth.Scope
-public import Codec.Base64Url
+public import Leancrypto.Codec.Base64Url
 
 /-!
 A grant is a consent record (§20.14).
@@ -127,7 +127,7 @@ A scope is an opaque string the client chose, and a page that named the field af
 letting the client choose the field name too. A colon is enough for the browser's answer never
 to be found again. -/
 @[expose] def Scope.approvalField (scope : Scope) : String :=
-  "approve-" ++ Codec.Base64Url.encodeString scope.value.toUTF8
+  "approve-" ++ Leancrypto.Codec.Base64Url.encodeString scope.value.toUTF8
 
 /-- Which of `requested` the submitted form left ticked. `ticked` is the host's own lookup into
 the body it parsed, asked once per scope under the name `approvalField` gave it, so the encoding

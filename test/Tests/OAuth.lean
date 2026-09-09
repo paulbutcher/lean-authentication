@@ -50,13 +50,13 @@ Comparing every byte is what makes a verifier check free of an early exit, and a
 what would report how long a correct prefix a guess had. This is the half of the claim a theorem
 can reach: that the comparison written to avoid one still accepts what it should.
 
-`a` is an arbitrary `ByteArray` and `Crypto.bytesEqual` is the constant-time comparison. The
+`a` is an arbitrary `ByteArray` and `Leancrypto.bytesEqual` is the constant-time comparison. The
 conclusion is that it answers `true` on equal arrays, so `pkce_accepts_its_own_challenge` below
 can rest on it. The converse, that it answers `false` on unequal ones, is `bytesEqual_iff` in
 `Tests.Digest`; what is needed here is only that a correct verifier is not turned away.
 -/
-theorem bytesEqual_self (a : ByteArray) : Crypto.bytesEqual a a = true := by
-  unfold Crypto.bytesEqual
+theorem bytesEqual_self (a : ByteArray) : Leancrypto.bytesEqual a a = true := by
+  unfold Leancrypto.bytesEqual
   simp only [beq_self_eq_true, Bool.true_and, zipWith_self_foldl]
 
 /--
@@ -414,10 +414,10 @@ instance : Clock IO where
 instance : RandomBytes IO where
   draw count := do
     let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Crypto.Sha256.hashUtf8 s!"oauth-seed-{index}").extract 0 count))
+    pure (.ok ((Leancrypto.Sha256.hashUtf8 s!"oauth-seed-{index}").extract 0 count))
 
 def peppers : PepperRing :=
-  { current := { keyId := ⟨"pepper-1"⟩, secret := Crypto.Sha256.hashUtf8 "test pepper" } }
+  { current := { keyId := ⟨"pepper-1"⟩, secret := Leancrypto.Sha256.hashUtf8 "test pepper" } }
 
 private def address (raw : String) : EmailAddress := (EmailAddress.parse raw).toOption.getD default
 

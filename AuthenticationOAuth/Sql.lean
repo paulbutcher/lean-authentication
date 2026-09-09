@@ -47,10 +47,11 @@ def oauthTableNames : List String :=
 
 /-! ## Encoding between domain values and columns -/
 
-private def digestBytesText (d : Digest) : String := Codec.Base64Url.encodeString d.bytes
+private def digestBytesText (d : Digest) : String :=
+  Leancrypto.Codec.Base64Url.encodeString d.bytes
 
 private def digestOf (keyId bytes : String) : Digest :=
-  ⟨⟨keyId⟩, (Codec.Base64Url.decodeString bytes).getD ⟨#[]⟩⟩
+  ⟨⟨keyId⟩, (Leancrypto.Codec.Base64Url.decodeString bytes).getD ⟨#[]⟩⟩
 
 private def timeText (t : Timestamp) : Int := t.epochSeconds
 

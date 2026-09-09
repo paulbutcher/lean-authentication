@@ -12,9 +12,9 @@ public import Authentication.Port.HumanCheck
 public import Authentication.Port.Latency
 public import Authentication.Port.RateLimiter
 public import Authentication.Store
-public import Codec.Base64Url
+public import Leancrypto.Codec.Base64Url
 import Authentication.Response
-import Codec.Base32
+import Leancrypto.Codec.Base32
 
 /-!
 The interpreter at the edge (AUTH-3.1).
@@ -32,7 +32,7 @@ public section
 
 namespace Authentication.Service
 
-open Codec
+open Leancrypto.Codec
 
 /-- The implementations chosen at startup (AUTH-3.5), together with the peppers in force. -/
 structure Ports (m : Type → Type) where

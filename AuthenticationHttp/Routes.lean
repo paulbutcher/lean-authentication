@@ -7,7 +7,7 @@ module
 public import AuthenticationHttp.Pages
 public import AuthenticationOAuth.Request
 public import Routing
-import Crypto.Compare
+import Leancrypto.Compare
 import Middleware
 
 /-!
@@ -241,10 +241,10 @@ def returnToLimit : Nat := 1024
 not hold. -/
 def encodeReturnTo (target : String) : Option String :=
   if target.utf8ByteSize > returnToLimit then none
-  else some (Codec.Base64Url.encodeString target.toUTF8)
+  else some (Leancrypto.Codec.Base64Url.encodeString target.toUTF8)
 
 def decodeReturnTo (field : String) : Option String :=
-  (Codec.Base64Url.decodeString field).bind String.fromUTF8?
+  (Leancrypto.Codec.Base64Url.decodeString field).bind String.fromUTF8?
 
 /-- Appends the target to the two fields the core wrote (`Attempt.cookieValue`). -/
 def withReturnTo (value : String) (target : Option String) : String :=
@@ -270,13 +270,13 @@ somebody has to keep: a form posted from another origin cannot carry the right o
 origin that would have to read the cookie cannot.
 -/
 private def formToken (peppers : PepperRing) (nonce : CredentialValue) : String :=
-  Codec.Base64Url.encodeString (peppers.current.derive "form-token" nonce)
+  Leancrypto.Codec.Base64Url.encodeString (peppers.current.derive "form-token" nonce)
 
 private def tokenAccepted (peppers : PepperRing) (nonce : CredentialValue)
     (offered : Option String) : Bool :=
   match offered with
   | none => false
-  | some offered => Crypto.bytesEqual offered.toUTF8 (formToken peppers nonce).toUTF8
+  | some offered => Leancrypto.bytesEqual offered.toUTF8 (formToken peppers nonce).toUTF8
 
 /-! ## Handlers -/
 
@@ -353,7 +353,8 @@ private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : Str
         let nonce ← RandomBytes.draw 16
         let value := match attempt, nonce with
           | .ok attempt, .ok nonce =>
-            Codec.Base64Url.encodeString attempt ++ ":" ++ Codec.Base64Url.encodeString nonce
+            Leancrypto.Codec.Base64Url.encodeString attempt ++ ":"
+              ++ Leancrypto.Codec.Base64Url.encodeString nonce
           | _, _ => ":"
         pure (CookieSpec.forAttempt tenantConfig.baseUrl tenant value
           (now.advance tenantConfig.attemptLifetime.duration)) : IO _)

@@ -67,7 +67,7 @@ base64url alphabet, so the key travels encoded rather than with its other charac
 Substitution would map two different attempts onto one tag, which is precisely what the key exists
 to prevent (AUTH-10.4, AUTH-10.11).
 -/
-def tagValue (key : String) : String := Codec.Base64Url.encodeString key.toUTF8
+def tagValue (key : String) : String := Leancrypto.Codec.Base64Url.encodeString key.toUTF8
 
 /-- SES has no idempotency header, so the key travels as a tag, which it echoes on the delivery
 and bounce events published to the configuration set (AUTH-10.11). -/

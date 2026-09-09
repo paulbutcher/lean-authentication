@@ -11,7 +11,7 @@ Absence of an early exit is not a property a theorem here can state, so what is 
 other half: that the comparison written to avoid one still decides equality. A comparison that
 leaked nothing and also accepted the wrong bytes would pass the eye and fail the point.
 
-`bytesEqual_iff` is a fact about `Crypto.bytesEqual`, which belongs to a dependency, and is
+`bytesEqual_iff` is a fact about `Leancrypto.bytesEqual`, which belongs to a dependency, and is
 restated here because `accepts_iff` needs it and that library proves it in its own suite rather
 than exporting it. Its proper home is beside the definition.
 -/
@@ -65,7 +65,7 @@ private theorem list_iff : ∀ a b : List UInt8,
       exact ⟨hlen, hx, hall⟩
 
 /--
-`Crypto.bytesEqual` answers `true` exactly on equal byte arrays. `accepts_iff` below rests on
+`Leancrypto.bytesEqual` answers `true` exactly on equal byte arrays. `accepts_iff` below rests on
 it, and the library that defines the comparison proves this in its own suite rather than
 exporting it, so it is restated here; its proper home is beside the definition.
 
@@ -74,9 +74,9 @@ biconditional is what is needed in both directions: `true` only for equal arrays
 unequal is admitted, and `true` for every equal pair, so nothing equal is refused. Equality here
 is equality of the arrays themselves, not of their lengths or of some prefix.
 -/
-theorem bytesEqual_iff : ∀ a b : ByteArray, Crypto.bytesEqual a b = true ↔ a = b
+theorem bytesEqual_iff : ∀ a b : ByteArray, Leancrypto.bytesEqual a b = true ↔ a = b
   | ⟨da⟩, ⟨db⟩ => by
-    simp only [Crypto.bytesEqual, ByteArray.size, ByteArray.mk.injEq, ← Array.length_toList,
+    simp only [Leancrypto.bytesEqual, ByteArray.size, ByteArray.mk.injEq, ← Array.length_toList,
       list_iff, Array.toList_inj]
 
 /--

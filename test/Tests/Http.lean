@@ -33,7 +33,7 @@ instance : Clock IO where
 instance : RandomBytes IO where
   draw count := do
     let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Crypto.Sha256.hashUtf8 s!"http-seed-{index}").extract 0 count))
+    pure (.ok ((Leancrypto.Sha256.hashUtf8 s!"http-seed-{index}").extract 0 count))
 
 def capturing : EmailTransport IO where
   send mail := do
@@ -43,7 +43,7 @@ def capturing : EmailTransport IO where
 private def address (raw : String) : EmailAddress := (EmailAddress.parse raw).toOption.getD default
 
 def peppers : PepperRing :=
-  { current := { keyId := ⟨"pepper-1"⟩, secret := Crypto.Sha256.hashUtf8 "test pepper" } }
+  { current := { keyId := ⟨"pepper-1"⟩, secret := Leancrypto.Sha256.hashUtf8 "test pepper" } }
 
 def tenant : TenantId := ⟨"acme"⟩
 
@@ -291,7 +291,7 @@ def webhookChecks : IO (List (String × Bool)) := do
           ++ (match auth with
               | some value => s!"Authorization: {value}\x0d\n"
               | none => "")))
-  let right := "Basic " ++ Codec.Base64.encodeString "hook:s3cret".toUTF8
+  let right := "Basic " ++ Leancrypto.Codec.Base64.encodeString "hook:s3cret".toUTF8
 
   let unauthorised ← post "/t/acme/webhooks/postmark" none
   let afterRefusal ← suppressed (tenant := tenant) ports (address "gone@example.com")
@@ -343,7 +343,7 @@ def returnToChecks : IO (List (String × Bool)) := do
 /-! ## The cookie the target rides in -/
 
 section CookieFormat
-open Authentication.Http Codec.Base64Url
+open Authentication.Http Leancrypto.Codec.Base64Url
 
 /--
 None of the sixty-four base64url characters is a colon. The colon is the separator the attempt
