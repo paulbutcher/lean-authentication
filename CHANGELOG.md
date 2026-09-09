@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.15.2] - 2026-09-09
+
+On leancrypto 0.4.0.
+
 ## [0.15.1] - 2026-09-08
 
 Update dependencies.
