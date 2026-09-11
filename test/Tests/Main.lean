@@ -36,6 +36,7 @@ def main : IO UInt32 := do
     ++ (← Tests.OAuth.postgresChecks)
     ++ (← Tests.OAuthHttp.checks) ++ (← Tests.OAuthHttp.originChecks)
     ++ (← Tests.OAuthHttp.antiForgeryChecks)
+    ++ (← Tests.Secrets.checks) ++ Tests.Secrets.associatedDataChecks
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do
     IO.eprintln s!"FAILED: {name}"

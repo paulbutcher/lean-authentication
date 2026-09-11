@@ -4,8 +4,8 @@
 
 - `Authentication.OAuth.Pkce` is now `Authentication.Pkce`.
 - `SessionSubject` no longer carries an attempt identifier.
-- `Credential` carries a typed descriptor rather than a kind and a string.
-- `AuthStore` gains linked identities, verified addresses and the state record of AUTH-6.2, with migrations for both backends and a `duplicateEmail` refusal.
+- `Credential` carries a typed descriptor, and `AuthStore` gains linked identities, verified addresses and the state record of AUTH-6.2, with migrations for both backends.
+- Per-tenant `providers` and a `Secrets` port, sealed at rest by `AuthenticationOidc`, a new target that links OpenSSL (AUTH-15.7.3).
 - Federated sign-in is specified rather than deferred (§6).
 
 ## [0.15.2] - 2026-09-09

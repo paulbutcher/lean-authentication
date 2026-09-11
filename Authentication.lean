@@ -24,6 +24,7 @@ public import Authentication.Port.Latency
 public import Authentication.Port.RateLimiter
 public import Authentication.Port.Webhook
 public import Authentication.Response
+public import Authentication.Secrets
 public import Authentication.Service
 public import Authentication.Store
 public import Authentication.Suppression

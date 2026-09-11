@@ -6,6 +6,7 @@ module
 
 public import Authentication.Account
 public import Authentication.Digest
+public import Authentication.Secrets
 public import Authentication.Time
 
 /-!
@@ -19,12 +20,6 @@ function over a handful of cases rather than a path through a request handler.
 public section
 
 namespace Authentication
-
-/-- Names one of a tenant's configured providers. Not tenant-indexed: two tenants using Google
-have configured the same provider, and what differs is the credentials they configured it with. -/
-structure ProviderId where
-  value : String
-  deriving DecidableEq, Repr, Inhabited, Hashable
 
 /--
 The record `state` is bound to (AUTH-6.2).

@@ -19,6 +19,7 @@ import Tests.Postmark
 import Tests.Postgres
 import Tests.RateLimit
 import Tests.Response
+import Tests.Secrets
 import Tests.Session
 import Tests.Ses
 import Tests.Signup

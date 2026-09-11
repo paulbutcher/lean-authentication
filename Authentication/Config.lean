@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Authentication.Policy
+public import Authentication.Secrets
 public import Authentication.Template
 public import Authentication.Tenant
 import Authentication.Time
@@ -178,6 +179,20 @@ def ofDuration? (d : Duration) : Option AttemptLifetime :=
 
 end AttemptLifetime
 
+/-- One identity provider as one tenant has it configured (§15.1). The credentials are held
+sealed or resolved elsewhere, never in clear (AUTH-15.7.3). -/
+structure ProviderConfig where
+  id : ProviderId
+  /-- What the provider calls itself, and what an ID token's `iss` is checked against
+  (AUTH-6.5). The discovery document's URL is built from it (AUTH-6.4). -/
+  issuer : String
+  clientId : String
+  clientSecret : StoredSecret
+  /-- What to ask the provider for. `openid` earns its place in the default: without it there is
+  no ID token, and AUTH-6.5 has nothing to validate. -/
+  scopes : List String := ["openid", "email"]
+  deriving Inhabited
+
 /-- Everything that varies by organisation (AUTH-4.1.2). Indexed by the tenant it configures,
 so a config and a state from different tenants cannot be passed to the same call. -/
 structure TenantConfig (tenant : TenantId) where
@@ -194,6 +209,9 @@ structure TenantConfig (tenant : TenantId) where
   sessionAbsoluteLifetime : Duration := Duration.days 90
   invitationLifetime : Duration := Duration.days 7
   returnToAllowlist : List String := []
+  /-- The providers this tenant offers, empty unless configured: a tenant that has not named one
+  has no federated sign-in rather than a default somebody else chose (AUTH-4.1.2). -/
+  providers : List ProviderConfig := []
   /-- Where a sign-in lands when it asked for nowhere, or asked for somewhere it may not go. -/
   defaultReturnTo : String := "/"
   /-- How stale the last-seen time may become before validating a session writes it back. The

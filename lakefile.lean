@@ -27,6 +27,14 @@ require leancurl from git
 require leancrypto from git
   "https://github.com/paulbutcher/leancrypto" @ "v0.4.0"
 
+/-
+The one dependency needing a system library, `pkg-config` and OpenSSL 3 development headers. It is
+confined to the federation targets (AUTH-6.11), so a consumer taking the magic link flow, either
+SQL backend, or the authorisation server links none of it.
+-/
+require «lean-libcrypto» from git
+  "https://github.com/paulbutcher/lean-libcrypto" @ "v0.2.0"
+
 require leanaws from git
   "https://github.com/paulbutcher/lean-aws" @ "v0.3.1"
 
@@ -72,6 +80,11 @@ lean_lib AuthenticationHttp
 from `Std.Http`, which the toolchain ships, and everything else it uses is already here. -/
 @[default_target]
 lean_lib AuthenticationOAuth
+
+/-- The federated sign-in protocol and the secrets it needs (AUTH-6.11). It is the target that
+links OpenSSL, which is why it is its own and why the routes are not in `AuthenticationHttp`. -/
+@[default_target]
+lean_lib AuthenticationOidc
 
 /--
 Tests live in the `test/` subproject rather than here, so that a project depending on this one is
