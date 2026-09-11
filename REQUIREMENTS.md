@@ -12,6 +12,7 @@ Requirement keywords: **MUST**, **SHOULD**, **MAY**. Requirements are numbered s
 
 - Email-based sign-in using a magic link, with a cross-device verification code.
 - Optional classic email one-time codes.
+- Federated sign-in over OAuth 2.0 and OpenID Connect, with Google, Apple and a non-OIDC provider as the first adapters.
 - Per-tenant signup policy: open, domain-restricted, or invitation-only.
 - Session issue, inspection, and revocation.
 - A pluggable outbound email transport, with Postmark and Amazon SES as the first implementations.
@@ -20,7 +21,6 @@ Requirement keywords: **MUST**, **SHOULD**, **MAY**. Requirements are numbered s
 ### 1.1 Non-goals for the first version
 
 - Passwords, in any form. There is no password field, no reset flow, no hashing of secrets the user chose.
-- Federated sign-in over OAuth 2.0 / OpenID Connect. Deferred; see §6, which remains specified against the day it is built.
 - Authorisation. The library says who someone is, not what they may do. See §13, which is a requirement rather than a note: the boundary shapes the API.
 - Self-service account recovery. Someone who loses access to their mailbox is recovered by administrator action in the host application. See §18.1.
 - Inbound email processing. See §11.
@@ -35,14 +35,17 @@ Requirement keywords: **MUST**, **SHOULD**, **MAY**. Requirements are numbered s
 - **AUTH-2.1** Toolchain `leanprover/lean4:v4.33.1`, matching the ecosystem libraries below.
 - **AUTH-2.2** The core library MUST NOT depend on any HTTP server framework, nor on any database driver. Framework and driver bindings live in separate `lean_lib` targets so that the core is usable with either and requires neither.
 - **AUTH-2.3** Expected dependencies, all from `github.com/paulbutcher` unless noted:
-  - `leancurl` for outbound HTTPS (the Postmark and SES APIs).
+  - `leancurl` for outbound HTTPS: the Postmark and SES APIs, and the fetch of AUTH-6.13.
   - `leancrypto` for SHA-256, HMAC-SHA256, hex, base64 and base64url, Crockford base32, the byte comparison of AUTH-5.3.4, and, for AUTH-12.1.2, RSASSA-PKCS1-v1_5 verification with the DER reader that gets a public key out of a certificate.
+  - `lean-jose` for JWS, JWK, JWKS and JWT, whose `Policy` holds the algorithm allowlist so that a token never selects the means of its own verification (AUTH-6.5).
+  - `jose-libcrypto` for ES256 and EdDSA, verifying and signing, and for reading a PKCS#8 private key, which is what AUTH-6.9's Apple client secret is minted from.
+  - `lean-libcrypto` for the OpenSSL 3 binding under both of those, and for the AEAD of AUTH-15.7.3.1. It is the only dependency here needing a system library and `pkg-config`, and AUTH-6.11 confines it.
   - `leanpostgres` for the Postgres storage backend. Not `leanmigrate`: the migrations this library ships are SQL files the client applies, so nothing here depends on a migration tool (AUTH-15.7.1).
   - A SQLite driver, for both the SQLite backend and the test backend (AUTH-16.5), which makes it a dependency of `lake test` and not only of one optional target. Confirm what exists in the ecosystem before depending on it; if nothing suitable does, stop and ask rather than writing one here.
   - `lean-telemetry` for tracing and metrics.
   - `lean-routing`, `lean-html` and `lean-middleware` for the optional HTTP integration target only. `lean-forms` and `lean-htmx` were expected here too and are not used: `Middleware` already decodes a form body, and nothing the sign-in routes do needs a partial page update.
   - `plausible` (leanprover-community) for property tests.
-- **AUTH-2.4** Any cryptography needed (HMAC-SHA256, SHA-256, base64url, constant-time comparison, and the AWS Signature Version 4 derivation built on the first two) MUST be surveyed against the existing ecosystem before being written here. If it does not exist, stop and ask whether it belongs in a new shared library rather than in `lean-auth`. Do not vendor a copy. The survey was done and found nothing usable, so `leancrypto` was created to hold these and this library depends on it; a further consumer needing the same primitives extends that library rather than reopening the question. ES256 and RS256 signature verification are deferred with §6.
+- **AUTH-2.4** Any cryptography needed (HMAC-SHA256, SHA-256, base64url, constant-time comparison, and the AWS Signature Version 4 derivation built on the first two) MUST be surveyed against the existing ecosystem before being written here. If it does not exist, stop and ask whether it belongs in a new shared library rather than in `lean-auth`. Do not vendor a copy. The survey was done and found nothing usable, so `leancrypto` was created to hold these and this library depends on it; a further consumer needing the same primitives extends that library rather than reopening the question. §6 asked the same question again and got the same answer: JOSE, ECDSA, and the AEAD of AUTH-15.7.3.1 live in `lean-jose`, `jose-libcrypto` and `lean-libcrypto`, and none of them is reimplemented here.
 
 ---
 
@@ -169,9 +172,9 @@ This is the primary flow and the one with the most subtle requirements. Read the
 
 ## 6. Federated sign-in (OAuth 2.0 / OIDC)
 
-Deferred out of the first version. The section is retained in full, both so that later requirement numbers stay stable and because the requirements below were written while the reasoning behind them was fresh; AUTH-6.7 in particular is the account takeover that is easy to reintroduce from a blank page.
+Signing in with somebody else's identity provider. §20 is the other direction, being the provider that somebody else's client gets tokens from; the two share vocabulary and almost no code.
 
-Requirements elsewhere that presuppose federated sign-in are deferred with it: AUTH-6.10, AUTH-8.6, AUTH-14.2.7, AUTH-15.7.3, the OAuth state record of §15.1, and the unverified-provider-email case of AUTH-16.7. What is not deferred is the provision made for it, which is cheap now and expensive to retrofit: the `SignInOutcome` type of AUTH-14.2.1 and the response policy of §14.2 are shared surfaces that a federated path must join rather than duplicate, and AUTH-4.4.2 keeps `Credential` open so that a linked identity needs no schema rewrite.
+AUTH-6.7 is the one to read twice. Linking an external identity on an address the provider has not marked verified is the classic account takeover, and it is easy to reintroduce from a blank page. The surfaces this path joins rather than duplicates are the `SignInOutcome` of AUTH-14.2.1 and the response policy of §14.2, which AUTH-14.2.7 requires of it, and AUTH-4.4.2 keeps `Credential` open so that a linked identity is a row rather than a schema change.
 
 - **AUTH-6.1** The Authorization Code flow with PKCE (`S256`) MUST be used, including for confidential clients. The implicit and hybrid flows MUST NOT be implemented.
 - **AUTH-6.2** `state` MUST be a random value bound to a server-side record holding the tenant, the return target, and the creation time. It MUST be single use and expire within 10 minutes. Carrying the tenant in `state` is required from the start, even though v1 uses one origin, so that a single registered redirect URI serves every tenant.
@@ -186,6 +189,10 @@ Requirements elsewhere that presuppose federated sign-in are deferred with it: A
   - **Apple**: the client secret is an ES256 JWT minted from a `.p8` key with a bounded lifetime, so the adapter MUST mint it on demand rather than hold a static secret. The response arrives by `form_post`, which the integration layer must accept. The person's name is supplied only on first authorisation and MUST be captured then or lost. Private relay addresses (`@privaterelay.appleid.com`) are deliverable and MUST be accepted, but MUST NOT satisfy a domain allowlist.
   - **Non-OIDC OAuth providers** such as GitHub require a separate profile call and a separate call for verified addresses. The port MUST accommodate this without pretending they are OIDC.
 - **AUTH-6.10** The signup policy of §7 applies identically to federated sign-in, and its outcome goes through the response policy of §14.2. A federated sign-in that is not permitted to create an account MUST NOT create a dormant or partial account.
+- **AUTH-6.11** This section's code MUST live in targets of its own, and its routes MUST NOT be added to the target carrying the sign-in routes. Three targets: one holding the outbound fetch and nothing that knows what it is fetching for, one holding the protocol and the provider adapters, and one holding the routes. Verification reaches OpenSSL, and `AuthenticationHttp` is what a client taking only the magic link flow mounts, so routes placed there would make every such client link it. This is AUTH-2.3 applied to a dependency heavier than any other here, and it is why §20.19's decision to ship the authorisation server's routes in `AuthenticationHttp` is not followed for these.
+- **AUTH-6.12** The ports MUST be expressed in the vocabulary of the protocol rather than of HTTP: discovering a provider's metadata, fetching its keys, exchanging a code, and reading a non-OIDC provider's profile. A port shaped as a request and a response would put the rules of AUTH-6.13 on the far side of the seam, where the library cannot keep them and a client is free to omit them.
+- **AUTH-6.13** Every outbound request this section makes MUST be `https`, MUST follow no redirect to a host that would not have been fetched directly, MUST carry a bounded timeout, and MUST refuse private and loopback addresses. These rules MUST be applied above the port rather than inside whatever implements it, because a fetch here is provoked by a stranger: a `kid` in a presented token decides whether AUTH-6.4 refetches. They are the rules AUTH-20.2.2 already states for the client metadata document fetch, and they are one set of rules and not two.
+- **AUTH-6.14** An adapter for the fetch of AUTH-6.13 MUST ship wired by default, which is the opposite of the choice AUTH-20.2.2 makes. A deployment with no client metadata document fetcher is narrower than it might be and its metadata document says so; a deployment with no fetcher here has a federated sign-in that cannot work at all, and nothing it advertises would say why.
 
 ---
 
@@ -450,7 +457,8 @@ The port's contract is not its type signature. These are behavioural guarantees 
 
   Migrations MUST ship as SQL files, paired up and down, named in `leanmigrate`'s convention so that a client using it can adopt them into its own migration set unaltered. The library MUST NOT apply them, and MUST NOT record or verify that they were applied. Its bookkeeping would have to live somewhere, and `leanmigrate` writes to one `schema_migrations` table whose name is fixed and unqualified, so the only place available is the client's: two owners in one table break `rollback` for both, since each rolls back by id and neither has files for the other's. Keeping the library out of that entirely is a deliberate trade of a detectable failure for a much smaller design, and the cost of it MUST be documented (AUTH-15.7.5).
 - **AUTH-15.7.2** Credential lookup is by digest, which works because HMAC is deterministic under a fixed pepper. Every stored digest MUST therefore carry the identifier of the key that produced it, and lookup MUST try the current key and any keys still within their overlap window. Without this, honouring AUTH-14.1.6 invalidates every outstanding session and invitation at the moment of rotation. This is part of the port contract, not a per-backend decision.
-- **AUTH-15.7.3** Per-tenant provider credentials (Google client secrets, Apple `.p8` keys) are secrets at rest and MUST be either encrypted in the store or resolved through a secrets port supplied by the client. Globally configured secrets do not have this problem; per-tenant ones do.
+- **AUTH-15.7.3** Per-tenant provider credentials (Google client secrets, Apple `.p8` keys) are secrets at rest. They MUST be resolved through a secrets port the client may supply, and the implementation shipped behind that port MUST encrypt them in the store rather than hold them in clear. There MUST be no plaintext fallback: a deployment that configures nothing gets encryption, not a warning it can ignore. Globally configured secrets do not have this problem; per-tenant ones do.
+  - **AUTH-15.7.3.1** The shipped implementation MUST use an AEAD, MUST bind the tenant, the provider and the field as associated data, and MUST store the identifier of the key that encrypted beside the ciphertext, so that rotation has the overlap window AUTH-15.7.2 already gives digests. The associated data is what stops a ciphertext being lifted from one tenant's row into another's, which is the one place the identifier types of AUTH-4.2.4 cannot reach. The key is configured and never defaulted, as AUTH-14.1.6 requires of the pepper.
 - **AUTH-15.7.4** Timestamps MUST be stored as epoch integers, not a database-specific timestamp type. This removes a dialect difference rather than abstracting one, and matches the `Clock` port.
 - **AUTH-15.7.5** Documentation MUST state that applying the migrations is the client's, and what happens when it is not done: a statement naming a column the database does not have, at the moment that statement first runs, rather than an error at startup.
 
@@ -507,7 +515,7 @@ Unresolved unless the entry says otherwise. Each needs an answer before the affe
 
 - **18.1 Administrator-led recovery.** Self-service recovery is out of scope, so someone who loses mailbox access is restored by the client. The three operations that were named as probably necessary now exist for their own reasons: changing the primary address and force-revoking sessions came with §9, and resending an invitation with §8. What is still not specified is whether that is the whole of it, and in particular what an administrator is to do about an account whose mailbox is gone but whose new address is not yet proven; every path through §5 begins by mailing the address being claimed.
 
-- **18.2 Per-tenant sending domains.** Deferred, and AUTH-10.2 keeps the retrofit cheap. What is not yet decided is whether tenants will eventually sign in at their own hostname as well as send from their own domain. AUTH-4.3.2 assumes not. If they will, the OAuth callback needs a shared origin plus a cross-origin handoff credential, which is a real piece of machinery worth knowing about before it is needed.
+- **18.2 Per-tenant sending domains.** Deferred, and AUTH-10.2 keeps the retrofit cheap. The sign-in half is answered: tenants sign in at one shared origin and AUTH-4.3.2 stands, because AUTH-6.2 carries the tenant in `state` and so one registered redirect URI serves every tenant however many there are. What is still undecided is sending, where a tenant's own domain is a question about deliverability and reputation rather than about routing. Should signing in at a per-tenant hostname ever be asked for, the OAuth callback needs a shared origin plus a cross-origin handoff credential, which is a real piece of machinery worth knowing about before it is needed.
 
 - **18.3 Passkeys.** Deferred, but they are the only phishing-resistant option and the likely next addition. Confirm that AUTH-4.4.2 is enough forward provision, or specify more.
 
@@ -520,6 +528,14 @@ Unresolved unless the entry says otherwise. Each needs an answer before the affe
 - **18.7 Consent capture.** Answered, in §4.6: the library stores consent and does not capture it. The record, the version and the history are what could not be backfilled, and they now exist; the capture is the client's, on somebody it has already authenticated. Asking during sign-in was rejected because a consent control shown only to addresses with no account is a better account enumeration oracle than any channel §14.2 closes. What remains open is only what §18.5 decides: how long the records are kept, and what account deletion does to evidence that permission was given.
 
 - **18.8 Localisation.** Are emails single-language? Locale selection has to be threaded from the request through to template rendering, which is easier to design in than to retrofit.
+
+- **18.9 Federated audit events.** Whether `AuditEvent` should gain the events of §6: which provider an identity was linked from, and when a link was made or broken. The objection is AUTH-20.18.1's: it is a change to a closed inductive in the core target, and to `auditColumns` in the shared SQL store, which a consumer taking only magic links links today.
+
+- **18.10 Where the JWKS cache lives.** Whether the cached keys of AUTH-6.4 belong in `AuthStore` or in a port of their own. They are not tenant-scoped in the way everything else in that port is, since two tenants using one provider want one cached key set, and they are not hot enough to want the rate limiter's treatment either.
+
+- **18.11 An unverified provider address with no account.** AUTH-6.7 settles linking: an unverified address links to nothing, ever. What it does not settle is whether such an address may create an account of its own, where there is nothing to take over. Refusing is the conservative answer and costs a person who has no other way in.
+
+- **18.12 Plus-tag stripping and provider addresses.** Whether the option of AUTH-4.5.4 should apply to an address a provider asserted rather than one somebody typed. Apple's private relay is the case that makes it interesting, since the relay address is already a stable alias the person did not choose.
 
 ## 19. Suggested delivery order
 
@@ -534,8 +550,12 @@ Each stage should build, test, and be reviewable on its own.
 7. Rate limiting, behind the port of AUTH-15.6 and at the five scopes of AUTH-14.1.1. It is listed as a stage because it was previously assigned to none, and so would have been delivered by nobody.
 8. Session management surface, bounce ingestion, suppression.
 9. Consent records (§4.6), which answer §18.7.
-
-Federated sign-in was stage 6 and is deferred; see §6.
+10. Credential and verified-address storage, the `state` record of AUTH-6.2, and the linking rule of AUTH-6.7 with the theorems of AUTH-16.1 over it.
+11. Per-tenant provider configuration and the secrets port of AUTH-15.7.3.
+12. The fetch target of AUTH-6.11 and the OIDC core: discovery, the JWKS cache of AUTH-6.4, `nonce`, and ID token validation behind its port.
+13. Google end to end, through the response policy of §14.2 that AUTH-14.2.7 requires it to share.
+14. Apple, whose client secret and `form_post` callback are the two things no other provider needs.
+15. A non-OIDC provider, which is what proves the port of AUTH-6.9 did not quietly assume an ID token.
 
 ---
 
