@@ -84,7 +84,6 @@ structure SignInEmail (tenant : TenantId) where
   deriving DecidableEq, Repr
 
 structure SessionSubject (tenant : TenantId) where
-  attempt : AttemptId tenant
   address : EmailAddress
   invitation : Option (InvitationId tenant) := none
   /-- The browser the flow began in, which is the one the session is issued to: every completion
@@ -161,7 +160,7 @@ private def complete {tenant : TenantId} (now : Timestamp) (state : AttemptState
     AttemptState tenant × List (Effect tenant) :=
   ({ state with phase := .completed },
     [ .audit ⟨now, .anonymous, .sessionIssued state.id⟩,
-      .issueSession ⟨state.id, state.address, state.invitation, state.requester⟩,
+      .issueSession ⟨state.address, state.invitation, state.requester⟩,
       .clearAttemptCookie "auth_attempt" (BaseUrl.tenantPath tenant),
       .present .signedIn ])
 

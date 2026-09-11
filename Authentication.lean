@@ -14,6 +14,7 @@ public import Authentication.Email
 public import Authentication.Error
 public import Authentication.Invitation
 public import Authentication.Pepper
+public import Authentication.Pkce
 public import Authentication.Policy
 public import Authentication.Port.Clock
 public import Authentication.Port.Email

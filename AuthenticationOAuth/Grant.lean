@@ -5,8 +5,8 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Authentication.Account
+public import Authentication.Pkce
 public import AuthenticationOAuth.Client
-public import AuthenticationOAuth.Pkce
 public import AuthenticationOAuth.Scope
 
 /-!

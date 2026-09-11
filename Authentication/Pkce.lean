@@ -9,7 +9,9 @@ public import Leancrypto.Sha2
 public import Leancrypto.Compare
 
 /-!
-PKCE, `S256` only (§20.5).
+PKCE, `S256` only. Both directions need it, which is why it sits here rather than beside either:
+the authorisation server verifies a challenge it was sent (§20.5), and federated sign-in makes one
+to send (AUTH-6.1).
 
 `plain` is the default `code_challenge_method` in OAuth 2.1 and is not implemented here, so a
 request that omits the method is refused rather than silently downgraded: a challenge that is
@@ -22,7 +24,7 @@ verifiers whose hash matches, and a challenge that was not canonically encoded m
 
 @[expose] public section
 
-namespace Authentication.OAuth.Pkce
+namespace Authentication.Pkce
 
 /-- `BASE64URL-ENCODE(SHA256(ASCII(code_verifier)))`, which is the whole of `S256`. -/
 def challengeOf (verifier : String) : String :=
@@ -46,4 +48,4 @@ what it would then be reporting is how long a correct prefix a guessed verifier 
 def verify (challenge verifier : String) : Bool :=
   Leancrypto.bytesEqual (challengeOf verifier).toUTF8 challenge.toUTF8
 
-end Authentication.OAuth.Pkce
+end Authentication.Pkce

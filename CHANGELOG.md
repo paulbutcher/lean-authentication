@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+- `Authentication.OAuth.Pkce` is now `Authentication.Pkce`.
+- `SessionSubject` no longer carries an attempt identifier.
+- Federated sign-in is specified rather than deferred (§6).
+
 ## [0.15.2] - 2026-09-09
 
 On leancrypto 0.4.0.
