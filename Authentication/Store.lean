@@ -6,6 +6,7 @@ module
 
 public import Authentication.Account
 public import Authentication.Attempt
+public import Authentication.Federation
 public import Authentication.Invitation
 import Authentication.Audit
 import Authentication.Consent
@@ -30,6 +31,7 @@ namespace Authentication
 inductive StoreError where
   | duplicateAccount
   | duplicateCredential
+  | duplicateEmail
   | unknownAccount
   deriving DecidableEq, Repr, Inhabited
 
@@ -46,6 +48,7 @@ structure AccountCreated (tenant : TenantId) where
 structure PurgeCounts where
   attempts : Nat := 0
   sessions : Nat := 0
+  federationStates : Nat := 0
   deriving DecidableEq, Repr, Inhabited
 
 /--
@@ -70,6 +73,28 @@ structure AuthStore (m : Type → Type) where
   in to still owns the audit record of everything it did. -/
   setAccountStatus : (tenant : TenantId) → AccountId tenant → AccountStatus →
     m (Except StoreError Unit)
+  /-- The account this identity is already linked to, if any. Keyed on issuer and subject and
+  never on the address the provider asserts (AUTH-6.6). -/
+  credentialByIdentity : (tenant : TenantId) → FederatedIdentity → m (Option (Credential tenant))
+  /-- Uniqueness on (tenant, issuer, subject) is enforced here rather than checked by the caller,
+  for the reason account creation's is: a caller that looks first and inserts second has a race,
+  and the race links one identity to two accounts (AUTH-15.4.2). -/
+  createCredential : (tenant : TenantId) → Credential tenant → m (Except StoreError Unit)
+  /-- Everything the account can sign in with, which is what AUTH-6.8 has to count before it
+  allows an unlink. -/
+  credentialsForAccount : (tenant : TenantId) → AccountId tenant → m (List (Credential tenant))
+  deleteCredential : (tenant : TenantId) → CredentialId tenant → m Unit
+  /-- The account holding this address as one it has proven, whether as its primary or among the
+  additional addresses of AUTH-4.4.1. This is the lookup AUTH-6.7 links against, and it is
+  deliberately not `accountByIdentity`, which answers on the primary alone and is what the magic
+  link flow asks. -/
+  accountByVerifiedEmail : (tenant : TenantId) → NormalisedEmail → m (Option (Account tenant))
+  /-- Records that the account has proven an address besides its primary. The address must belong
+  to no other account in the tenant, which is the same uniqueness AUTH-15.4.2 asks of a primary
+  and is enforced in the same place. -/
+  addVerifiedEmail : (tenant : TenantId) → AccountId tenant → NormalisedEmail →
+    m (Except StoreError Unit)
+  removeVerifiedEmail : (tenant : TenantId) → AccountId tenant → NormalisedEmail → m Unit
   /-- Inserts the attempt and abandons any attempt already live for the same address in one
   step, returning what it abandoned so the caller can record it. Doing this in two calls would
   leave a window in which two attempts are live, and an attacker who can farm concurrent
@@ -81,6 +106,15 @@ structure AuthStore (m : Type → Type) where
   won. Two concurrent completions of one attempt therefore produce exactly one session
   (AUTH-5.3.5, AUTH-15.4.1). -/
   commitAttempt : (tenant : TenantId) → (expected next : AttemptState tenant) → m Bool
+  /-- The record `state` is bound to (AUTH-6.2). -/
+  createFederationState : (tenant : TenantId) → FederationState tenant → m Unit
+  /-- Looked up by the digest of the `state` the provider sent back, as a session is by the
+  digest of its cookie. Expiry and consumption are enforced on read (AUTH-15.4.3). -/
+  federationStateByDigest : (tenant : TenantId) → Timestamp → Digest →
+    m (Option (FederationState tenant))
+  /-- Compare and set, never read then write. Two callbacks racing with one `state` therefore
+  produce one sign-in, which is the whole of what single use means (AUTH-6.2). -/
+  commitFederationState : (tenant : TenantId) → (expected next : FederationState tenant) → m Bool
   createSession : (tenant : TenantId) → Session tenant → m Unit
   /-- Expiry and revocation are enforced here, so correctness does not depend on a sweeper
   having run (AUTH-15.4.3). A read that follows a write observes it: a just-issued session
@@ -132,15 +166,16 @@ structure AuthStore (m : Type → Type) where
   not by a rule a backend is asked to follow but by an operation it is not given. -/
   appendAudit : (tenant : TenantId) → AuditEntry tenant → m Unit
   auditEntries : (tenant : TenantId) → m (List (AuditEntry tenant))
-  /-- Removes attempts that expired before `before`, and sessions that can no longer be used and
-  stopped being usable before it. Everything it removes is already refused on read, so no
-  correctness depends on it having run; what it bounds is growth (AUTH-15.4.3).
+  /-- Removes attempts that expired before `before`, sessions that can no longer be used and
+  stopped being usable before it, and federation states that expired or were spent before it.
+  Everything it removes is already refused on read, so no correctness depends on it having run;
+  what it bounds is growth (AUTH-15.4.3).
 
   It sweeps nothing else. The audit log, consent records and delivery history are retention
   questions rather than expiry ones, and the port offers no way to remove one of those. -/
   purgeExpired : (tenant : TenantId) → (before : Timestamp) → m PurgeCounts
-  /-- Removes the tenant's accounts, sessions, invitations, attempts, delivery history, consent
-  records and audit records, with no orphans (AUTH-4.2.5). -/
+  /-- Removes the tenant's accounts, credentials, sessions, invitations, attempts, federation
+  states, delivery history, consent records and audit records, with no orphans (AUTH-4.2.5). -/
   deleteTenant : (tenant : TenantId) → m Unit
 
 /--

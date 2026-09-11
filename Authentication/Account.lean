@@ -36,15 +36,31 @@ inductive CredentialKind where
   | federatedIdentity
   deriving DecidableEq, Repr, Inhabited
 
-/-- One means of proving identity. `descriptor` carries the kind's own key: the normalised
-address for `emailAddress`, and issuer and subject for `federatedIdentity`, which is what an
-external identity is keyed on rather than the address the provider asserts (AUTH-6.6). -/
+/-- What a provider calls somebody. Issuer and subject and never the address the provider
+asserts: providers permit an address to change, and the subject is the key that does not
+(AUTH-6.6). -/
+structure FederatedIdentity where
+  issuer : String
+  subject : String
+  deriving DecidableEq, Repr, Inhabited
+
+/-- What one kind is identified by. Each variant carries its own key, which is what keeps the
+set open: a passkey arrives as another variant holding whatever identifies a passkey, and no
+variant already here changes shape (AUTH-4.4.2). -/
+inductive CredentialDescriptor where
+  | emailAddress (address : NormalisedEmail)
+  | federatedIdentity (identity : FederatedIdentity)
+  deriving DecidableEq, Repr
+
+def CredentialDescriptor.kind : CredentialDescriptor → CredentialKind
+  | .emailAddress _ => .emailAddress
+  | .federatedIdentity _ => .federatedIdentity
+
+/-- One means by which an account can prove itself. -/
 structure Credential (tenant : TenantId) where
   id : CredentialId tenant
   account : AccountId tenant
-  kind : CredentialKind
-  descriptor : String
-  digest : Option Digest := none
+  descriptor : CredentialDescriptor
   createdAt : Timestamp
   deriving DecidableEq, Repr
 

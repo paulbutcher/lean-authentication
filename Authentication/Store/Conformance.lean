@@ -76,6 +76,32 @@ private def sampleInvitation (tenant : TenantId) (id : String) (address : EmailA
     expiresAt := later
     createdBy := .client "conformance" }
 
+/-- A refusal, and the one it was supposed to be. `Except` has no `BEq` to compare against, and
+naming the error is the point: a store that refuses for its own reasons still fails the check. -/
+private def refused (expected : StoreError) : Except StoreError Unit → Bool
+  | .error actual => actual == expected
+  | .ok _ => false
+
+private def sampleIdentity : FederatedIdentity := ⟨"https://issuer.example", "subject-1"⟩
+
+private def sampleCredential (tenant : TenantId) (id : String) (account : AccountId tenant)
+    (identity : FederatedIdentity) : Credential tenant :=
+  { id := ⟨id⟩
+    account
+    descriptor := .federatedIdentity identity
+    createdAt := epoch }
+
+private def sampleState (tenant : TenantId) (id : String) (digest : Digest)
+    (expiresAt : Timestamp) : FederationState tenant :=
+  { id := ⟨id⟩
+    provider := ⟨"conformance"⟩
+    stateDigest := digest
+    verifier := "verifier-" ++ id
+    nonce := "nonce-" ++ id
+    returnTo := some "/after"
+    createdAt := epoch
+    expiresAt }
+
 /--
 Runs every check against `store`.
 
@@ -260,6 +286,9 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   store.appendAudit doomed ⟨soon, .anonymous, .attemptCreated ⟨"attempt-doomed"⟩⟩
   let _ ← store.recordDeliveryFailure doomed person.normalise .hardBounce epoch "gone"
   store.recordConsent doomed ⟨⟨"account-doomed"⟩, terms, "2026-01", .granted, epoch⟩
+  let _ ← store.createCredential doomed
+    (sampleCredential doomed "cred-doomed" ⟨"account-doomed"⟩ sampleIdentity)
+  store.createFederationState doomed (sampleState doomed "state-doomed" (digestOf [21]) later)
   store.deleteTenant doomed
   let doomedAccount ← store.accountByIdentity doomed person.normalise
   let doomedAttempt ← store.attemptById doomed ⟨"attempt-doomed"⟩
@@ -268,7 +297,50 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let doomedAudit ← store.auditEntries doomed
   let doomedRecord ← store.deliveryRecord doomed person.normalise
   let doomedConsent ← store.consentHistory doomed ⟨"account-doomed"⟩
+  let doomedCredential ← store.credentialByIdentity doomed sampleIdentity
+  let doomedState ← store.federationStateByDigest doomed epoch (digestOf [21])
   let survivingAccount ← store.accountByIdentity alpha person.normalise
+
+  -- Linked identities, keyed on issuer and subject and never on the address (AUTH-6.6).
+  let linkOk ← store.createCredential alpha (sampleCredential alpha "cred-1" ⟨"account-1"⟩ sampleIdentity)
+  let linkedBack ← store.credentialByIdentity alpha sampleIdentity
+  let linkAgain ← store.createCredential alpha (sampleCredential alpha "cred-2" ⟨"account-3"⟩ sampleIdentity)
+  let crossTenantCredential ← store.credentialByIdentity beta sampleIdentity
+  let accountCredentials ← store.credentialsForAccount alpha ⟨"account-1"⟩
+  store.deleteCredential alpha ⟨"cred-1"⟩
+  let afterUnlink ← store.credentialByIdentity alpha sampleIdentity
+
+  -- Additional verified addresses, and the uniqueness that spans them and the primary.
+  let spare := addressOf "spare"
+  let addSpare ← store.addVerifiedEmail alpha ⟨"account-1"⟩ spare.normalise
+  let holderOfSpare ← store.accountByVerifiedEmail alpha spare.normalise
+  let holderOfPrimary ← store.accountByVerifiedEmail alpha person.normalise
+  let spareTakenByOther ← store.addVerifiedEmail alpha ⟨"account-3"⟩ spare.normalise
+  let primaryTakenByOther ← store.addVerifiedEmail alpha ⟨"account-3"⟩ person.normalise
+  let crossTenantVerified ← store.accountByVerifiedEmail beta spare.normalise
+  store.removeVerifiedEmail alpha ⟨"account-1"⟩ spare.normalise
+  let afterSpareRemoved ← store.accountByVerifiedEmail alpha spare.normalise
+
+  -- The state record `state` is bound to: single use, expiring, and invisible across tenants.
+  let liveStateDigest := digestOf [7, 1]
+  let staleStateDigest := digestOf [7, 2]
+  let racedDigest := digestOf [7, 3]
+  store.createFederationState alpha (sampleState alpha "state-live" liveStateDigest later)
+  store.createFederationState alpha (sampleState alpha "state-stale" staleStateDigest soon)
+  store.createFederationState alpha (sampleState alpha "state-raced" racedDigest later)
+  let liveState ← store.federationStateByDigest alpha epoch liveStateDigest
+  let staleState ← store.federationStateByDigest alpha later staleStateDigest
+  let crossTenantState ← store.federationStateByDigest beta epoch liveStateDigest
+  -- Two callbacks read one record, then both write: exactly one may win (AUTH-6.2).
+  let racedA ← store.federationStateByDigest alpha epoch racedDigest
+  let racedB ← store.federationStateByDigest alpha epoch racedDigest
+  let firstCommit ← match racedA with
+    | some state => store.commitFederationState alpha state (state.consumed epoch)
+    | none => pure false
+  let secondCommit ← match racedB with
+    | some state => store.commitFederationState alpha state (state.consumed epoch)
+    | none => pure false
+  let afterStateCommit ← store.federationStateByDigest alpha epoch racedDigest
 
   pure
     [ { name := "an account is readable by the identity it was created with"
@@ -386,6 +458,42 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     , { name := "deleting a tenant removes its consent records (AUTH-4.2.5)"
         passed := doomedConsent.isEmpty }
     , { name := "deleting a tenant leaves other tenants alone"
-        passed := survivingAccount.isSome } ]
+        passed := survivingAccount.isSome }
+    , { name := "a linked identity is readable by the issuer and subject it was created with (AUTH-6.6)"
+        passed := linkOk.toOption.isSome && (linkedBack.map (·.account.value)) == some "account-1" }
+    , { name := "one identity cannot be linked to two accounts (AUTH-15.4.2)"
+        passed := refused .duplicateCredential linkAgain }
+    , { name := "a linked identity is invisible from another tenant (AUTH-4.2.4)"
+        passed := crossTenantCredential.isNone }
+    , { name := "an account's credentials are listed, which is what AUTH-6.8 counts"
+        passed := accountCredentials.length == 1 }
+    , { name := "unlinking removes the credential"
+        passed := afterUnlink.isNone }
+    , { name := "an additional verified address finds its account (AUTH-6.7)"
+        passed := addSpare.toOption.isSome && (holderOfSpare.map (·.id.value)) == some "account-1" }
+    , { name := "a primary address is found by the same lookup"
+        passed := (holderOfPrimary.map (·.id.value)) == some "account-1" }
+    , { name := "an address verified on one account cannot be verified on another"
+        passed := refused .duplicateEmail spareTakenByOther }
+    , { name := "another account's primary cannot be claimed as an additional address"
+        passed := refused .duplicateEmail primaryTakenByOther }
+    , { name := "a verified address is invisible from another tenant (AUTH-4.2.4)"
+        passed := crossTenantVerified.isNone }
+    , { name := "removing a verified address removes it"
+        passed := afterSpareRemoved.isNone }
+    , { name := "a state record is readable by the digest of the state it was created with (AUTH-6.2)"
+        passed := (liveState.map (·.verifier)) == some "verifier-state-live" }
+    , { name := "an expired state record is refused on read (AUTH-15.4.3)"
+        passed := staleState.isNone }
+    , { name := "a state record is invisible from another tenant (AUTH-4.2.4)"
+        passed := crossTenantState.isNone }
+    , { name := "two callbacks racing with one state produce one sign-in (AUTH-6.2)"
+        passed := firstCommit && !secondCommit }
+    , { name := "a spent state record is refused on read"
+        passed := afterStateCommit.isNone }
+    , { name := "deleting a tenant removes its credentials (AUTH-4.2.5)"
+        passed := doomedCredential.isNone }
+    , { name := "deleting a tenant removes its state records (AUTH-4.2.5)"
+        passed := doomedState.isNone } ]
 
 end Authentication.Store.Conformance

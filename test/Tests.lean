@@ -7,6 +7,7 @@ import Tests.Consent
 import Tests.EndToEnd
 import Tests.Digest
 import Tests.Email
+import Tests.Federation
 import Tests.Flow
 import Tests.Http
 import Tests.Invitation

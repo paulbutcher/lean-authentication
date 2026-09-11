@@ -31,12 +31,15 @@ private def invitations : TableName := ⟨"invitations"⟩
 private def deliveryRecords : TableName := ⟨"delivery_records"⟩
 private def consents : TableName := ⟨"consents"⟩
 private def audit : TableName := ⟨"audit"⟩
+private def credentials : TableName := ⟨"credentials"⟩
+private def federationStates : TableName := ⟨"federation_states"⟩
 
 /-- The tables these statements read and write, as the bare names `Dialect.table` qualifies. A
 backend's schema has to create all of them and nothing here depends on what it calls them. -/
 def tableNames : List String :=
   [accounts.value, accountEmails.value, attempts.value, sessions.value, invitations.value,
-    deliveryRecords.value, consents.value, audit.value]
+    deliveryRecords.value, consents.value, audit.value, credentials.value,
+    federationStates.value]
 
 /-! ## Encoding between domain values and columns -/
 
@@ -676,6 +679,164 @@ private def auditEntries [Monad m] (c : Ctx m) (tenant : TenantId) :
     (auditEventOf tenant (row.text 2) (row.text 3) (row.text 4)).map fun event =>
       { occurredAt := timeOf (row.int 0), actor := actorOf (row.text? 1), event })
 
+/-! ## Credentials and verified addresses -/
+
+private def federatedKind : String := "federated"
+private def emailKind : String := "email"
+
+private def kindText : CredentialDescriptor → String
+  | .federatedIdentity _ => federatedKind
+  | .emailAddress _ => emailKind
+
+private def issuerOf : CredentialDescriptor → Option String
+  | .federatedIdentity identity => some identity.issuer
+  | .emailAddress _ => none
+
+private def subjectOf : CredentialDescriptor → Option String
+  | .federatedIdentity identity => some identity.subject
+  | .emailAddress _ => none
+
+private def localOf : CredentialDescriptor → Option String
+  | .federatedIdentity _ => none
+  | .emailAddress address => some address.localPart
+
+private def domainOf : CredentialDescriptor → Option String
+  | .federatedIdentity _ => none
+  | .emailAddress address => some (domainText address.domain)
+
+private def credentialSelect : Statement :=
+  sql!"SELECT id, account_id, kind, issuer, subject, local, domain, created_at
+       FROM {credentials}"
+
+private def readCredential {tenant : TenantId} (row : SqlRow) : Credential tenant :=
+  { id := ⟨row.text 0⟩
+    account := ⟨row.text 1⟩
+    descriptor :=
+      if row.text 2 == federatedKind then .federatedIdentity ⟨row.text 3, row.text 4⟩
+      else .emailAddress ⟨row.text 5, domainOfText (row.text 6)⟩
+    createdAt := timeOf (row.int 7) }
+
+private def credentialByIdentity [Monad m] (c : Ctx m) (tenant : TenantId)
+    (identity : FederatedIdentity) : m (Option (Credential tenant)) := do
+  let row ← c.first (credentialSelect ++
+    sql!" WHERE tenant = {tenant.value} AND kind = {federatedKind}
+            AND issuer = {identity.issuer} AND subject = {identity.subject}")
+  pure (row.map readCredential)
+
+/-- The partial unique index on (tenant, issuer, subject) is what refuses the second link, so
+two requests racing to link one identity produce one credential (AUTH-15.4.2). -/
+private def createCredential [Monad m] (c : Ctx m) (tenant : TenantId)
+    (credential : Credential tenant) : m (Except StoreError Unit) := do
+  let inserted ← c.affected
+    sql!"INSERT INTO {credentials}
+           (tenant, id, account_id, kind, issuer, subject, local, domain, created_at)
+         VALUES ({tenant.value}, {credential.id.value}, {credential.account.value},
+           {kindText credential.descriptor}, {issuerOf credential.descriptor},
+           {subjectOf credential.descriptor}, {localOf credential.descriptor},
+           {domainOf credential.descriptor}, {timeText credential.createdAt})
+         ON CONFLICT DO NOTHING"
+  pure (if inserted == 0 then .error .duplicateCredential else .ok ())
+
+private def credentialsForAccount [Monad m] (c : Ctx m) (tenant : TenantId)
+    (account : AccountId tenant) : m (List (Credential tenant)) := do
+  let rows ← c.rows (credentialSelect ++
+    sql!" WHERE tenant = {tenant.value} AND account_id = {account.value}
+          ORDER BY created_at, id")
+  pure (rows.map readCredential).toList
+
+private def deleteCredential [Monad m] (c : Ctx m) (tenant : TenantId)
+    (id : CredentialId tenant) : m Unit :=
+  c.run sql!"DELETE FROM {credentials} WHERE tenant = {tenant.value} AND id = {id.value}"
+
+/-- The primary is tried first and the additional addresses of AUTH-4.4.1 second. Uniqueness
+across both is what makes the order immaterial rather than a tie-break. -/
+private def accountByVerifiedEmail [Monad m] (c : Ctx m) (tenant : TenantId)
+    (address : NormalisedEmail) : m (Option (Account tenant)) := do
+  match ← accountByIdentity c tenant address with
+  | some account => pure (some account)
+  | none =>
+    let row ← c.first
+      sql!"SELECT account_id FROM {accountEmails}
+           WHERE tenant = {tenant.value} AND local = {address.localPart}
+             AND domain = {domainText address.domain}"
+    match row.map (·.text 0) with
+    | none => pure none
+    | some id => accountById c tenant ⟨id⟩
+
+/-- The address must belong to no other account in the tenant, as a primary or as somebody
+else's additional address. Both are looked for inside the transaction that writes, for the
+reason `setPrimaryEmail` looks first: the index is what enforces it, and the lookup is what
+turns the case a client will hit into a typed error. -/
+private def addVerifiedEmail [Monad m] (c : Ctx m) (tenant : TenantId)
+    (account : AccountId tenant) (address : NormalisedEmail) : m (Except StoreError Unit) :=
+  c.transaction fun c => do
+    match ← accountByVerifiedEmail c tenant address with
+    | some holder => if holder.id != account then return .error .duplicateEmail
+    | none => pure ()
+    c.run
+      sql!"INSERT INTO {accountEmails} (tenant, account_id, local, domain)
+           VALUES ({tenant.value}, {account.value}, {address.localPart},
+             {domainText address.domain})
+           ON CONFLICT DO NOTHING"
+    pure (.ok ())
+
+private def removeVerifiedEmail [Monad m] (c : Ctx m) (tenant : TenantId)
+    (account : AccountId tenant) (address : NormalisedEmail) : m Unit :=
+  c.run
+    sql!"DELETE FROM {accountEmails}
+         WHERE tenant = {tenant.value} AND account_id = {account.value}
+           AND local = {address.localPart} AND domain = {domainText address.domain}"
+
+/-! ## Federation states -/
+
+private def federationStateSelect : Statement :=
+  sql!"SELECT id, provider, digest_key, digest_bytes, verifier, nonce, return_to,
+         created_at, expires_at, consumed_at
+       FROM {federationStates}"
+
+private def readFederationState {tenant : TenantId} (row : SqlRow) : FederationState tenant :=
+  { id := ⟨row.text 0⟩
+    provider := ⟨row.text 1⟩
+    stateDigest := digestOf (row.text 2) (row.text 3)
+    verifier := row.text 4
+    nonce := row.text 5
+    returnTo := row.text? 6
+    createdAt := timeOf (row.int 7)
+    expiresAt := timeOf (row.int 8)
+    consumedAt := (row.int? 9).map timeOf }
+
+private def createFederationState [Monad m] (c : Ctx m) (tenant : TenantId)
+    (state : FederationState tenant) : m Unit :=
+  c.run
+    sql!"INSERT INTO {federationStates}
+           (tenant, id, provider, digest_key, digest_bytes, verifier, nonce, return_to,
+            created_at, expires_at, consumed_at)
+         VALUES ({tenant.value}, {state.id.value}, {state.provider.value},
+           {state.stateDigest.keyId.value}, {digestBytesText state.stateDigest},
+           {state.verifier}, {state.nonce}, {state.returnTo},
+           {timeText state.createdAt}, {timeText state.expiresAt},
+           {state.consumedAt.map timeText})"
+
+private def federationStateByDigest [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
+    (digest : Digest) : m (Option (FederationState tenant)) := do
+  let row ← c.first (federationStateSelect ++
+    sql!" WHERE tenant = {tenant.value} AND digest_key = {digest.keyId.value}
+            AND digest_bytes = {digestBytesText digest}
+            AND consumed_at IS NULL AND expires_at > {timeText now}")
+  pure (row.map readFederationState)
+
+/-- The only transition a state record has is unspent to spent, so what `expected` is compared
+on is that it was unspent. Two callbacks racing with one `state` therefore produce one sign-in
+and one refusal (AUTH-6.2). -/
+private def commitFederationState [Monad m] (c : Ctx m) (tenant : TenantId)
+    (expected next : FederationState tenant) : m Bool := do
+  let affected ← c.affected
+    sql!"UPDATE {federationStates}
+         SET consumed_at = {next.consumedAt.map timeText}
+         WHERE tenant = {tenant.value} AND id = {expected.id.value}
+           AND consumed_at IS NULL"
+  pure (affected == 1)
+
 /-! ## Sweeping -/
 
 /-- A session is removed once nothing can reach it: past its absolute lifetime, past the idle
@@ -694,11 +855,18 @@ private def purgeExpired [Monad m] (c : Ctx m) (tenant : TenantId) (before : Tim
              AND (absolute_expires_at < {timeText before}
                   OR idle_expires_at < {timeText before}
                   OR revoked_at < {timeText before})"
-    pure { attempts := attemptsRemoved, sessions := sessionsRemoved }
+    let statesRemoved ← c.affected
+      sql!"DELETE FROM {federationStates}
+           WHERE tenant = {tenant.value}
+             AND (expires_at < {timeText before} OR consumed_at < {timeText before})"
+    pure { attempts := attemptsRemoved, sessions := sessionsRemoved,
+           federationStates := statesRemoved }
 
 private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
   c.transaction fun c => do
     c.run sql!"DELETE FROM {accountEmails} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {credentials} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {federationStates} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {accounts} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {attempts} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {sessions} WHERE tenant = {tenant.value}"
@@ -716,9 +884,19 @@ def sqlAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : AuthSt
     accountById := accountById c
     setPrimaryEmail := setPrimaryEmail c
     setAccountStatus := setAccountStatus c
+    credentialByIdentity := credentialByIdentity c
+    createCredential := createCredential c
+    credentialsForAccount := credentialsForAccount c
+    deleteCredential := deleteCredential c
+    accountByVerifiedEmail := accountByVerifiedEmail c
+    addVerifiedEmail := addVerifiedEmail c
+    removeVerifiedEmail := removeVerifiedEmail c
     startAttempt := startAttempt c
     attemptById := attemptById c
     commitAttempt := commitAttempt c
+    createFederationState := createFederationState c
+    federationStateByDigest := federationStateByDigest c
+    commitFederationState := commitFederationState c
     createSession := createSession c
     sessionByDigest := sessionByDigest c
     sessionsForAccount := sessionsForAccount c
