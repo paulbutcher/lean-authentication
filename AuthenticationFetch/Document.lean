@@ -147,6 +147,25 @@ def document {m : Type → Type} [Monad m] (http : Http m) (limits : Limits := {
     m (Except FetchError Document) :=
   follow http limits (limits.maxRedirects + 1) url
 
+/--
+A document fetched with headers of the caller's, for an endpoint that authenticates the request.
+
+No redirect is followed, and that is the difference from `document` rather than an omission. These
+headers carry a bearer token, and following a redirect would hand it to whichever host the
+response named. `permitted` would still refuse a private address, but a public host that is not
+the one the caller meant is exactly what a credential must not be sent to.
+-/
+def get {m : Type → Type} [Monad m] (http : Http m) (limits : Limits := {}) (url : String)
+    (headers : Leancurl.Headers) : m (Except FetchError Document) := do
+  match permitted url with
+  | .error e => pure (.error e)
+  | .ok _ =>
+    match ← http.send
+        { url, method := .get, headers, followRedirects := false
+          timeoutMs := some limits.timeoutMs } with
+    | .error e => pure (.error (.transport e.code e.message))
+    | .ok response => pure (readBody limits response)
+
 /-- A form post, for a token endpoint. No redirect is followed: an endpoint that answers a token
 request with a redirect is not one this library has anything to say to, and following it would
 put the request body somewhere the caller did not name. -/

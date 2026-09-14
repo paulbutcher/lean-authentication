@@ -66,12 +66,12 @@ private def keySet : IO (Option (Jose.KeySet Jose.Backend.libcrypto)) := do
     | .ok prepared => pure (some prepared)
 
 private def verify (payload : String) (nonce : String := "the-nonce") :
-    IO (Except OidcError VerifiedIdToken) := do
+    IO (Except OidcError ProviderAnswer) := do
   match ← keySet, ← mint header payload with
   | some keys, some token => validate provider discovery keys nonce token now
   | _, _ => pure (.error (.badDocument "fixture"))
 
-private def rejected : Except OidcError VerifiedIdToken → Bool
+private def rejected : Except OidcError ProviderAnswer → Bool
   | .error _ => true
   | .ok _ => false
 

@@ -58,9 +58,19 @@ anything in it is used.
 -/
 def metadata (http : Fetch.Http IO) (limits : Fetch.Limits := {}) : ProviderMetadata IO where
   discover config := do
-    match ← Fetch.document http limits (wellKnownUrl config.issuer) with
-    | .error reason => pure (.error (.fetch reason))
-    | .ok document => pure (readDiscovery config.issuer document.body)
+    match config.endpoints with
+    -- A provider that publishes no document has nothing to fetch and nothing to check its issuer
+    -- against; what would have been discovered is configuration instead (AUTH-6.9).
+    | .configured authorization token _ _ =>
+      pure (.ok
+        { issuer := config.issuer
+          authorizationEndpoint := authorization
+          tokenEndpoint := token
+          jwksUri := "" })
+    | .discovered =>
+      match ← Fetch.document http limits (wellKnownUrl config.issuer) with
+      | .error reason => pure (.error (.fetch reason))
+      | .ok document => pure (readDiscovery config.issuer document.body)
 
 /--
 The keys port, with the cache and the refetch limit of AUTH-6.4.
@@ -116,7 +126,7 @@ The retry is conditional on the failure being an unknown key and on the cache be
 refetch, so a token signed by nobody costs one verification and no outbound request.
 -/
 def verifyIdToken (port : ProviderKeys IO) (config : ProviderConfig) (discovery : Discovery)
-    (expectedNonce token : String) (now : Timestamp) : IO (Except OidcError VerifiedIdToken) := do
+    (expectedNonce token : String) (now : Timestamp) : IO (Except OidcError ProviderAnswer) := do
   match ← port.jwks discovery false with
   | .error reason => pure (.error reason)
   | .ok text =>

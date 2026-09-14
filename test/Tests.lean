@@ -17,6 +17,7 @@ import Tests.Http
 import Tests.Invitation
 import Tests.Migrations
 import Tests.OAuth
+import Tests.OAuth2Provider
 import Tests.OAuthHttp
 import Tests.Oidc
 import Tests.OidcHttp

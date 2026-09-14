@@ -37,7 +37,7 @@ def maxSkew : Std.Time.Second.Offset := 60
 
 /-- What a validated ID token says, reduced to what a sign-in acts on. Everything else the
 provider sent is deliberately dropped rather than carried about. -/
-structure VerifiedIdToken where
+structure ProviderAnswer where
   identity : FederatedIdentity
   address : Option EmailAddress
   /-- Whether the provider marked the address verified, which is the single fact AUTH-6.7 turns
@@ -73,7 +73,7 @@ provider echoed, so the guess is a remote one, but the comparison costs nothing.
 -/
 def validate (config : ProviderConfig) (discovery : Discovery) (keys : Jose.KeySet Jose.Backend.libcrypto)
     (expectedNonce : String) (token : String) (now : Timestamp) :
-    IO (Except OidcError VerifiedIdToken) := do
+    IO (Except OidcError ProviderAnswer) := do
   match policyFor config discovery with
   | none => pure (.error (.badDocument "issuer"))
   | some policy =>

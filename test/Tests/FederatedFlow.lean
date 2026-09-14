@@ -69,17 +69,14 @@ private def identity : FederatedIdentity := ⟨provider.issuer, "subject-99"⟩
 /-- Every port stubbed but the store, so what is exercised is the flow rather than the network. -/
 private def oidcPorts (verified : Bool := true) : SignInPorts IO :=
   { metadata := { discover := fun _ => pure (.ok discovery) }
-    idTokens :=
-      { verify := fun _ _ _ _ _ => pure (.ok
-          { identity
-            address := some (address "person@example.com")
-            addressVerified := verified
-            hostedDomain := none }) }
-    tokens :=
-      { exchange := fun _ _ _ _ _ _ => do
+    identities :=
+      { redeem := fun _ _ _ _ _ _ _ _ => do
           exchanges.modify (· + 1)
-          pure (.ok "an.id.token") }
-    clientSecrets := { produce := fun _ _ _ _ => pure (.ok "a-secret") } }
+          pure (.ok
+            { identity
+              address := some (address "person@example.com")
+              addressVerified := verified
+              hostedDomain := none }) } }
 
 private def parameter (url name : String) : Option String :=
   ((url.splitOn (name ++ "=")).drop 1)[0]?.map fun tail =>

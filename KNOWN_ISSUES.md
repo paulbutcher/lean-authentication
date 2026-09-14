@@ -2,15 +2,17 @@
 
 Deliberate limitations of the current implementation, with the reasoning behind them. Each entry names the requirement it falls short of and what would close the gap.
 
-## Only OpenID Connect providers are implemented (§6)
+## No federated sign-in has ever met a real provider (§6)
 
-An OpenID Connect provider works end to end: discovery, the cached key set, the `state` record, ID token validation, the linking rule of AUTH-6.7, and the routes. Google needs nothing of its own, which is the result AUTH-6.9 was hoping for: `email_verified` is what `Federation.decide` already turns on, and `hd` is carried as evidence while the domain is still checked by §7. Apple has what it needs too: its client secret is minted per request from the `.p8`, its `form_post` callback is answered, and a relay address is accepted while never satisfying a domain allowlist.
+Federated sign-in is built: OpenID Connect providers, Apple's minted client secret and `form_post`, and a non-OIDC provider that answers with an access token and two more calls. Every part of it is exercised against stubs, and the ID tokens in the suite are real ones signed by a real key, but no request this library builds has ever been offered to Google, Apple or GitHub.
 
-**GitHub, and any other non-OIDC provider, is missing.** There is no ID token, so `IdTokens` has nothing to validate, and a verified address takes a second call the shape here does not make. Both are ports, so what is missing is an adapter rather than a change to this design, but nothing ships one.
+That is the standing the SES adapter has, and for the same reason: a suite that reached a provider would fail when the provider had a bad day rather than when this library did (AUTH-16.5). What it leaves is the class of defect that passes here and fails there, and the shape of it differs by provider. Apple's assertion is checked for its algorithm, claims, bounded lifetime and 64-byte raw signature, and `jose-libcrypto` is checked against Wycheproof, but Apple has never accepted one. The non-OIDC adapter reads a profile and an address list transcribed from GitHub's published examples, so a field GitHub has since renamed would pass the suite and refuse every sign-in.
 
-**No Apple assertion has ever been offered to Apple.** The minted secret is checked here for its algorithm, its claims, its bounded lifetime and a 64-byte raw signature, and `jose-libcrypto` is checked against Wycheproof, but the pair has never been put to the provider that has to accept it. That is the standing of the SES adapter for the same reason, and the first live sign-in is the test.
+The first live sign-in against each is the test, and it is worth doing deliberately rather than discovering.
 
-`Credential.descriptor` also has no `emailAddress` row written for it. The magic link route identifies an account by its primary address rather than by a credential, so the variant exists and nothing creates one; a passkey would be the first kind that did.
+## The emailAddress credential has no writer (AUTH-4.4.2)
+
+`Credential.descriptor` has an `emailAddress` variant and nothing creates one. The magic link route identifies an account by its primary address rather than by a credential row, so the variant is forward provision rather than something in use; a passkey would be the first kind that changed that. The federated route does write its own rows, so the set is not empty, only narrower than the type allows.
 
 ## No committed test makes an HTTP request (AUTH-16.5)
 

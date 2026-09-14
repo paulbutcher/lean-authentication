@@ -2,11 +2,11 @@
 
 ## [Unreleased]
 
-- `Authentication.OAuth.Pkce` is now `Authentication.Pkce`, and `OAuth.Uri`'s URL helpers are now `Authentication.Url`.
+- Federated sign-in (§6), in three new targets: `AuthenticationFetch`, `AuthenticationOidc` and `AuthenticationOidcHttp`. OpenID Connect providers, Apple, and providers that are neither.
 - `Service.issueFor` signs in a subject that has already proven itself. `SessionSubject` names the route it came by, and `SignInOutcome` and `SignInRefusal` gain `addressNotVerified`.
 - `Credential` carries a typed descriptor, and `AuthStore` gains linked identities, verified addresses and the state record of AUTH-6.2, with migrations for both backends.
-- Federated sign-in over OpenID Connect, Google and Apple included, in three new targets: `AuthenticationFetch`, `AuthenticationOidc` and `AuthenticationOidcHttp` (§6).
 - A relay address no longer satisfies a domain allowlist (AUTH-6.9).
+- `Authentication.OAuth.Pkce` is now `Authentication.Pkce`, and `OAuth.Uri`'s URL helpers are now `Authentication.Url`.
 
 ## [0.15.2] - 2026-09-09
 

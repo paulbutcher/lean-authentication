@@ -25,6 +25,9 @@ Each target is a separate `lean_lib`. Depend only on what you use.
 | `AuthenticationSes` | Amazon SES transport and SNS callback endpoint |
 | `AuthenticationHttp` | Ready-made sign-in routes, and the authorisation server's own endpoints |
 | `AuthenticationOAuth` | OAuth 2.1 authorisation server, for MCP clients and anything else |
+| `AuthenticationFetch` | Outbound document fetch, with the rules that make one safe |
+| `AuthenticationOidc` | Federated sign-in: OpenID Connect, Apple, and non-OIDC providers (needs OpenSSL) |
+| `AuthenticationOidcHttp` | Ready-made federated sign-in routes |
 
 ## The flow
 
@@ -114,6 +117,8 @@ def routes (db : SQLite) (secret : ByteArray) (token : String) :
 | `/t/<tenant>/signin/emailed-code` | `POST`, the optional code from the mail body |
 | `/t/<tenant>/invitation/accept` | `GET`, the invitation link target |
 | `/t/<tenant>/webhooks/<name>` | `POST`, provider callbacks |
+| `/t/<tenant>/federated/<provider>` | `GET`, sends the browser to the provider |
+| `/t/<tenant>/federated/<provider>/callback` | `GET` or `POST`, the provider's answer |
 
 `Http.routes` returns the same list for mounting into a router you already have.
 
@@ -334,7 +339,7 @@ The `From` domain needs all of these before mail is delivered rather than filed:
 - **A token's audience is the `resource` its request named**, and its scopes are a subset of what was consented to. Both are theorems, and verification refuses a token presented anywhere else.
 - **A redirect URI is compared as a string**, with the port ignored for loopback URIs and for nothing else. That the exception admits no other host is a theorem.
 
-`REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls short of it. Federated sign-in over OIDC, inbound email, passkeys and SAML are not implemented, and the authorisation server issues no ID tokens.
+`REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls short of it. Inbound email, passkeys and SAML are not implemented, the authorisation server issues no ID tokens, and no federated sign-in has yet been offered to a real provider.
 
 ## Building
 

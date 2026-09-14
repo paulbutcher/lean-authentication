@@ -28,16 +28,21 @@ structure TokenEndpoint (m : Type → Type) where
   exchange : Discovery → ProviderConfig → (code redirectUri verifier clientSecret : String) →
     m (Except OidcError String)
 
-/-- Validating an ID token. It is a port rather than a call because `lean-jose` verifies in `IO`,
-and the decisions above it are worth running in a monad a test chooses (AUTH-6.5, AUTH-6.12). -/
-structure IdTokens (m : Type → Type) where
-  verify : ProviderConfig → Discovery → (nonce token : String) → Timestamp →
-    m (Except OidcError VerifiedIdToken)
+/--
+Redeeming the authorization code for what the provider says about somebody.
 
-/-- The shipped implementation, over a cached key set: at most one refetch for a `kid` the set
-lacks, and none at all while the last fetch is recent (AUTH-6.4). -/
-def idTokens (keys : ProviderKeys IO) : IdTokens IO where
-  verify provider discovery nonce token now := verifyIdToken keys provider discovery nonce token now
+This is the seam AUTH-6.9 asks for. An OpenID Connect provider answers the token request with an
+ID token and the work is validating it; a provider that is not answers with an access token and
+two more calls. Both produce the same answer, and neither is made to look like the other: what
+differs is which implementation sits here.
+
+It is a port rather than a call for a second reason too: `lean-jose` verifies in `IO`, and the
+decisions above this are worth running in whatever monad a test chooses (AUTH-6.12).
+-/
+structure ProviderIdentities (m : Type → Type) where
+  redeem : TenantId → ProviderConfig → Discovery →
+    (code redirectUri verifier nonce : String) → Timestamp →
+    m (Except OidcError ProviderAnswer)
 
 /-- Turning configured credentials into the secret a token request carries. A port rather than a
 lookup because Apple's is minted per request from a key rather than held (AUTH-6.9). -/
@@ -47,9 +52,7 @@ structure ClientSecrets (m : Type → Type) where
 /-- The implementations a federated sign-in is wired from. -/
 structure SignInPorts (m : Type → Type) where
   metadata : ProviderMetadata m
-  idTokens : IdTokens m
-  tokens : TokenEndpoint m
-  clientSecrets : ClientSecrets m
+  identities : ProviderIdentities m
 
 private def encodeComponent (value : String) : String :=
   toString (Std.Http.URI.EncodedString.encode (r := Std.Http.Internal.Char.isUnreserved) value)
@@ -86,6 +89,24 @@ def tokenEndpoint (http : Fetch.Http IO) (limits : Fetch.Limits := {}) : TokenEn
         match (value.getObjVal? "id_token").toOption.bind (·.getStr?.toOption) with
         | some token => pure (.ok token)
         | none => pure (.error (.badDocument "id_token"))
+
+
+/--
+The OpenID Connect implementation of the seam (AUTH-6.5).
+
+Redeeming is one request and the answer is in the token itself, which is the whole of what
+OpenID Connect adds to OAuth: the provider says who somebody is in something it signed, so no
+second call is needed and no second call is trusted.
+-/
+def oidcIdentities (tokens : TokenEndpoint IO) (secrets : ClientSecrets IO)
+    (keys : ProviderKeys IO) : ProviderIdentities IO where
+  redeem tenant provider discovery code redirectUri verifier nonce now := do
+    match ← secrets.produce tenant provider discovery now with
+    | .error reason => pure (.error reason)
+    | .ok secret =>
+      match ← tokens.exchange discovery provider code redirectUri verifier secret with
+      | .error reason => pure (.error reason)
+      | .ok idToken => verifyIdToken keys provider discovery nonce idToken now
 
 /-- The cookie that binds the state record to the browser that began the flow.
 
@@ -205,24 +226,19 @@ def completeFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
         if !(← ports.store.commitFederationState tenant record (record.consumed now)) then
           pure (.error .nonceMismatch)
         else
-          match ← oidc.clientSecrets.produce tenant provider discovery now with
+          match ← oidc.identities.redeem tenant provider discovery code redirectUri
+              record.verifier record.nonce now with
           | .error reason => pure (.error reason)
-          | .ok secret =>
-            match ← oidc.tokens.exchange discovery provider code redirectUri record.verifier secret with
-            | .error reason => pure (.error reason)
-            | .ok idToken =>
-              match ← oidc.idTokens.verify provider discovery record.nonce idToken now with
-              | .error reason => pure (.error reason)
-              | .ok verified =>
-                match verified.address with
-                | none => pure (.error (.badDocument "email"))
-                | some address =>
-                  let subject : SessionSubject tenant :=
-                    { origin := .federated verified.identity verified.addressVerified
-                      address
-                      requester }
-                  let outcome ← issueFor ports config subject
-                  pure (.ok { outcome, returnTo := record.returnTo, profile })
+          | .ok answer =>
+            match answer.address with
+            | none => pure (.error (.badDocument "email"))
+            | some address =>
+              let subject : SessionSubject tenant :=
+                { origin := .federated answer.identity answer.addressVerified
+                  address
+                  requester }
+              let outcome ← issueFor ports config subject
+              pure (.ok { outcome, returnTo := record.returnTo, profile })
   | _, _ => pure (.error .nonceMismatch)
 
 end Authentication.Oidc

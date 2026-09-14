@@ -179,6 +179,14 @@ def ofDuration? (d : Duration) : Option AttemptLifetime :=
 
 end AttemptLifetime
 
+/-- Where a provider's endpoints come from. OpenID Connect publishes them and AUTH-6.4 requires
+them to be read from there; a provider that is not OpenID Connect publishes nothing to read, so
+its endpoints, and the two calls it takes to learn who somebody is, are configuration. -/
+inductive ProviderEndpoints where
+  | discovered
+  | configured (authorization token profile emails : String)
+  deriving Inhabited
+
 /-- How a tenant proves this client to the provider. Two shapes because Apple has the second:
 its secret is minted on demand from a key with a bounded lifetime rather than held, so what is
 configured is the key and what travels is never what was stored (AUTH-6.9). -/
@@ -202,6 +210,7 @@ structure ProviderConfig where
   redirecting. Apple does, and what it costs is the state cookie: a cross-site `POST` carries no
   `SameSite=Lax` cookie, so one issued for such a provider has to say `None` instead. -/
   formPost : Bool := false
+  endpoints : ProviderEndpoints := .discovered
   /-- What to ask the provider for. `openid` earns its place in the default: without it there is
   no ID token, and AUTH-6.5 has nothing to validate. -/
   scopes : List String := ["openid", "email"]
