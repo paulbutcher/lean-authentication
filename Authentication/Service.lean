@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Authentication.Attempt
+public import Authentication.Federation
 public import Authentication.Pepper
 public import Authentication.Port.Clock
 public import Authentication.Port.Email
@@ -167,11 +168,100 @@ private def spendInvitation {m : Type → Type} [Monad m] {tenant : TenantId} (p
         { invitation := id, address := invitation.address, metadata := invitation.metadata })
     else pure none
 
+/-- What resolving the account came to: the account to sign in, an admission if one was created,
+and a refusal if it was not. -/
+private abbrev Resolved (tenant : TenantId) :=
+  Option (AccountId tenant) × Option (AccountAdmitted tenant) × Option SignInRefusal
+
+/-- Creates the account the signup policy has just permitted, and reports what it created. -/
+private def admit {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (now : Timestamp) (address : EmailAddress)
+    (grant : Option (InvitationGrant tenant)) : m (Resolved tenant) := do
+  let identity := address.normalise
+  match ← randomValue 12 with
+  | .error _ => pure (none, none, none)
+  | .ok generated =>
+    let account : Account tenant :=
+      { id := ⟨generated.encoded⟩, identity, primaryEmail := address, createdAt := now }
+    match ← ports.store.createAccount tenant account with
+    | .ok created =>
+      pure (some created.account.id,
+        some { account := created.account.id
+               firstInTenant := created.firstInTenant
+               invitationMetadata := grant.map (·.metadata) },
+        none)
+    | .error _ =>
+      pure ((← ports.store.accountByIdentity tenant identity).map (·.id), none, none)
+
+/-- Policy is evaluated at account creation only, so tightening one never locks out an account
+that already exists (AUTH-7.6). Deactivation is the exception, and has to be: revoking an
+account's sessions means nothing if the next sign-in issues another. -/
+private def signInExisting {tenant : TenantId} (account : Account tenant) : Resolved tenant :=
+  if account.status == .deactivated then (none, none, some .accountDeactivated)
+  else (some account.id, none, none)
+
+private def resolveEmail {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp) (address : EmailAddress)
+    (grant : Option (InvitationGrant tenant)) : m (Resolved tenant) := do
+  match ← ports.store.accountByIdentity tenant address.normalise with
+  | some account => pure (signInExisting account)
+  | none =>
+    match config.signupPolicy.evaluate address grant.isSome config.invitationOverridesAllowlist with
+    | .rejected reason => pure (none, none, some (.signup reason))
+    | .permitted => admit ports now address grant
+
+/--
+The federated route's half of the same question (AUTH-6.7, AUTH-6.10).
+
+`Federation.decide` takes it: this reads the two rows the decision is made from, and writes the
+credential when the decision is to link or to create. The signup policy of §7 applies here exactly
+as it does to the email route, which is AUTH-6.10, and it is applied in the same place for the same
+reason.
+-/
+private def resolveFederated {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp) (address : EmailAddress)
+    (identity : FederatedIdentity) (addressVerified : Bool)
+    (grant : Option (InvitationGrant tenant)) : m (Resolved tenant) := do
+  let linked ← ports.store.credentialByIdentity tenant identity
+  let holder ← ports.store.accountByVerifiedEmail tenant address.normalise
+  let link (account : AccountId tenant) : m Unit := do
+    match ← randomValue 12 with
+    | .error _ => pure ()
+    | .ok generated =>
+      let _ ← ports.store.createCredential tenant
+        { id := ⟨generated.encoded⟩
+          account
+          descriptor := .federatedIdentity identity
+          createdAt := now }
+      pure ()
+  match Federation.decide { identity, address, addressVerified } linked holder with
+  | .refuse .addressNotVerified => pure (none, none, some .addressNotVerified)
+  | .signIn account =>
+    match ← ports.store.accountById tenant account with
+    | none => pure (none, none, none)
+    | some existing => pure (signInExisting existing)
+  | .link account =>
+    match holder with
+    | none => pure (none, none, none)
+    | some existing =>
+      if existing.status == .deactivated then pure (none, none, some .accountDeactivated)
+      else do
+        link account
+        pure (some account, none, none)
+  | .create =>
+    match config.signupPolicy.evaluate address grant.isSome config.invitationOverridesAllowlist with
+    | .rejected reason => pure (none, none, some (.signup reason))
+    | .permitted =>
+      let created ← admit ports now address grant
+      match created.1 with
+      | some account => do
+        link account
+        pure created
+      | none => pure created
+
 private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
     (subject : SessionSubject tenant) : m (Issued tenant) := do
-  let identity := subject.address.normalise
-  let existing ← ports.store.accountByIdentity tenant identity
   -- The invitation is spent whether or not an account had to be created, because AUTH-8.8 says
   -- an invitation for an address that already has an account signs that account in and is
   -- consumed, rather than creating a duplicate.
@@ -179,35 +269,10 @@ private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
     | some id => spendInvitation ports now id
     | none => pure none
   let (accountId, admitted, refused) ←
-    match existing with
-    | some account =>
-      -- Policy is evaluated at account creation only, so tightening one never locks out an
-      -- account that already exists (AUTH-7.6). Deactivation is the exception, and has to be:
-      -- revoking an account's sessions means nothing if the next magic link issues another.
-      if account.status == .deactivated then pure (none, none, some .accountDeactivated)
-      else pure (some account.id, none, none)
-    | none =>
-      match config.signupPolicy.evaluate subject.address grant.isSome
-          config.invitationOverridesAllowlist with
-      | .rejected reason => pure (none, none, some (.signup reason))
-      | .permitted =>
-        match ← randomValue 12 with
-        | .error _ => pure (none, none, none)
-        | .ok generated =>
-          let account : Account tenant :=
-            { id := ⟨generated.encoded⟩
-              identity
-              primaryEmail := subject.address
-              createdAt := now }
-          match ← ports.store.createAccount tenant account with
-          | .ok created =>
-            pure (some created.account.id,
-              some { account := created.account.id
-                     firstInTenant := created.firstInTenant
-                     invitationMetadata := grant.map (·.metadata) },
-              none)
-          | .error _ =>
-            pure ((← ports.store.accountByIdentity tenant identity).map (·.id), none, none)
+    match subject.origin with
+    | .magicLink _ => resolveEmail ports config now subject.address grant
+    | .federated identity addressVerified =>
+      resolveFederated ports config now subject.address identity addressVerified grant
   match accountId with
   | none =>
     -- The true reason is recorded whatever the person is shown (AUTH-7.7).
@@ -217,7 +282,8 @@ private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
         .signInRejected (match reason with
           | .signup .notInvited => .notInvited
           | .signup .domainNotAllowed => .domainNotAllowed
-          | .accountDeactivated => .accountDeactivated)⟩
+          | .accountDeactivated => .accountDeactivated
+          | .addressNotVerified => .addressNotVerified)⟩
       pure { refused }
     | none => pure {}
   | some accountId =>
@@ -298,6 +364,23 @@ private def performAll {m : Type → Type} [Monad m] [RandomBytes m] {tenant : T
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
     (effects : List (Effect tenant)) : m (Outcome tenant) :=
   settle <$> effects.foldlM (fun outcome effect => perform ports config now outcome effect) {}
+
+
+/--
+Issues a session for somebody who has already proven the address, and returns what the caller must
+act on.
+
+The magic link route reaches this through `Attempt.step`, which asks for the same effect. A
+federated sign-in has no state machine to ask, so it comes here directly, and by coming here it
+gets the signup policy of §7, the deactivation check of AUTH-9.6, the invitation spending of
+AUTH-8.8, the audit record of AUTH-14.2.6 and the session cookie of AUTH-9.2, rather than its own
+copies of all six (AUTH-14.2.7).
+-/
+def issueFor {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (config : TenantConfig tenant) (subject : SessionSubject tenant) :
+    m (Outcome tenant) := do
+  let now ← Clock.now
+  performAll ports config now [.issueSession subject, .present .signedIn]
 
 /--
 The five scopes of AUTH-14.1.1, for one address and one request. The address scope is not tenant

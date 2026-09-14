@@ -7,6 +7,7 @@ module
 public import Authentication.Account
 public import Authentication.Audit
 public import Authentication.Config
+public import Authentication.Origin
 public import Authentication.Error
 import Authentication.Digest
 import Authentication.Email
@@ -83,15 +84,6 @@ structure SignInEmail (tenant : TenantId) where
   requestedAt : Timestamp
   deriving DecidableEq, Repr
 
-structure SessionSubject (tenant : TenantId) where
-  address : EmailAddress
-  invitation : Option (InvitationId tenant) := none
-  /-- The browser the flow began in, which is the one the session is issued to: every completion
-  path checks the binding nonce, so no other browser can reach this point. It is what a session
-  listing shows the account holder about the session (AUTH-9.5). -/
-  requester : RequestContext
-  deriving DecidableEq, Repr
-
 inductive Effect (tenant : TenantId) where
   | audit (entry : AuditEntry tenant)
   | sendSignInEmail (message : SignInEmail tenant)
@@ -160,7 +152,7 @@ private def complete {tenant : TenantId} (now : Timestamp) (state : AttemptState
     AttemptState tenant × List (Effect tenant) :=
   ({ state with phase := .completed },
     [ .audit ⟨now, .anonymous, .sessionIssued state.id⟩,
-      .issueSession ⟨state.address, state.invitation, state.requester⟩,
+      .issueSession ⟨.magicLink state.id, state.address, state.invitation, state.requester⟩,
       .clearAttemptCookie "auth_attempt" (BaseUrl.tenantPath tenant),
       .present .signedIn ])
 

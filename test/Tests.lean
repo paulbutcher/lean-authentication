@@ -8,6 +8,7 @@ import Tests.EndToEnd
 import Tests.Digest
 import Tests.Email
 import Tests.Federation
+import Tests.FederatedSignIn
 import Tests.Fetch
 import Tests.Flow
 import Tests.Http

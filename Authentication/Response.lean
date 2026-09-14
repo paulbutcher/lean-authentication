@@ -27,6 +27,10 @@ inductive SignInOutcome where
   | domainNotAllowed
   | addressSuppressed
   | accountDeactivated
+  /-- A provider asserted an address it had not verified (AUTH-6.7). Reached only by the
+  federated route, and present here so that route reports through the same type as the other
+  (AUTH-14.2.7). -/
+  | addressNotVerified
   | throttled
   | malformedAddress
   deriving DecidableEq, Repr, Inhabited

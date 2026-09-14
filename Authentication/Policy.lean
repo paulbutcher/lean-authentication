@@ -34,6 +34,9 @@ whether an account may be made, and only the second concerns one that already ex
 inductive SignInRefusal where
   | signup (reason : SignupRejection)
   | accountDeactivated
+  /-- The provider asserted an address it has not verified, so there is nothing to link on and
+  nothing to create from (AUTH-6.7). -/
+  | addressNotVerified
   deriving DecidableEq, Repr, Inhabited
 
 /-- The operator's name for one, for a log record or a span attribute. A signup reason keeps the
@@ -41,6 +44,7 @@ name it has there, so all three refusals are one set of names to group a query b
 def SignInRefusal.name : SignInRefusal → String
   | .signup reason => reason.name
   | .accountDeactivated => "account-deactivated"
+  | .addressNotVerified => "address-not-verified"
 
 inductive SignupDecision where
   | permitted
