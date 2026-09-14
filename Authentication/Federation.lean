@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 module
 
 public import Authentication.Account
+public import Authentication.Invitation
 public import Authentication.Digest
 public import Authentication.Secrets
 public import Authentication.Time
@@ -38,6 +39,10 @@ structure FederationState (tenant : TenantId) where
   stateDigest : Digest
   verifier : String
   nonce : String
+  /-- The invitation this sign-in is accepting, if it is one. Carried on the record rather than
+  supplied at the callback, so that what an acceptance admits comes from the invitation and from
+  nowhere the provider or the browser could have written (AUTH-8.3, AUTH-8.6). -/
+  invitation : Option (InvitationId tenant) := none
   /-- Where to land afterwards, still to be checked against the allowlist of AUTH-9.8 when it is
   used. Storing it unchecked is deliberate: the allowlist belongs to the tenant's configuration
   at the moment of the redirect, not to this record. -/

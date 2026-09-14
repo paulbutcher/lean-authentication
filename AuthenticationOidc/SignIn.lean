@@ -158,7 +158,8 @@ from 32 bytes, so it is at the length's floor and the entropy's ceiling at once.
 def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (store : AuthStore m) (peppers : PepperRing) (config : TenantConfig tenant)
     (provider : ProviderConfig) (discovery : Discovery) (redirectUri : String)
-    (returnTo : Option String) : m (Option (FederatedStart tenant)) := do
+    (returnTo : Option String) (invitation : Option (InvitationId tenant) := none) :
+    m (Option (FederatedStart tenant)) := do
   let now ← Clock.now
   match ← drawValue 16, ← drawValue 32, ← drawValue 16, ← drawValue 12 with
   | some state, some verifier, some nonce, some identifier =>
@@ -170,6 +171,7 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
         verifier
         nonce
         returnTo
+        invitation
         createdAt := now
         expiresAt }
     let parameters :=
@@ -233,12 +235,29 @@ def completeFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
             match answer.address with
             | none => pure (.error (.badDocument "email"))
             | some address =>
-              let subject : SessionSubject tenant :=
-                { origin := .federated answer.identity answer.addressVerified
-                  address
-                  requester }
-              let outcome ← issueFor ports config subject
-              pure (.ok { outcome, returnTo := record.returnTo, profile })
+              -- An invitation admits one address, and the provider has just named one. AUTH-8.6
+              -- lets the two be the same person and nothing weaker: an invitation whose address
+              -- the provider did not assert admits nobody, or it would be a grant on a mechanism
+              -- rather than on an address (AUTH-8.3).
+              let invited ← match record.invitation with
+                | none => pure (some none)
+                | some id =>
+                  match ← ports.store.invitationById tenant id with
+                  | none => pure none
+                  | some invitation =>
+                    if invitation.address.normalise == address.normalise then
+                      pure (some (some id))
+                    else pure none
+              match invited with
+              | none => pure (.error .invitationMismatch)
+              | some invitation =>
+                let subject : SessionSubject tenant :=
+                  { origin := .federated answer.identity answer.addressVerified
+                    address
+                    invitation
+                    requester }
+                let outcome ← issueFor ports config subject
+                pure (.ok { outcome, returnTo := record.returnTo, profile })
   | _, _ => pure (.error .nonceMismatch)
 
 end Authentication.Oidc

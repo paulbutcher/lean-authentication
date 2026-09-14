@@ -10,6 +10,12 @@ That is the standing the SES adapter has, and for the same reason: a suite that 
 
 The first live sign-in against each is the test, and it is worth doing deliberately rather than discovering.
 
+## Unlinking refuses only when the address is suppressed (AUTH-6.8)
+
+`Service.unlinkIdentity` counts the account's other credentials and the magic link to its primary address. Every account has a primary address, so the link is a way in unless mail to it has been suppressed, and that is the only condition under which the refusal fires. It is a real condition rather than a contrived one, and there is a test for it, but a deployment expecting to be stopped from unlinking a sole provider identity will not be.
+
+What would widen it is a tenant able to turn the magic link off, which nothing offers today. Until then an account can always be recovered through its address, which is the thing AUTH-6.8 exists to guarantee.
+
 ## The emailAddress credential has no writer (AUTH-4.4.2)
 
 `Credential.descriptor` has an `emailAddress` variant and nothing creates one. The magic link route identifies an account by its primary address rather than by a credential row, so the variant is forward provision rather than something in use; a passkey would be the first kind that changed that. The federated route does write its own rows, so the set is not empty, only narrower than the type allows.

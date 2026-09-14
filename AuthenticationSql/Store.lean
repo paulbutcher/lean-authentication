@@ -792,7 +792,7 @@ private def removeVerifiedEmail [Monad m] (c : Ctx m) (tenant : TenantId)
 
 private def federationStateSelect : Statement :=
   sql!"SELECT id, provider, digest_key, digest_bytes, verifier, nonce, return_to,
-         created_at, expires_at, consumed_at
+         created_at, expires_at, consumed_at, invitation_id
        FROM {federationStates}"
 
 private def readFederationState {tenant : TenantId} (row : SqlRow) : FederationState tenant :=
@@ -804,19 +804,20 @@ private def readFederationState {tenant : TenantId} (row : SqlRow) : FederationS
     returnTo := row.text? 6
     createdAt := timeOf (row.int 7)
     expiresAt := timeOf (row.int 8)
-    consumedAt := (row.int? 9).map timeOf }
+    consumedAt := (row.int? 9).map timeOf
+    invitation := (row.text? 10).map (⟨·⟩) }
 
 private def createFederationState [Monad m] (c : Ctx m) (tenant : TenantId)
     (state : FederationState tenant) : m Unit :=
   c.run
     sql!"INSERT INTO {federationStates}
            (tenant, id, provider, digest_key, digest_bytes, verifier, nonce, return_to,
-            created_at, expires_at, consumed_at)
+            created_at, expires_at, consumed_at, invitation_id)
          VALUES ({tenant.value}, {state.id.value}, {state.provider.value},
            {state.stateDigest.keyId.value}, {digestBytesText state.stateDigest},
            {state.verifier}, {state.nonce}, {state.returnTo},
            {timeText state.createdAt}, {timeText state.expiresAt},
-           {state.consumedAt.map timeText})"
+           {state.consumedAt.map timeText}, {state.invitation.map (·.value)})"
 
 private def federationStateByDigest [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
     (digest : Digest) : m (Option (FederationState tenant)) := do

@@ -793,6 +793,51 @@ def revokeSession {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (p
     pure true
   else pure false
 
+
+/-- Why unlinking was refused. -/
+inductive UnlinkRefusal where
+  /-- The credential belongs to some other account, or to none. Reported rather than ignored so
+  that a client cannot quietly unlink somebody else's identity by guessing an identifier. -/
+  | notThisAccount
+  | lastWayIn
+  deriving DecidableEq, Repr, Inhabited
+
+/--
+Removes a linked identity, and refuses when it is the last way the account has in (AUTH-6.8).
+
+What counts as a way in is every other credential, and the magic link to the account's primary
+address. The address counts only while mail to it is not suppressed: an account whose mailbox has
+hard-bounced is one `deliver` will refuse to send to (AUTH-12.3), so a link to it is not a way in
+however available the route looks.
+
+That is what makes this refusal reachable rather than decorative. Every account has a primary
+address, so without the suppression test the count could never reach zero and the requirement
+would be satisfied by a check that never fired.
+-/
+def unlinkIdentity {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (credential : CredentialId tenant) :
+    m (Except UnlinkRefusal Unit) := do
+  let held ← ports.store.credentialsForAccount tenant account
+  if !held.any (·.id == credential) then pure (.error .notThisAccount)
+  else
+    let remaining := held.filter (·.id != credential)
+    let mailable ← match ← ports.store.accountById tenant account with
+      | none => pure false
+      | some existing =>
+        match ← ports.store.deliveryRecord tenant existing.identity with
+        | some record => pure !record.suppressed
+        | none => pure true
+    if remaining.isEmpty && !mailable then pure (.error .lastWayIn)
+    else do
+      ports.store.deleteCredential tenant credential
+      pure (.ok ())
+
+/-- What the account holder is shown about the identities they have linked (AUTH-9.5's question,
+for credentials rather than sessions). -/
+def linkedIdentities {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) : m (List (Credential tenant)) :=
+  ports.store.credentialsForAccount tenant account
+
 /-- Every session the account has, which is what AUTH-9.6 requires on the occasions
 `RevocationReason` names, and what "sign out everywhere" is. -/
 def revokeAllSessions {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)

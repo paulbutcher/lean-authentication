@@ -29,6 +29,9 @@ inductive OidcError where
   | nonceMismatch
   /-- No `sub`, so there is no stable key to link on (AUTH-6.6). -/
   | subjectMissing
+  /-- The sign-in was accepting an invitation, and the provider asserted a different address
+  than the one invited (AUTH-8.6). -/
+  | invitationMismatch
   /-- An unknown `kid` asked for a refetch too soon after the last one (AUTH-6.4). -/
   | refetchThrottled
   deriving Repr
@@ -41,6 +44,7 @@ def OidcError.name : OidcError → String
   | .token _ => "token-rejected"
   | .nonceMismatch => "nonce-mismatch"
   | .subjectMissing => "subject-missing"
+  | .invitationMismatch => "invitation-mismatch"
   | .refetchThrottled => "refetch-throttled"
 
 /-- What this library uses out of the discovery document. A provider publishes a great deal more

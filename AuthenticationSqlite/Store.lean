@@ -52,8 +52,11 @@ private def consentSql : String :=
 private def federationSql : String :=
   include_str "../migrations/sqlite/20260911120000_authentication_federation.up.sql"
 
+private def federationInvitationSql : String :=
+  include_str "../migrations/sqlite/20260914120000_authentication_federation_invitation.up.sql"
+
 def createSchemaSql : String :=
-  initialSql ++ rateCountersSql ++ suppressionSql ++ consentSql ++ federationSql
+  initialSql ++ rateCountersSql ++ suppressionSql ++ consentSql ++ federationSql ++ federationInvitationSql
 
 def createSchema (db : SQLite) : IO Unit := db.exec createSchemaSql
 

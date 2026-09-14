@@ -76,7 +76,8 @@ private def start [Clock IO] [RandomBytes IO] (config : Config) (rawTenant rawPr
     | .error _ => refused config
     | .ok discovery =>
       match ← (beginFederated config.ports.store config.ports.peppers tenantConfig provider
-          discovery (callbackUri tenantConfig provider.id) returnTo : IO _) with
+          discovery (callbackUri tenantConfig provider.id) returnTo
+          ((request.line.uri.query.get "invitation").map (⟨·⟩)) : IO _) with
       | none => refused config
       | some begun =>
         let now ← (Clock.now : IO _)

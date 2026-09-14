@@ -78,6 +78,16 @@ private def oidcPorts (verified : Bool := true) : SignInPorts IO :=
               addressVerified := verified
               hostedDomain := none }) } }
 
+/-- The same stub, asserting an address a check chooses. -/
+private def portsAsserting (asserted : EmailAddress) : SignInPorts IO :=
+  { metadata := { discover := fun _ => pure (.ok discovery) }
+    identities :=
+      { redeem := fun _ _ _ _ _ _ _ _ => pure (.ok
+          { identity
+            address := some asserted
+            addressVerified := true
+            hostedDomain := none }) } }
+
 private def parameter (url name : String) : Option String :=
   ((url.splitOn (name ++ "=")).drop 1)[0]?.map fun tail =>
     String.ofList (tail.toList.takeWhile (· != '&'))
@@ -154,4 +164,60 @@ def checks : IO (List (String × Bool)) := do
     , ("federated flow: an unverified address reaches the linking rule and is refused",
         (unverified.toOption.map (·.outcome.refused)) == some (some .addressNotVerified)) ]
 
+
+/--
+An invitation completed with a provider instead of email (AUTH-8.6).
+
+The invitation is a grant on an address, not on a mechanism, so the provider asserting that
+address is what makes this the invited person. The provider asserting a different one is not, and
+is the case that keeps the grant from being a grant on whoever holds the link.
+-/
+def invitationChecks : IO (List (String × Bool)) := do
+  let invited := address "invitee@example.com"
+  let elsewhere := address "someone-else@example.com"
+  let inviteOnly : TenantConfig tenant := { config with signupPolicy := .inviteOnly }
+
+  let db ← openDb
+  let ports := portsOn db
+  ports.store.createInvitation tenant
+    { id := ⟨"invite-1"⟩
+      address := invited
+      tokenDigest := peppers.current.digest ⟨"token"⟩
+      metadata := ⟨"{}"⟩
+      expiresAt := ⟨1700009999⟩
+      createdBy := .client "admin" }
+  let begun ← beginFederated ports.store peppers inviteOnly provider discovery redirectUri none
+    (some ⟨"invite-1"⟩)
+  let state := (begun.bind fun s => parameter s.authorizationUrl "state").getD ""
+  let cookie := (begun.map (·.cookie.value)).getD ""
+  let admitted ← completeFederated ports (portsAsserting invited) inviteOnly provider discovery
+    redirectUri (some state) (some cookie) "the-code" {}
+
+  -- The same invitation, and a provider naming somebody else.
+  let other ← openDb
+  let otherPorts := portsOn other
+  otherPorts.store.createInvitation tenant
+    { id := ⟨"invite-2"⟩
+      address := invited
+      tokenDigest := peppers.current.digest ⟨"token"⟩
+      metadata := ⟨"{}"⟩
+      expiresAt := ⟨1700009999⟩
+      createdBy := .client "admin" }
+  let begunOther ← beginFederated otherPorts.store peppers inviteOnly provider discovery
+    redirectUri none (some ⟨"invite-2"⟩)
+  let otherState := (begunOther.bind fun s => parameter s.authorizationUrl "state").getD ""
+  let otherCookie := (begunOther.map (·.cookie.value)).getD ""
+  let mismatched ← completeFederated otherPorts (portsAsserting elsewhere) inviteOnly provider
+    discovery redirectUri (some otherState) (some otherCookie) "the-code" {}
+  let stillInvited ← otherPorts.store.invitationById tenant ⟨"invite-2"⟩
+
+  pure
+    [ ("invitation: a provider asserting the invited address completes the invitation (AUTH-8.6)",
+        (admitted.toOption.map (·.outcome.session.isSome)) == some true)
+    , ("invitation: and the account was created, which invite-only would otherwise refuse",
+        (admitted.toOption.map (·.outcome.admitted.isSome)) == some true)
+    , ("invitation: a provider asserting another address does not complete it",
+        match mismatched with | .error _ => true | .ok _ => false)
+    , ("invitation: and the invitation is left unspent",
+        (stillInvited.map (·.state)) == some .pending) ]
 end Tests.FederatedFlow

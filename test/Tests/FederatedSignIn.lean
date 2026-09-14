@@ -130,4 +130,49 @@ def checks : IO (List (String × Bool)) := do
         afterDeactivation.session.isNone
           && afterDeactivation.refused == some .accountDeactivated) ]
 
+
+/--
+Unlinking, and the refusal that makes it more than a delete (AUTH-6.8).
+
+The refusal is reachable only because the magic link stops being a way in when the address is
+suppressed, which is what these establish: the same unlink is allowed before the address bounces
+and refused after.
+-/
+def unlinkChecks : IO (List (String × Bool)) := do
+  let tenant : TenantId := ⟨"acme"⟩
+  let config := configFor tenant
+  let db ← openDb
+  let ports := portsOn db
+  let made ← issueFor ports config (subjectFor tenant "person@example.com" google true)
+  let account := (made.admitted.map (·.account)).getD ⟨""⟩
+  let second : FederatedIdentity := ⟨"https://other.test", "other-subject"⟩
+  let _ ← issueFor ports config (subjectFor tenant "person@example.com" second true)
+  let held ← linkedIdentities ports account
+  let strangers ← openDb
+  let strangerPorts := portsOn strangers
+  let _ ← issueFor strangerPorts config (subjectFor tenant "elsewhere@example.com" google true)
+
+  -- Two credentials and a mailable address: removing one leaves two ways in.
+  let first ← unlinkIdentity ports account ((held[0]?.map (·.id)).getD ⟨""⟩)
+  let afterFirst ← linkedIdentities ports account
+
+  -- One credential left, and the address still works, so it still goes.
+  let ok := match first with | .ok _ => true | .error _ => false
+
+  -- Now suppress the address and try to remove the last one.
+  let identity := (address "person@example.com").normalise
+  let _ ← ports.store.suppressAddress tenant identity ⟨1700000000⟩ "bounced"
+  let last ← unlinkIdentity ports account ((afterFirst[0]?.map (·.id)).getD ⟨""⟩)
+  let afterLast ← linkedIdentities ports account
+
+  -- A credential identifier that is not this account's is refused rather than acted on.
+  let foreign ← unlinkIdentity ports account ⟨"not-a-credential"⟩
+
+  pure
+    [ ("unlink: a credential goes while another way in remains", ok && afterFirst.length == 1)
+    , ("unlink: the last one is refused once the address is suppressed (AUTH-6.8)",
+        match last with | .error .lastWayIn => true | _ => false)
+    , ("unlink: and the credential is still there", afterLast.length == 1)
+    , ("unlink: an identifier this account does not hold is refused",
+        match foreign with | .error .notThisAccount => true | _ => false) ]
 end Tests.FederatedSignIn

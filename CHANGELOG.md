@@ -3,10 +3,10 @@
 ## [Unreleased]
 
 - Federated sign-in (§6), in three new targets: `AuthenticationFetch`, `AuthenticationOidc` and `AuthenticationOidcHttp`. OpenID Connect providers, Apple, and providers that are neither.
-- `Service.issueFor` signs in a subject that has already proven itself. `SessionSubject` names the route it came by, and `SignInOutcome` and `SignInRefusal` gain `addressNotVerified`.
+- `Service.unlinkIdentity` removes a linked identity and refuses to leave an account with no way in (AUTH-6.8); `Service.linkedIdentities` lists them.
+- An invitation can be completed with a provider, where it asserts the invited address (AUTH-8.6).
 - `Credential` carries a typed descriptor, and `AuthStore` gains linked identities, verified addresses and the state record of AUTH-6.2, with migrations for both backends.
-- A relay address no longer satisfies a domain allowlist (AUTH-6.9).
-- `Authentication.OAuth.Pkce` is now `Authentication.Pkce`, and `OAuth.Uri`'s URL helpers are now `Authentication.Url`.
+- `Service.issueFor`, a relay address no longer satisfying a domain allowlist (AUTH-6.9), and `Authentication.OAuth.Pkce` is now `Authentication.Pkce`.
 
 ## [0.15.2] - 2026-09-09
 
