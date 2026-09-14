@@ -179,6 +179,16 @@ def ofDuration? (d : Duration) : Option AttemptLifetime :=
 
 end AttemptLifetime
 
+/-- How a tenant proves this client to the provider. Two shapes because Apple has the second:
+its secret is minted on demand from a key with a bounded lifetime rather than held, so what is
+configured is the key and what travels is never what was stored (AUTH-6.9). -/
+inductive ProviderCredentials where
+  | clientSecret (value : StoredSecret)
+  /-- `teamId` is the `iss` of the minted assertion and `keyId` its `kid`, both of which the
+  provider issues alongside the key itself. -/
+  | signingKey (teamId keyId : String) (value : StoredSecret)
+  deriving Inhabited
+
 /-- One identity provider as one tenant has it configured (§15.1). The credentials are held
 sealed or resolved elsewhere, never in clear (AUTH-15.7.3). -/
 structure ProviderConfig where
@@ -187,7 +197,11 @@ structure ProviderConfig where
   (AUTH-6.5). The discovery document's URL is built from it (AUTH-6.4). -/
   issuer : String
   clientId : String
-  clientSecret : StoredSecret
+  credentials : ProviderCredentials
+  /-- Whether the provider answers the authorization request by posting a form back rather than
+  redirecting. Apple does, and what it costs is the state cookie: a cross-site `POST` carries no
+  `SameSite=Lax` cookie, so one issued for such a provider has to say `None` instead. -/
+  formPost : Bool := false
   /-- What to ask the provider for. `openid` earns its place in the default: without it there is
   no ID token, and AUTH-6.5 has nothing to validate. -/
   scopes : List String := ["openid", "email"]

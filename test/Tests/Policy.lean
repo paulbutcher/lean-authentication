@@ -118,4 +118,53 @@ theorem refusal_names_are_distinct :
       ∧ everyRefusal.all (!·.name.isEmpty) := by
   decide
 
+
+/--
+A relay address is never admitted by a domain allowlist, however the allowlist is written.
+
+This is AUTH-6.9's requirement stated as the only thing that could make it false: that some
+allowlist, some subdomain setting, or some local part lets an address at a provider's relay domain
+answer a question about where its owner works.
+
+`isRelay` holds of exactly the domains in `relayDomains`, so `h` says the address sits at one.
+`domains` and `includeSubdomains` are unconstrained, which is the content: an operator who writes
+the relay domain into the allowlist by hand still does not get a match. `invitationAccepted` is
+fixed to `false` because an invitation admits by AUTH-7.5 rather than by domain, and leaving it
+free would make the statement false for a reason that has nothing to do with relays; the
+invitation path is the subject of the theorem below.
+-/
+theorem relayNeverSatisfiesAllowlist (address : EmailAddress) (domains : List Domain)
+    (includeSubdomains overrides : Bool) (h : address.domain.isRelay = true) :
+    SignupPolicy.evaluate (.domainAllowlist domains includeSubdomains) address false overrides
+      = .rejected .domainNotAllowed := by
+  simp [SignupPolicy.evaluate, h]
+
+/--
+An invitation still admits a relay address, which is what keeps the theorem above a rule about
+domains rather than a ban.
+
+The policy is the same one and the address is still at a relay, but `invitationAccepted` and
+`invitationOverrides` are both `true`, which is the composition AUTH-7.5 describes: a tenant may
+restrict self-signup to its own domains and still invite somebody from outside them. Without this
+the requirement above would be satisfied by refusing relay addresses everywhere, which is not what
+AUTH-6.9 asks for: it says they are deliverable and must be accepted.
+-/
+theorem invitationAdmitsRelay (address : EmailAddress) (domains : List Domain)
+    (includeSubdomains : Bool) (h : address.domain.isRelay = true) :
+    SignupPolicy.evaluate (.domainAllowlist domains includeSubdomains) address true true
+      = .permitted := by
+  simp [SignupPolicy.evaluate, h]
+
+/--
+An unrestricted tenant admits any address, which is the other half of "deliverable and accepted"
+for a relay.
+
+The address is unconstrained, and deliberately so: stating this over relay addresses alone would
+hide what makes it true, which is that `unrestricted` never looks at a domain. So the theorem is
+about every address and the relay case falls out of it, which is the shape that shows the rule
+added above reaches allowlists and nothing else.
+-/
+theorem unrestrictedAdmitsAnyAddress (address : EmailAddress) (accepted overrides : Bool) :
+    SignupPolicy.evaluate .unrestricted address accepted overrides = .permitted := by
+  simp [SignupPolicy.evaluate]
 end Tests.Policy

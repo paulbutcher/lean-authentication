@@ -66,7 +66,10 @@ def evaluate (policy : SignupPolicy) (address : EmailAddress) (invitationAccepte
   | .unrestricted => .permitted
   | .inviteOnly => if invitationAccepted then .permitted else .rejected .notInvited
   | .domainAllowlist domains includeSubdomains =>
-    if domains.any (fun d => d.allows address.domain includeSubdomains) then .permitted
+    -- A relay address is refused here however the allowlist is written, which is what AUTH-6.9
+    -- means by not satisfying one: the domain is the provider's, not the person's employer's.
+    if !address.domain.isRelay
+        && domains.any (fun d => d.allows address.domain includeSubdomains) then .permitted
     else if invitationAccepted && invitationOverrides then .permitted
     else .rejected .domainNotAllowed
 

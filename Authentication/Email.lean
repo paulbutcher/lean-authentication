@@ -80,6 +80,17 @@ def parse (raw : String) : Except EmailError Domain := parseFolded (raw.toList.m
 
 def render (d : Domain) : String := String.ofList (joinWithDot (d.labels.map String.toList))
 
+/--
+Domains a provider issues to stand between the person and whoever they are signing in to.
+
+An address at one of these is deliverable and is accepted, but it says nothing about where the
+person works, so it cannot answer the question a domain allowlist asks (AUTH-6.9). Apple's is the
+only one here because Apple's is the only one a provider in §6 mints.
+-/
+def relayDomains : List Domain := [⟨["privaterelay", "appleid", "com"]⟩]
+
+def isRelay (d : Domain) : Bool := relayDomains.any (fun relay => relay.labels == d.labels)
+
 /-- Whole-label matching. `evilexample.com` does not match `example.com` because the label
 lists differ, not because a boundary was checked (AUTH-7.3.1, AUTH-7.3.2). -/
 def allows (allowed candidate : Domain) (includeSubdomains : Bool) : Bool :=

@@ -89,10 +89,10 @@ Everything a refusal could report is answered with the same page, for the reason
 equalises the other route's: which of the refusals it was describes the person rather than the
 tenant, and this route has no way to ask what the client wanted said.
 -/
-private def callback [Clock IO] [RandomBytes IO] (config : Config)
-    (rawTenant rawProvider : String) : Routing.Result := fun request =>
+private def complete [Clock IO] [RandomBytes IO] (config : Config)
+    (rawTenant rawProvider : String) (fromBody : Bool) : Routing.Result := fun request =>
   withProvider config rawTenant rawProvider fun tenant tenantConfig provider => do
-    let query := request.line.uri.query
+    let query ← if fromBody then formBody request else pure request.line.uri.query
     let held := cookieNamed request "auth_federation"
     let cleared := clearCookie tenantConfig.baseUrl "auth_federation" (BaseUrl.tenantPath tenant)
     match query.get "code" with
@@ -103,7 +103,7 @@ private def callback [Clock IO] [RandomBytes IO] (config : Config)
       | .ok discovery =>
         match ← (completeFederated config.ports config.oidc tenantConfig provider discovery
             (callbackUri tenantConfig provider.id) (query.get "state") held code
-            (requesterOf request) : IO _) with
+            (requesterOf request) (query.get "user") : IO _) with
         | .error _ => finish .ok config.refusedPage [cleared]
         | .ok completion =>
           let now ← (Clock.now : IO _)
@@ -123,7 +123,8 @@ the URI that was registered and nowhere else. That the two agree is worth a test
 comment. -/
 def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route Routing.Result) :=
   [ .get Federated.patterns.start (start config),
-    .get Federated.patterns.callback (callback config) ]
+    .get Federated.patterns.callback (fun t p => complete config t p false),
+    .post Federated.patterns.callback (fun t p => complete config t p true) ]
 
 /-- Mount this wherever the application's own router is, as the sign-in routes are mounted. -/
 def handler [Clock IO] [RandomBytes IO] (config : Config) : StatelessHandler :=

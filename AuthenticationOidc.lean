@@ -7,5 +7,6 @@ module
 public import AuthenticationOidc.Discovery
 public import AuthenticationOidc.IdToken
 public import AuthenticationOidc.Keys
+public import AuthenticationOidc.Apple
 public import AuthenticationOidc.SignIn
 public import AuthenticationOidc.Secrets

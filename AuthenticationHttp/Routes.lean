@@ -60,7 +60,7 @@ structure Config where
 
 /-! ## Reading the request -/
 
-private def formBody (request : Request Body.Stream) : ContextAsync URI.Query := do
+def formBody (request : Request Body.Stream) : ContextAsync URI.Query := do
   let declared :=
     match request.line.headers.get? Header.Name.contentType with
     | some value =>

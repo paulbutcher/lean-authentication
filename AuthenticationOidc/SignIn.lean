@@ -39,12 +39,17 @@ lacks, and none at all while the last fetch is recent (AUTH-6.4). -/
 def idTokens (keys : ProviderKeys IO) : IdTokens IO where
   verify provider discovery nonce token now := verifyIdToken keys provider discovery nonce token now
 
+/-- Turning configured credentials into the secret a token request carries. A port rather than a
+lookup because Apple's is minted per request from a key rather than held (AUTH-6.9). -/
+structure ClientSecrets (m : Type → Type) where
+  produce : TenantId → ProviderConfig → Discovery → Timestamp → m (Except OidcError String)
+
 /-- The implementations a federated sign-in is wired from. -/
 structure SignInPorts (m : Type → Type) where
   metadata : ProviderMetadata m
   idTokens : IdTokens m
   tokens : TokenEndpoint m
-  secrets : Secrets m
+  clientSecrets : ClientSecrets m
 
 private def encodeComponent (value : String) : String :=
   toString (Std.Http.URI.EncodedString.encode (r := Std.Http.Internal.Char.isUnreserved) value)
@@ -86,18 +91,27 @@ def tokenEndpoint (http : Fetch.Http IO) (limits : Fetch.Limits := {}) : TokenEn
 
 It carries the same value the URL does, and the callback accepts only a `state` that matches it.
 Without the pairing anybody holding a `state` and a code could complete the flow in somebody
-else's browser, which signs the victim in as the attacker. `Lax` is required rather than an
-oversight, for the reason AUTH-5.2.4 gives: the callback is a top-level navigation arriving from
-the provider, and `Strict` would withhold the cookie exactly then. -/
-def stateCookie (base : BaseUrl) (tenant : TenantId) (value : String) (expiresAt : Timestamp) :
-    CookieSpec :=
+else's browser, which signs the victim in as the attacker.
+
+`crossSite` is for a provider that answers by posting a form back rather than redirecting. A
+cross-site `POST` carries no `SameSite=Lax` cookie, so such a provider gets `None` and the
+callback would otherwise see no cookie at all and refuse every sign-in. What that costs is the
+layer, not the control: the pairing is what stops a forged callback, because a browser sending
+its own cookie against somebody else's `state` matches nothing. `None` also requires `Secure`,
+which `secureCookies` already withholds only on an `http` origin, where this flow cannot run.
+
+Everything else keeps `Lax`, which is required rather than an oversight for the reason
+AUTH-5.2.4 gives: the callback is a top-level navigation arriving from the provider, and
+`Strict` would withhold the cookie exactly then. -/
+def stateCookie (base : BaseUrl) (tenant : TenantId) (crossSite : Bool) (value : String)
+    (expiresAt : Timestamp) : CookieSpec :=
   { name := "auth_federation"
     value
     path := BaseUrl.tenantPath tenant
     expiresAt
     secure := base.secureCookies
     httpOnly := true
-    sameSite := .lax }
+    sameSite := if crossSite then .none else .lax }
 
 structure FederatedStart (tenant : TenantId) where
   authorizationUrl : String
@@ -137,7 +151,7 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
         returnTo
         createdAt := now
         expiresAt }
-    let url := discovery.authorizationEndpoint ++ "?" ++ query
+    let parameters :=
       [ ("response_type", "code")
       , ("client_id", provider.clientId)
       , ("redirect_uri", redirectUri)
@@ -146,7 +160,11 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
       , ("nonce", nonce)
       , ("code_challenge", Pkce.challengeOf verifier)
       , ("code_challenge_method", "S256") ]
-    pure (some { authorizationUrl := url, cookie := stateCookie config.baseUrl tenant state expiresAt })
+      ++ (if provider.formPost then [("response_mode", "form_post")] else [])
+    let url := discovery.authorizationEndpoint ++ "?" ++ query parameters
+    pure (some
+      { authorizationUrl := url
+        cookie := stateCookie config.baseUrl tenant provider.formPost state expiresAt })
   | _, _, _, _ => pure none
 
 /-- What a completed callback produced: everything `Service.issueFor` returned, and where the
@@ -155,6 +173,11 @@ is what allows it (AUTH-9.8). -/
 structure FederatedCompletion (tenant : TenantId) where
   outcome : Outcome tenant
   returnTo : Option String
+  /-- What the provider sent alongside the code, handed back unread. Apple sends a name on the
+  first authorisation and never again, so a client that does not keep it then has lost it
+  (AUTH-6.9). It is the client's own payload, stored verbatim and interpreted by nobody here, as
+  an invitation's metadata is (AUTH-8.7). -/
+  profile : Option String := none
 
 /--
 Completes one (AUTH-6.2, AUTH-6.5, AUTH-6.7).
@@ -167,7 +190,8 @@ def completeFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
     (ports : Ports m) (oidc : SignInPorts m) (config : TenantConfig tenant)
     (provider : ProviderConfig) (discovery : Discovery) (redirectUri : String)
     (presentedState : Option String) (cookie : Option String) (code : String)
-    (requester : RequestContext) : m (Except OidcError (FederatedCompletion tenant)) := do
+    (requester : RequestContext) (profile : Option String := none) :
+    m (Except OidcError (FederatedCompletion tenant)) := do
   let now ← Clock.now
   match presentedState, cookie with
   | some presented, some held =>
@@ -181,11 +205,9 @@ def completeFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
         if !(← ports.store.commitFederationState tenant record (record.consumed now)) then
           pure (.error .nonceMismatch)
         else
-          match ← oidc.secrets.resolve
-              { tenant, provider := provider.id, field := .clientSecret } provider.clientSecret with
-          | .error _ => pure (.error (.badDocument "client-secret"))
-          | .ok secretBytes =>
-            let secret := (String.fromUTF8? secretBytes).getD ""
+          match ← oidc.clientSecrets.produce tenant provider discovery now with
+          | .error reason => pure (.error reason)
+          | .ok secret =>
             match ← oidc.tokens.exchange discovery provider code redirectUri record.verifier secret with
             | .error reason => pure (.error reason)
             | .ok idToken =>
@@ -200,7 +222,7 @@ def completeFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
                       address
                       requester }
                   let outcome ← issueFor ports config subject
-                  pure (.ok { outcome, returnTo := record.returnTo })
+                  pure (.ok { outcome, returnTo := record.returnTo, profile })
   | _, _ => pure (.error .nonceMismatch)
 
 end Authentication.Oidc

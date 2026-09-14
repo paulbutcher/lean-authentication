@@ -4,24 +4,13 @@ Deliberate limitations of the current implementation, with the reasoning behind 
 
 ## Only OpenID Connect providers are implemented (§6)
 
-An OpenID Connect provider works end to end: discovery, the cached key set, the `state` record, ID token validation, the linking rule of AUTH-6.7, and the routes. Google needs nothing of its own, which is the result AUTH-6.9 was hoping for: `email_verified` is what `Federation.decide` already turns on, and `hd` is carried as evidence while the domain is still checked by §7.
+An OpenID Connect provider works end to end: discovery, the cached key set, the `state` record, ID token validation, the linking rule of AUTH-6.7, and the routes. Google needs nothing of its own, which is the result AUTH-6.9 was hoping for: `email_verified` is what `Federation.decide` already turns on, and `hd` is carried as evidence while the domain is still checked by §7. Apple has what it needs too: its client secret is minted per request from the `.p8`, its `form_post` callback is answered, and a relay address is accepted while never satisfying a domain allowlist.
 
-Two of AUTH-6.9's three are missing. **Apple** needs its client secret minted as an ES256 JWT on demand rather than held, and answers by `form_post`, which is a cross-site `POST` and so does not carry the `SameSite=Lax` state cookie the GET callback relies on; that cookie's attributes are the thing to revisit rather than the signing. **GitHub** is not OpenID Connect at all: there is no ID token, and a verified address takes a second call. `TokenEndpoint` and `IdTokens` are ports, so neither needs the shape here to change, but neither has an adapter.
+**GitHub, and any other non-OIDC provider, is missing.** There is no ID token, so `IdTokens` has nothing to validate, and a verified address takes a second call the shape here does not make. Both are ports, so what is missing is an adapter rather than a change to this design, but nothing ships one.
+
+**No Apple assertion has ever been offered to Apple.** The minted secret is checked here for its algorithm, its claims, its bounded lifetime and a 64-byte raw signature, and `jose-libcrypto` is checked against Wycheproof, but the pair has never been put to the provider that has to accept it. That is the standing of the SES adapter for the same reason, and the first live sign-in is the test.
 
 `Credential.descriptor` also has no `emailAddress` row written for it. The magic link route identifies an account by its primary address rather than by a credential, so the variant exists and nothing creates one; a passkey would be the first kind that did.
-
-`Domain.parse` accepts ASCII domains only. A domain containing non-ASCII characters (a U-label, for example `münchen.de`) is rejected with a distinct error rather than being converted to punycode. Already-encoded A-labels (`xn--mnchen-3ya.de`) are ordinary ASCII and are accepted, so an address whose domain has been punycoded upstream works today.
-
-AUTH-4.5.2 requires the conversion to happen in the library, so that two addresses differing only in IDN encoding are the same address. Until an encoder exists, they are instead one address and one rejection: no address is silently mapped to the wrong account, which is the failure that would matter.
-
-The reason for the limitation is placement, not difficulty. RFC 3492 punycode is general-purpose code with no connection to authentication, and AUTH-2.4 and AUTH-17.5 both require that such code be surveyed against the ecosystem and, where it does not exist, raised as a question about which library should own it rather than written here. The survey found no punycode implementation for Lean 4, and the decision on where it belongs is outstanding.
-
-Consequences while it stands:
-
-- A tenant whose people have non-ASCII email domains cannot use the library.
-- The AUTH-16.1 theorem that domain matching is invariant under IDN normalisation holds only over the ASCII domains the parser accepts, which makes it a weaker statement than the requirement intends.
-
-Closing it is a drop-in: an encoder applied per label in `Domain.parseFolded`, between the split on separators and the character check that currently rejects the label. Nothing downstream of the parser needs to change, because everything downstream already works on normalised labels.
 
 ## No committed test makes an HTTP request (AUTH-16.5)
 

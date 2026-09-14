@@ -16,3 +16,9 @@ cat > oidc-jwks.json <<JSON
 JSON
 
 echo "wrote oidc-key.pem and oidc-jwks.json"
+
+# Apple ships its signing key as a `.p8`, which is PEM-armoured PKCS#8 over a P-256 key. The
+# tests mint a client secret with it; nothing verifies the signature here, so only the private
+# half is needed.
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out apple-key.p8 2>/dev/null
+echo "wrote apple-key.p8"

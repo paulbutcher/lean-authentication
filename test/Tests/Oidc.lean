@@ -23,7 +23,7 @@ private def issuer : String := "https://issuer.example.com"
 private def clientId : String := "client-abc"
 
 private def provider : ProviderConfig :=
-  { id := ⟨"test"⟩, issuer, clientId, clientSecret := .external "unused" }
+  { id := ⟨"test"⟩, issuer, clientId, credentials := .clientSecret (.external "unused") }
 
 private def discovery : Discovery :=
   { issuer

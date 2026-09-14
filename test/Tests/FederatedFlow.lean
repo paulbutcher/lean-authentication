@@ -54,7 +54,7 @@ private def provider : ProviderConfig :=
   { id := ⟨"google"⟩
     issuer := "https://accounts.google.test"
     clientId := "client-abc"
-    clientSecret := .external "unused" }
+    credentials := .clientSecret (.external "unused") }
 
 private def discovery : Discovery :=
   { issuer := provider.issuer
@@ -79,7 +79,7 @@ private def oidcPorts (verified : Bool := true) : SignInPorts IO :=
       { exchange := fun _ _ _ _ _ _ => do
           exchanges.modify (· + 1)
           pure (.ok "an.id.token") }
-    secrets := { resolve := fun _ _ => pure (.ok "a-secret".toUTF8) } }
+    clientSecrets := { produce := fun _ _ _ _ => pure (.ok "a-secret") } }
 
 private def parameter (url name : String) : Option String :=
   ((url.splitOn (name ++ "=")).drop 1)[0]?.map fun tail =>
