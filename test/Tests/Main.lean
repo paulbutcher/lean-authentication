@@ -36,7 +36,7 @@ def main : IO UInt32 := do
     ++ (← Tests.OAuth.postgresChecks)
     ++ (← Tests.OAuthHttp.checks) ++ (← Tests.OAuthHttp.originChecks)
     ++ (← Tests.OAuthHttp.antiForgeryChecks)
-    ++ (← Tests.Secrets.checks) ++ Tests.Secrets.associatedDataChecks
+    ++ (← Tests.Secrets.checks) ++ Tests.Secrets.associatedDataChecks ++ (← Tests.Secrets.formatChecks)
     ++ Tests.Fetch.permittedChecks ++ (← Tests.Fetch.checks)
     ++ Tests.Oidc.discoveryChecks ++ (← Tests.Oidc.checks) ++ (← Tests.Oidc.cacheChecks)
     ++ (← Tests.Oidc.refetchChecks) ++ (← Tests.Oidc.discoveryCacheChecks) ++ (← Tests.FederatedSignIn.checks) ++ (← Tests.FederatedSignIn.unlinkChecks)

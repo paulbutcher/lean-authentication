@@ -255,18 +255,27 @@ Providers are per tenant, on `TenantConfig.providers`.
 
 ### Secrets
 
-A provider's secret is never configured in clear. Seal it once, with a key of your own, and store what comes back:
+A provider's secret is never configured in clear. Seal it once, with a key of your own, and write down what comes back:
 
 ```lean
-Oidc.sealSecret
-  { keyId := ⟨"sealing-2026-01"⟩, secret := sealingKey }
-  { tenant := ⟨"acme"⟩, provider := ⟨"google"⟩, field := .clientSecret }
-  "the-secret-google-gave-you".toUTF8
+def sealedText (sealingKey : ByteArray) : IO (Except SecretError String) := do
+  let sealed ← Oidc.sealSecret
+    { keyId := ⟨"sealing-2026-01"⟩, secret := sealingKey }
+    { tenant := ⟨"acme"⟩, provider := ⟨"google"⟩, field := .clientSecret }
+    "the-secret-google-gave-you".toUTF8
+  pure (sealed.map fun value => (StoredSecret.sealed value).render)
 ```
 
-The tenant, the provider and the field are bound into the ciphertext, so a sealed secret cannot be moved between any of them. Apple's `.p8` is sealed the same way, as the file's bytes, under `.signingKey`.
+That text is what an environment variable, a file, or a secrets manager holds, and `StoredSecret.parse` is what reads it back. It is total: a variable that is missing or mistyped is a startup that says so rather than one that panics.
 
-A deployment whose secrets live in KMS or Vault supplies its own `Secrets` port instead and configures `.external "some/reference"`; the shipped implementation refuses those rather than guessing.
+```lean
+def googleCredentials (text : Option String) : Option ProviderCredentials :=
+  (text.bind StoredSecret.parse).map .clientSecret
+```
+
+The tenant, the provider and the field are bound into the ciphertext, so a sealed secret cannot be moved between any of them, and the text carries that binding with it. Apple's `.p8` is sealed the same way, as the file's bytes, under `.signingKey`.
+
+A deployment whose secrets live in KMS or Vault supplies its own `Secrets` port instead and configures `.external "some/reference"`; the shipped implementation refuses those rather than guessing. The same two functions write those down and read them back.
 
 ### Mounting
 

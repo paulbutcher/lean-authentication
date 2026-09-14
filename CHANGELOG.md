@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.16.1] - 2026-09-14
+
+- `StoredSecret.render` and `StoredSecret.parse` are the text form a sealed provider secret is configured as (AUTH-15.7.3.2). Without them a deployment whose configuration lives outside the binary had nowhere to put one.
+
 ## [0.16.0] - 2026-09-14
 
 - Federated sign-in (§6), in three new targets: `AuthenticationFetch`, `AuthenticationOidc` and `AuthenticationOidcHttp`. OpenID Connect providers, Apple, and providers that are neither.

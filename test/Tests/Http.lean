@@ -6,6 +6,7 @@ import AuthenticationHttp
 import AuthenticationPostmark
 import AuthenticationSqlite
 import Std.Http.Test.Helpers
+import Tests.Base64Url
 
 /-!
 The sign-in routes, driven over the wire (AUTH-13.2, AUTH-16.5).
@@ -346,68 +347,19 @@ section CookieFormat
 open Authentication.Http Leancrypto.Codec.Base64Url
 
 /--
-None of the sixty-four base64url characters is a colon. The colon is the separator the attempt
-cookie's fields are split on, so this is the fact that keeps an encoded field from being read as
-two, and it is settled by checking the alphabet.
+None of the sixty-four base64url characters is a colon, nor is the padding character. The colon is
+the separator the attempt cookie's fields are split on, so this is the fact that keeps an encoded
+field from being read as two: a cookie that lost the split would not be a broken redirect but a
+broken sign-in, because the same split carries the attempt.
 
-The quantifier ranges over `List.range 64`, which is every index into the base64url alphabet, and
-`encodeSextet` is the map from index to character. The conclusion denies equality with `':'` at
-each. The range is the whole alphabet rather than a sample, so `decide` here is exhaustive; what
-lies outside it is the padding character, which the theorem below deals with.
--/
-private theorem sextet_range : ∀ n ∈ List.range 64, encodeSextet n ≠ ':' := by decide
-
-/--
-No sextet encodes to a colon, for any number at all rather than only for the sixty-four that
-name alphabet positions. Stating it without a bound is what lets the encoder's proof use it
-without first showing that the value it passes is in range.
-
-`n` is an arbitrary natural. Below sixty-four this is the finite check above; at or beyond it,
-`encodeSextet` reads past the end of the alphabet and returns the padding character `'='`, which
-is not a colon either. So the out-of-range case is not excluded but answered, and the conclusion
-holds of every `n`.
--/
-private theorem encodeSextet_ne_colon (n : Nat) : encodeSextet n ≠ ':' := by
-  rcases Nat.lt_or_ge n 64 with h | h
-  · exact sextet_range n (List.mem_range.mpr h)
-  · have hlen : alphabet.length ≤ n := by
-      show (64 : Nat) ≤ n
-      omega
-    rw [show encodeSextet n = '=' by simp [encodeSextet, List.getD_eq_getElem?_getD,
-      List.getElem?_eq_none hlen]]
-    decide
-
-/--
-The separator must not turn up inside the field the target is encoded into, or the split that
-recovers the attempt and the nonce would find four fields and hand back nothing. That failure is
-not a lost redirect but a lost sign-in, because the same split carries the attempt.
-
-`l` is any byte list and `encode` is the base64url encoder, producing the character list the
-cookie field holds. The conclusion is that `':'` is not among those characters. The induction
-follows `encode`'s own recursion, so the three tail cases, which are where padding is emitted,
-are covered as well as the full three-byte group; every character in each of them comes from
-`encodeSextet`, which the theorem above pins away from `':'`.
--/
-private theorem colon_not_mem_encode (l : List UInt8) : ':' ∉ encode l := by
-  induction l using encode.induct with
-  | case1 => simp [encode]
-  | case2 a => simp [encode, encodeSextet_ne_colon, Ne.symm]
-  | case3 a b => simp [encode, encodeSextet_ne_colon, Ne.symm]
-  | case4 a b c rest ih => simp [encode, encodeSextet_ne_colon, Ne.symm, ih]
-
-/--
-The same for the encoder as it is actually called, on a `ByteArray` and returning a `String`.
-The cookie code works in strings, so this is the form the round-trip theorem below can use
-without unfolding anything.
-
-`bytes` is any byte array and `encodeString` is the base64url encoder producing a `String`. The
-conclusion is that `':'` does not occur among that string's characters. It is the list-level
-statement above transported across `String.ofList`, so it holds for arrays of every length,
-padding included.
+`bytes` is any byte array and `encodeString` is the encoder producing the string a field holds.
+The conclusion denies that `':'` occurs among its characters. Both hypotheses are decided against
+the alphabet itself rather than sampled, so the general theorem they discharge applies to arrays
+of every length, padding included.
 -/
 private theorem colon_not_mem_encodeString (bytes : ByteArray) :
-    ':' ∉ (encodeString bytes).toList := by
-  simp [encodeString, String.toList_ofList, colon_not_mem_encode]
+    ':' ∉ (encodeString bytes).toList :=
+  Tests.Base64Url.notMem_encodeString (by decide) (by decide) bytes
 
 /--
 Everything the attempt cookie carries survives being written and read back: the attempt and the
@@ -418,7 +370,7 @@ which is why this is a theorem rather than a handful of examples.
 The `:` hypotheses hold of what the core mints, both of which are base64url. `codec` is
 `leancrypto`'s base64url round trip: it is proved in that library's own suite but not exported
 from it, and copying the proof here would be this suite testing a dependency. Everything else
-the claim rests on is proved above.
+the claim rests on is proved above or in `Tests.Base64Url`.
 -/
 theorem parse_withReturnTo {tenant : TenantId} (attempt : AttemptId tenant)
     (nonce : CredentialValue) (target : Option String)

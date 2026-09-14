@@ -6,6 +6,7 @@ module
 
 public import Authentication.Digest
 public import Authentication.Tenant
+public import Leancrypto.Codec.Base64Url
 
 /-!
 Secrets a tenant configures, and the seam that turns one into the bytes it stands for
@@ -54,7 +55,7 @@ structure SealedSecret where
   nonce : ByteArray
   ciphertext : ByteArray
   tag : ByteArray
-  deriving Inhabited
+  deriving DecidableEq, Inhabited
 
 /-- How a tenant holds one secret. There is no third variant carrying plaintext, and that is the
 whole of AUTH-15.7.3: a deployment that configures nothing gets encryption rather than a warning
@@ -64,7 +65,39 @@ inductive StoredSecret where
   /-- Held somewhere this library cannot see, under a name only the client's own resolver
   understands. -/
   | external (reference : String)
-  deriving Inhabited
+  deriving DecidableEq, Inhabited
+
+/--
+The text a stored secret is written down as (AUTH-15.7.3.2). Configuration is usually neither a
+Lean literal nor a row in the database the secret protects, and a sealed secret with no written
+form is one that cannot be configured at all.
+
+The fields are base64url, whose alphabet holds no `.`, so none of them can be read as two. An
+external reference is the remainder of the text rather than a field of its own, which costs
+nothing and keeps it legible to whoever sets it. The leading `v1` is what lets a later form
+replace this one without either having to guess which it is reading.
+-/
+def StoredSecret.render : StoredSecret → String
+  | .sealed value =>
+    let field := Leancrypto.Codec.Base64Url.encodeString
+    "v1.s." ++ field value.keyId.value.toUTF8 ++ "." ++ field value.nonce ++ "."
+      ++ field value.ciphertext ++ "." ++ field value.tag
+  | .external reference => "v1.x." ++ reference
+
+/-- Total, because what it reads is configuration: a mistyped environment variable is a startup
+that refuses, not one that panics. -/
+def StoredSecret.parse (text : String) : Option StoredSecret :=
+  match text.toList with
+  | 'v' :: '1' :: '.' :: 'x' :: '.' :: reference => some (.external (String.ofList reference))
+  | chars =>
+    match (chars.splitOn '.').map String.ofList with
+    | ["v1", "s", keyId, nonce, ciphertext, tag] => do
+      let keyId ← (Leancrypto.Codec.Base64Url.decodeString keyId).bind String.fromUTF8?
+      let nonce ← Leancrypto.Codec.Base64Url.decodeString nonce
+      let ciphertext ← Leancrypto.Codec.Base64Url.decodeString ciphertext
+      let tag ← Leancrypto.Codec.Base64Url.decodeString tag
+      some (.sealed { keyId := ⟨keyId⟩, nonce, ciphertext, tag })
+    | _ => none
 
 inductive SecretError where
   /-- Sealed under a key the ring no longer carries, which is a rotation that dropped a key still
