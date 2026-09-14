@@ -99,6 +99,8 @@ private def sampleState (tenant : TenantId) (id : String) (digest : Digest)
     verifier := "verifier-" ++ id
     nonce := "nonce-" ++ id
     returnTo := some "/after"
+    invitation := some ⟨"invitation-" ++ id⟩
+    account := some ⟨"account-" ++ id⟩
     createdAt := epoch
     expiresAt }
 
@@ -483,6 +485,9 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := afterSpareRemoved.isNone }
     , { name := "a state record is readable by the digest of the state it was created with (AUTH-6.2)"
         passed := (liveState.map (·.verifier)) == some "verifier-state-live" }
+    , { name := "and what the start bound to it: the invitation and the account (AUTH-6.7.1)"
+        passed := (liveState.bind (·.account)) == some ⟨"account-state-live"⟩
+          && (liveState.bind (·.invitation)) == some ⟨"invitation-state-live"⟩ }
     , { name := "an expired state record is refused on read (AUTH-15.4.3)"
         passed := staleState.isNone }
     , { name := "a state record is invisible from another tenant (AUTH-4.2.4)"

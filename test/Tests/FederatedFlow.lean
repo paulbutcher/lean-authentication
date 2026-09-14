@@ -64,6 +64,12 @@ private def discovery : Discovery :=
 
 private def redirectUri : String := "https://auth.example.com/t/acme/federated/google/callback"
 
+/-- The sign-in half of a completion. A link produces no outcome, so a check that wants one says
+so rather than reading a field that is not there. -/
+private def signedIn {t : TenantId} : FederatedResult t → Option (Outcome t)
+  | .signedIn outcome => some outcome
+  | _ => none
+
 private def identity : FederatedIdentity := ⟨provider.issuer, "subject-99"⟩
 
 /-- Every port stubbed but the store, so what is exercised is the flow rather than the network. -/
@@ -153,7 +159,7 @@ def checks : IO (List (String × Bool)) := do
     , ("federated flow: the cookie is HttpOnly and Secure",
         (started.map (fun s => s.cookie.httpOnly && s.cookie.secure)) == some true)
     , ("federated flow: a callback that pairs signs the person in",
-        (completed.toOption.map (·.outcome.session.isSome)) == some true)
+        (completed.toOption.bind (signedIn ·.result) |>.map (·.session.isSome)) == some true)
     , ("federated flow: and lands where the sign-in asked",
         (completed.toOption.bind (·.returnTo)) == some "/dashboard")
     , ("federated flow: the code was exchanged exactly once", afterFirst == 1)
@@ -162,7 +168,7 @@ def checks : IO (List (String × Bool)) := do
     , ("federated flow: and costs no exchange", afterMismatch == 0)
     , ("federated flow: a callback with no cookie is refused", refused noCookie)
     , ("federated flow: an unverified address reaches the linking rule and is refused",
-        (unverified.toOption.map (·.outcome.refused)) == some (some .addressNotVerified)) ]
+        (unverified.toOption.bind (signedIn ·.result) |>.map (·.refused)) == some (some .addressNotVerified)) ]
 
 
 /--
@@ -213,9 +219,9 @@ def invitationChecks : IO (List (String × Bool)) := do
 
   pure
     [ ("invitation: a provider asserting the invited address completes the invitation (AUTH-8.6)",
-        (admitted.toOption.map (·.outcome.session.isSome)) == some true)
+        (admitted.toOption.bind (signedIn ·.result) |>.map (·.session.isSome)) == some true)
     , ("invitation: and the account was created, which invite-only would otherwise refuse",
-        (admitted.toOption.map (·.outcome.admitted.isSome)) == some true)
+        (admitted.toOption.bind (signedIn ·.result) |>.map (·.admitted.isSome)) == some true)
     , ("invitation: a provider asserting another address does not complete it",
         match mismatched with | .error _ => true | .ok _ => false)
     , ("invitation: and the invitation is left unspent",
@@ -238,9 +244,9 @@ def limitChecks : IO (List (String × Bool)) := do
             counted.modify (· + 1)
             pure (action != .federatedStart || (← counted.get) ≤ 2 && !scopes.isEmpty) } }
   let requester : RequestContext := { ip := some "198.51.100.7" }
-  let first ← beginFederated limited config provider discovery redirectUri none none requester
-  let second ← beginFederated limited config provider discovery redirectUri none none requester
-  let third ← beginFederated limited config provider discovery redirectUri none none requester
+  let first ← beginFederated limited config provider discovery redirectUri none none none requester
+  let second ← beginFederated limited config provider discovery redirectUri none none none requester
+  let third ← beginFederated limited config provider discovery redirectUri none none none requester
   let scopes := startScopes tenant requester
   let anonymous := startScopes tenant {}
   pure
@@ -254,4 +260,56 @@ def limitChecks : IO (List (String × Bool)) := do
         scopes.length == 3 && scopes.contains (.sourceIp "198.51.100.7"))
     , ("federated flow: a request with no source still counts against the other two",
         anonymous.length == 2) ]
+
+/--
+The link flow, begun with an account and finished without an address (AUTH-6.7.1).
+
+The provider here asserts nothing at all about an address, which is the shape no address match can
+answer and the reason the account rides on the state record: a link asks whether the person held
+the account when they began, and the callback that answers it may carry no session cookie.
+-/
+def linkFlowChecks : IO (List (String × Bool)) := do
+  let db ← openDb
+  let ports := portsOn db
+  let made ← issueFor ports config
+    { origin := .federated ⟨"https://first.test", "first-subject"⟩ true
+      address := address "holder@example.com"
+      requester := { ip := none, userAgent := none, approximateLocation := none } }
+  let account := (made.admitted.map (·.account)).getD ⟨""⟩
+
+  let silent : SignInPorts IO :=
+    { metadata := { discover := fun _ => pure (.ok discovery) }
+      identities :=
+        { redeem := fun _ _ _ _ _ _ _ _ => pure (.ok
+            { identity, address := none, addressVerified := false, hostedDomain := none }) } }
+
+  let started ← beginFederated ports config provider discovery redirectUri none none
+    (some account)
+  let state := (started.bind fun s => parameter s.authorizationUrl "state").getD ""
+  let cookieValue := (started.map (·.cookie.value)).getD ""
+  let completed ← completeFederated ports silent config provider discovery redirectUri
+    (some state) (some cookieValue) "the-code" {}
+  let held ← linkedIdentities ports account
+
+  -- The same flow begun without an account, and the same silent provider: a sign-in has nothing
+  -- to go on and is refused where a link succeeded.
+  let signingIn ← beginFederated ports config provider discovery redirectUri none
+  let otherState := (signingIn.bind fun s => parameter s.authorizationUrl "state").getD ""
+  let otherCookie := (signingIn.map (·.cookie.value)).getD ""
+  let withoutAccount ← completeFederated ports silent config provider discovery redirectUri
+    (some otherState) (some otherCookie) "the-code" {}
+
+  pure
+    [ ("link flow: a provider that discloses no address still links (AUTH-6.7.1)",
+        match completed with
+        | .ok completion => match completion.result with
+          | .linked linkedTo => linkedTo == account
+          | _ => false
+        | .error _ => false)
+    , ("link flow: and the account gained the identity", held.length == 2)
+    , ("link flow: no session is issued, because the person already had one",
+        (completed.toOption.bind (signedIn ·.result)).isNone)
+    , ("link flow: the same answer signs nobody in when no account began the flow",
+        match withoutAccount with | .error _ => true | .ok _ => false) ]
+
 end Tests.FederatedFlow

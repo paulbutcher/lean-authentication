@@ -118,6 +118,7 @@ def routes (db : SQLite) (secret : ByteArray) (token : String) :
 | `/t/<tenant>/invitation/accept` | `GET`, the invitation link target |
 | `/t/<tenant>/webhooks/<name>` | `POST`, provider callbacks |
 | `/t/<tenant>/federated/<provider>` | `GET`, sends the browser to the provider |
+| `/t/<tenant>/federated/<provider>` | `POST`, adds the provider to the account signed in |
 | `/t/<tenant>/federated/<provider>/callback` | `GET` or `POST`, the provider's answer |
 
 `Http.routes` returns the same list for mounting into a router you already have.
@@ -291,14 +292,29 @@ def federatedRoutes (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) :
 | Path | Method |
 | --- | --- |
 | `/t/<tenant>/federated/<provider>` | `GET`, sends the browser to the provider |
+| `/t/<tenant>/federated/<provider>` | `POST`, adds the provider to the account signed in |
 | `/t/<tenant>/federated/<provider>/callback` | `GET` or `POST`, the provider's answer |
 
-The start accepts `returnTo` and `invitation` as query parameters, the first checked against the tenant's allowlist when it is used and the second required to name the address the provider goes on to assert.
+The `GET` start accepts `returnTo` and `invitation` as query parameters, the first checked against the tenant's allowlist when it is used and the second required to name the address the provider goes on to assert.
+
+### Adding a provider to an account already signed in
+
+Post a form to the start from a page the person is signed in on, and the provider is added to the account rather than signed in as:
+
+```html
+<form method="post" action="/t/acme/federated/apple">
+  <button>Add Apple</button>
+</form>
+```
+
+That it is a `POST` is what makes it safe to have no token of its own: the session cookie is `SameSite=Lax`, which a cross-site `POST` does not carry, so a form posted from anywhere but your own pages arrives with no session and starts nothing. The account is read from that cookie and never from the request, because a start that accepted an account identifier would attach whoever asked to whichever account they named.
+
+Nothing about the address enters into it, which is why this is the only route in for **Apple's Hide My Email**: the relay address matches no account and never will, so an account created by magic link could not otherwise be reached by an Apple sign-in. `Service.linkIdentity` is the same operation without the flow, for a client driving its own; `Service.unlinkIdentity` takes one away, and refuses to leave an account with no way in.
 
 Three things remain yours:
 
 - **Register the redirect URI** with each provider, exactly as `OidcHttp.callbackUri` builds it from the tenant's base URL. Providers match it as a string.
-- **Apply the migrations.** Federated sign-in adds two, and the library never applies them (see Schema below).
+- **Apply the migrations.** Federated sign-in adds three, and the library never applies them (see Schema below).
 - **Seal the secrets**, and keep the sealing key somewhere other than the database it protects.
 
 ## Authorisation server

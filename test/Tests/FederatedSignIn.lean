@@ -167,6 +167,7 @@ def unlinkChecks : IO (List (String × Bool)) := do
 
   -- A credential identifier that is not this account's is refused rather than acted on.
   let foreign ← unlinkIdentity ports account ⟨"not-a-credential"⟩
+  let unlinkEntries ← ports.store.auditEntries tenant
 
   pure
     [ ("unlink: a credential goes while another way in remains", ok && afterFirst.length == 1)
@@ -174,5 +175,58 @@ def unlinkChecks : IO (List (String × Bool)) := do
         match last with | .error .lastWayIn => true | _ => false)
     , ("unlink: and the credential is still there", afterLast.length == 1)
     , ("unlink: an identifier this account does not hold is refused",
-        match foreign with | .error .notThisAccount => true | _ => false) ]
+        match foreign with | .error .notThisAccount => true | _ => false)
+    , ("unlink: it is recorded, naming the provider (AUTH-14.1.7)",
+        unlinkEntries.any
+          (·.event == .identityUnlinked account "https://accounts.google.test")) ]
+
+/--
+Linking authorised by holding the account rather than by an address (AUTH-6.7.1).
+
+The address is what these have to show is not consulted. An identity asserting nothing at all
+links, because holding the account is the whole of the evidence, and that is the case Apple's
+private relay makes unavoidable: there is no address for an account to match.
+-/
+def linkChecks : IO (List (String × Bool)) := do
+  let tenant : TenantId := ⟨"acme"⟩
+  let config := configFor tenant
+  let db ← openDb
+  let ports := portsOn db
+  let made ← issueFor ports config (subjectFor tenant "person@example.com" google true)
+  let account := (made.admitted.map (·.account)).getD ⟨""⟩
+  let stranger : FederatedIdentity := ⟨"https://accounts.google.test", "google-subject-2"⟩
+  let other ← issueFor ports config (subjectFor tenant "stranger@example.com" stranger true)
+  let otherAccount := (other.admitted.map (·.account)).getD ⟨""⟩
+
+  -- An identity nobody holds, asserting an address no account has verified.
+  let fresh : FederatedIdentity := ⟨"https://appleid.test", "001234.relay"⟩
+  let linked ← linkIdentity ports account fresh
+  let held ← linkedIdentities ports account
+  let again ← linkIdentity ports account fresh
+  let afterAgain ← linkedIdentities ports account
+
+  -- The same identity cannot be moved to a second account, which is the takeover by another name.
+  let stolen ← linkIdentity ports otherAccount fresh
+
+  let unknown ← linkIdentity ports (⟨"no-such-account"⟩ : AccountId tenant) fresh
+  let _ ← deactivateAccount ports otherAccount
+  let dead ← linkIdentity ports otherAccount ⟨"https://appleid.test", "other.relay"⟩
+  let entries ← ports.store.auditEntries tenant
+
+  pure
+    [ ("link: a session-authorised link needs no address agreement (AUTH-6.7.1)",
+        (match linked with | .ok _ => true | .error _ => false)
+          && held.length == 2)
+    , ("link: linking the same identity again changes nothing and does not fail",
+        (match again with | .ok _ => true | .error _ => false)
+          && afterAgain.length == held.length)
+    , ("link: an identity another account holds is refused, not moved",
+        match stolen with | .error .alreadyLinked => true | _ => false)
+    , ("link: an account this tenant does not have is refused",
+        match unknown with | .error .unknownAccount => true | _ => false)
+    , ("link: a deactivated account gains no way in",
+        match dead with | .error .accountDeactivated => true | _ => false)
+    , ("link: it is recorded, naming the provider (AUTH-14.1.7)",
+        entries.any (·.event == .identityLinked account "https://appleid.test")) ]
+
 end Tests.FederatedSignIn

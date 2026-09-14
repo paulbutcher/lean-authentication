@@ -101,7 +101,7 @@ A deployment that supplies no adapter is not broken, and it is no longer silentl
 
 Granting and withdrawing a grant are consent records, so they reach the audit log through §4.6 exactly as any other consent does. Nothing else does: which client redeemed which code, when a token was issued, and when a replayed refresh token revoked a grant are not in the log.
 
-The reason is where `AuditEvent` lives. It is a closed inductive in the core target, and every case of it is decoded by `auditColumns` in the shared SQL store, which a consumer taking only magic links links today. Naming the authorisation server's events there is a change to the core library rather than to this target, and AUTH-20.18.1 records it as a decision rather than making it quietly.
+The reason is where `AuditEvent` lives. It is a closed inductive in the core target, and every case of it is decoded by `auditColumns` in the shared SQL store, which a consumer taking only magic links links today. Naming the authorisation server's events there is a change to the core library rather than to this target, and AUTH-20.18.1 records it as a decision rather than making it quietly. The linking events of AUTH-14.1.7 have since been added there, so the cost is one already paid rather than an untouched one; what has not changed is that nothing requires these.
 
 ## The authorisation server's endpoints are not rate limited (AUTH-20.18.2)
 

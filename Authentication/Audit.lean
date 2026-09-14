@@ -64,6 +64,11 @@ inductive AuditEvent (tenant : TenantId) where
   action on an account. -/
   | consentGranted (account : AccountId tenant) (subject : ConsentSubject)
   | consentWithdrawn (account : AccountId tenant) (subject : ConsentSubject)
+  /-- Adding a way into an account and taking one away, which AUTH-14.1.7 names among the records
+  that MUST be written. `origin` is `CredentialDescriptor.origin`: the provider, never the
+  subject. -/
+  | identityLinked (account : AccountId tenant) (origin : String)
+  | identityUnlinked (account : AccountId tenant) (origin : String)
   deriving DecidableEq, Repr
 
 /-- Append-only (AUTH-15.4.5). The actor is whatever the client said it was; the library

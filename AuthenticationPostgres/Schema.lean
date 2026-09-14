@@ -57,7 +57,11 @@ private def federationSql : String :=
 private def federationInvitationSql : String :=
   include_str "../migrations/postgres/20260914120000_authentication_federation_invitation.up.sql"
 
+private def federationLinkSql : String :=
+  include_str "../migrations/postgres/20260915120000_authentication_federation_link.up.sql"
+
 def createSchemaSql : String :=
-  initialSql ++ rateCountersSql ++ suppressionSql ++ consentSql ++ federationSql ++ federationInvitationSql
+  initialSql ++ rateCountersSql ++ suppressionSql ++ consentSql ++ federationSql
+    ++ federationInvitationSql ++ federationLinkSql
 
 end Authentication.Postgres

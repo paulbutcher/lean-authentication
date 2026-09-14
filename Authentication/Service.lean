@@ -210,6 +210,38 @@ private def resolveEmail {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
     | .rejected reason => pure (none, none, some (.signup reason))
     | .permitted => admit ports now address grant
 
+/-- Why linking an identity to an account failed. -/
+inductive LinkFailure where
+  | unknownAccount
+  | accountDeactivated
+  /-- The identity is already a credential of some other account. An identity belongs to one
+  account, and moving it is the takeover AUTH-6.7 forbids by address and AUTH-6.7.1 by session. -/
+  | alreadyLinked
+  /-- The random source would not produce an identifier for the credential. -/
+  | noIdentifier
+  /-- The store refused for a reason creating a credential should not produce. Carried rather
+  than flattened into the refusals above, which would report something that did not happen. -/
+  | storeRefused (error : StoreError)
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Writes a credential and records that a way in was added (AUTH-14.1.7). Both the linking a
+federated sign-in decides and the linking a held session authorises come through here, so neither
+is the one that forgets. -/
+private def writeCredential {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (now : Timestamp) (account : AccountId tenant)
+    (descriptor : CredentialDescriptor) : m (Except LinkFailure Unit) := do
+  match ← randomValue 12 with
+  | .error _ => pure (.error .noIdentifier)
+  | .ok generated =>
+    match ← ports.store.createCredential tenant
+        { id := ⟨generated.encoded⟩, account, descriptor, createdAt := now } with
+    | .error .duplicateCredential => pure (.error .alreadyLinked)
+    | .error .unknownAccount => pure (.error .unknownAccount)
+    | .error other => pure (.error (.storeRefused other))
+    | .ok () =>
+      ports.store.appendAudit tenant ⟨now, .anonymous, .identityLinked account descriptor.origin⟩
+      pure (.ok ())
+
 /--
 The federated route's half of the same question (AUTH-6.7, AUTH-6.10).
 
@@ -225,15 +257,8 @@ private def resolveFederated {m : Type → Type} [Monad m] [RandomBytes m] {tena
   let linked ← ports.store.credentialByIdentity tenant identity
   let holder ← ports.store.accountByVerifiedEmail tenant address.normalise
   let link (account : AccountId tenant) : m Unit := do
-    match ← randomValue 12 with
-    | .error _ => pure ()
-    | .ok generated =>
-      let _ ← ports.store.createCredential tenant
-        { id := ⟨generated.encoded⟩
-          account
-          descriptor := .federatedIdentity identity
-          createdAt := now }
-      pure ()
+    let _ ← writeCredential ports now account (.federatedIdentity identity)
+    pure ()
   match Federation.decide { identity, address, addressVerified } linked holder with
   | .refuse .addressNotVerified => pure (none, none, some .addressNotVerified)
   | .signIn account =>
@@ -794,6 +819,34 @@ def revokeSession {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (p
   else pure false
 
 
+/--
+Links an external identity to an account the caller has already established is theirs
+(AUTH-6.7.1).
+
+What the provider asserted about an address does not enter into it, and the argument is a
+`FederatedIdentity` rather than an assertion so that it cannot: holding the account is stronger
+evidence than two addresses agreeing, and it is the only evidence available for a provider that
+discloses no address to agree with. How the caller established it is the caller's, as every
+question of who may act on an account is (AUTH-13.2); what the shipped route does is take it from
+the session at the start of the flow and bind it into the state record, never from a parameter.
+
+Linking an identity this account already holds changes nothing and reports success, so a callback
+the browser replays is not a refusal somebody has to make sense of.
+-/
+def linkIdentity {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (account : AccountId tenant) (identity : FederatedIdentity) :
+    m (Except LinkFailure Unit) := do
+  let now ← Clock.now
+  match ← ports.store.accountById tenant account with
+  | none => pure (.error .unknownAccount)
+  | some existing =>
+    if existing.status == .deactivated then pure (.error .accountDeactivated)
+    else
+      match ← ports.store.credentialByIdentity tenant identity with
+      | some credential =>
+        if credential.account == account then pure (.ok ()) else pure (.error .alreadyLinked)
+      | none => writeCredential ports now account (.federatedIdentity identity)
+
 /-- Why unlinking was refused. -/
 inductive UnlinkRefusal where
   /-- The credential belongs to some other account, or to none. Reported rather than ignored so
@@ -814,12 +867,13 @@ That is what makes this refusal reachable rather than decorative. Every account 
 address, so without the suppression test the count could never reach zero and the requirement
 would be satisfied by a check that never fired.
 -/
-def unlinkIdentity {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+def unlinkIdentity {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
     (account : AccountId tenant) (credential : CredentialId tenant) :
     m (Except UnlinkRefusal Unit) := do
   let held ← ports.store.credentialsForAccount tenant account
-  if !held.any (·.id == credential) then pure (.error .notThisAccount)
-  else
+  match held.find? (·.id == credential) with
+  | none => pure (.error .notThisAccount)
+  | some removed =>
     let remaining := held.filter (·.id != credential)
     let mailable ← match ← ports.store.accountById tenant account with
       | none => pure false
@@ -829,7 +883,10 @@ def unlinkIdentity {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Po
         | none => pure true
     if remaining.isEmpty && !mailable then pure (.error .lastWayIn)
     else do
+      let now ← Clock.now
       ports.store.deleteCredential tenant credential
+      ports.store.appendAudit tenant
+        ⟨now, .anonymous, .identityUnlinked account removed.descriptor.origin⟩
       pure (.ok ())
 
 /-- What the account holder is shown about the identities they have linked (AUTH-9.5's question,

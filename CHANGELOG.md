@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.16.2] - 2026-09-14
+
+- An identity can be linked to the account already signed in, which is the only way in for a provider that discloses no address an account could match, such as Apple's private relay (AUTH-6.7.1). `POST` the federated start; the account comes from the session and never from the request.
+- `Service.linkIdentity` is the same operation without the flow, and `FederationState` carries the account it was begun for.
+- Linking and unlinking an identity are recorded in the audit log, which AUTH-14.1.7 always required and neither did.
+
 ## [0.16.1] - 2026-09-14
 
 - `StoredSecret.render` and `StoredSecret.parse` are the text form a sealed provider secret is configured as (AUTH-15.7.3.2). Without them a deployment whose configuration lives outside the binary had nowhere to put one.

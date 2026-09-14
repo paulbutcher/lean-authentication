@@ -43,6 +43,13 @@ structure FederationState (tenant : TenantId) where
   supplied at the callback, so that what an acceptance admits comes from the invitation and from
   nowhere the provider or the browser could have written (AUTH-8.3, AUTH-8.6). -/
   invitation : Option (InvitationId tenant) := none
+  /-- The account this flow is adding a provider to, when it is a link rather than a sign-in
+  (AUTH-6.7.1). Carried on the record for the reason `invitation` is, and one more: the callback
+  may be a cross-site `POST` carrying no session cookie at all, so the account cannot be read
+  there, and an account read from anywhere the browser could write is an open linking endpoint.
+  It and `invitation` answer different flows; a record carrying both links and spends neither, and
+  the shipped routes set at most one. -/
+  account : Option (AccountId tenant) := none
   /-- Where to land afterwards, still to be checked against the allowlist of AUTH-9.8 when it is
   used. Storing it unchecked is deliberate: the allowlist belongs to the tenant's configuration
   at the moment of the redirect, not to this record. -/
@@ -111,7 +118,7 @@ tenant holding the asserted address as one it has itself verified. Both come fro
 decides, and writes nothing.
 
 An assertion the provider has not marked verified is refused even when no account holds the
-address. AUTH-6.7 settles only the linking half, and §18.11 records the other as open; refusing is
+address. AUTH-6.7 settles only the linking half, and §18.10 records the other as open; refusing is
 the answer that cannot be the wrong one to have shipped.
 -/
 def decide {tenant : TenantId} (assertion : ProviderAssertion) (linked : Option (Credential tenant))

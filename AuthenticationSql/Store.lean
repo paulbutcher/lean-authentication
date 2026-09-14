@@ -177,6 +177,8 @@ private def auditColumns {tenant : TenantId} : AuditEvent tenant → String × S
     ("suppression-cleared", normalisedText address, "")
   | .consentGranted account subject => ("consent-granted", account.value, subject.name)
   | .consentWithdrawn account subject => ("consent-withdrawn", account.value, subject.name)
+  | .identityLinked account origin => ("identity-linked", account.value, origin)
+  | .identityUnlinked account origin => ("identity-unlinked", account.value, origin)
 
 private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
     Option (AuditEvent tenant) :=
@@ -218,6 +220,8 @@ private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
   | "suppression-cleared" => (normalisedOf subject).map (.suppressionCleared ·)
   | "consent-granted" => some (.consentGranted ⟨subject⟩ ⟨detail⟩)
   | "consent-withdrawn" => some (.consentWithdrawn ⟨subject⟩ ⟨detail⟩)
+  | "identity-linked" => some (.identityLinked ⟨subject⟩ detail)
+  | "identity-unlinked" => some (.identityUnlinked ⟨subject⟩ detail)
   | _ => none
 
 /-! ## Running statements -/
@@ -792,7 +796,7 @@ private def removeVerifiedEmail [Monad m] (c : Ctx m) (tenant : TenantId)
 
 private def federationStateSelect : Statement :=
   sql!"SELECT id, provider, digest_key, digest_bytes, verifier, nonce, return_to,
-         created_at, expires_at, consumed_at, invitation_id
+         created_at, expires_at, consumed_at, invitation_id, account_id
        FROM {federationStates}"
 
 private def readFederationState {tenant : TenantId} (row : SqlRow) : FederationState tenant :=
@@ -805,19 +809,21 @@ private def readFederationState {tenant : TenantId} (row : SqlRow) : FederationS
     createdAt := timeOf (row.int 7)
     expiresAt := timeOf (row.int 8)
     consumedAt := (row.int? 9).map timeOf
-    invitation := (row.text? 10).map (⟨·⟩) }
+    invitation := (row.text? 10).map (⟨·⟩)
+    account := (row.text? 11).map (⟨·⟩) }
 
 private def createFederationState [Monad m] (c : Ctx m) (tenant : TenantId)
     (state : FederationState tenant) : m Unit :=
   c.run
     sql!"INSERT INTO {federationStates}
            (tenant, id, provider, digest_key, digest_bytes, verifier, nonce, return_to,
-            created_at, expires_at, consumed_at, invitation_id)
+            created_at, expires_at, consumed_at, invitation_id, account_id)
          VALUES ({tenant.value}, {state.id.value}, {state.provider.value},
            {state.stateDigest.keyId.value}, {digestBytesText state.stateDigest},
            {state.verifier}, {state.nonce}, {state.returnTo},
            {timeText state.createdAt}, {timeText state.expiresAt},
-           {state.consumedAt.map timeText}, {state.invitation.map (·.value)})"
+           {state.consumedAt.map timeText}, {state.invitation.map (·.value)},
+           {state.account.map (·.value)})"
 
 private def federationStateByDigest [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
     (digest : Digest) : m (Option (FederationState tenant)) := do

@@ -166,11 +166,13 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
     (ports : Ports m) (config : TenantConfig tenant)
     (provider : ProviderConfig) (discovery : Discovery) (redirectUri : String)
     (returnTo : Option String) (invitation : Option (InvitationId tenant) := none)
+    (account : Option (AccountId tenant) := none)
     (requester : RequestContext := {}) : m (Option (FederatedStart tenant)) := do
   let now ← Clock.now
-  -- Nothing here has said who they are, so only the scopes that do not need an address can be
-  -- counted. Without them this endpoint turns one inbound request into a stored row and an
-  -- outbound one, for anybody, as often as they like (AUTH-14.1.1).
+  -- Only the scopes that do not need an address can be counted: a sign-in has said nothing about
+  -- who it is, and a link has named an account and still no address. Without them this endpoint
+  -- turns one inbound request into a stored row and an outbound one, as often as anybody likes
+  -- (AUTH-14.1.1).
   if !(← ports.limiter.admit .federatedStart now (startScopes tenant requester)) then
     return none
   match ← drawValue 16, ← drawValue 32, ← drawValue 16, ← drawValue 12 with
@@ -184,6 +186,7 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
         nonce
         returnTo
         invitation
+        account
         createdAt := now
         expiresAt }
     let parameters :=
@@ -202,11 +205,17 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
         cookie := stateCookie config.baseUrl tenant provider.formPost state expiresAt })
   | _, _, _, _ => pure none
 
-/-- What a completed callback produced: everything `Service.issueFor` returned, and where the
-sign-in asked to land. The target is still the tenant's to allow, and `TenantConfig.returnTo`
-is what allows it (AUTH-9.8). -/
+/-- What the callback did. A flow begun with no account is a sign-in and issues one; a flow begun
+with one is a link, and issues nothing because whoever asked was already signed in (AUTH-6.7.1). -/
+inductive FederatedResult (tenant : TenantId) where
+  | signedIn (outcome : Outcome tenant)
+  | linked (account : AccountId tenant)
+  | linkRefused (account : AccountId tenant) (reason : LinkFailure)
+
+/-- What a completed callback produced, and where it asked to land. The target is still the
+tenant's to allow, and `TenantConfig.returnTo` is what allows it (AUTH-9.8). -/
 structure FederatedCompletion (tenant : TenantId) where
-  outcome : Outcome tenant
+  result : FederatedResult tenant
   returnTo : Option String
   /-- What the provider sent alongside the code, handed back unread. Apple sends a name on the
   first authorisation and never again, so a client that does not keep it then has lost it
@@ -215,7 +224,7 @@ structure FederatedCompletion (tenant : TenantId) where
   profile : Option String := none
 
 /--
-Completes one (AUTH-6.2, AUTH-6.5, AUTH-6.7).
+Completes one (AUTH-6.2, AUTH-6.5, AUTH-6.7), whether it is a sign-in or the link of AUTH-6.7.1.
 
 The order is the order the refusals are cheapest in, and it is also the order that spends nothing
 on a request that was never going to work: the cookie pairing first, then the record, then the
@@ -244,6 +253,16 @@ def completeFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
               record.verifier record.nonce now with
           | .error reason => pure (.error reason)
           | .ok answer =>
+            -- A link asks nothing about the address, so a provider that discloses none can still
+            -- be linked; that is what the account on the record bought (AUTH-6.7.1).
+            if let some account := record.account then
+              let result ← linkIdentity ports account answer.identity
+              return .ok
+                { result := match result with
+                    | .ok () => .linked account
+                    | .error reason => .linkRefused account reason
+                  returnTo := record.returnTo
+                  profile }
             match answer.address with
             | none => pure (.error (.badDocument "email"))
             | some address =>
@@ -269,7 +288,8 @@ def completeFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
                     invitation
                     requester }
                 let outcome ← issueFor ports config subject
-                pure (.ok { outcome, returnTo := record.returnTo, profile })
+                pure (.ok
+                  { result := .signedIn outcome, returnTo := record.returnTo, profile })
   | _, _ => pure (.error .nonceMismatch)
 
 end Authentication.Oidc

@@ -56,6 +56,13 @@ def CredentialDescriptor.kind : CredentialDescriptor → CredentialKind
   | .emailAddress _ => .emailAddress
   | .federatedIdentity _ => .federatedIdentity
 
+/-- What the audit log records a credential as, which for a federated identity is the provider
+and not the person: which issuer gained or lost a way into the account is what the log is read
+for, and the subject names somebody at that provider (AUTH-14.1.7). -/
+def CredentialDescriptor.origin : CredentialDescriptor → String
+  | .emailAddress _ => "email-address"
+  | .federatedIdentity identity => identity.issuer
+
 /-- One means by which an account can prove itself. -/
 structure Credential (tenant : TenantId) where
   id : CredentialId tenant
