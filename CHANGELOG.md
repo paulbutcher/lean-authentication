@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.16.0] - 2026-09-14
 
 - Federated sign-in (§6), in three new targets: `AuthenticationFetch`, `AuthenticationOidc` and `AuthenticationOidcHttp`. OpenID Connect providers, Apple, and providers that are neither.
 - Beginning a federated sign-in is rate limited, and the discovery document is cached (AUTH-14.1.1, AUTH-6.4). `LimitAction` gains `federatedStart`.
