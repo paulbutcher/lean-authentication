@@ -25,7 +25,7 @@ require leancurl from git
   "https://github.com/paulbutcher/leancurl" @ "v0.3.1"
 
 require leancrypto from git
-  "https://github.com/paulbutcher/leancrypto" @ "v0.4.0"
+  "https://github.com/paulbutcher/leancrypto" @ "v0.4.1"
 
 /-
 The one dependency needing a system library, `pkg-config` and OpenSSL 3 development headers. It is
@@ -34,6 +34,17 @@ SQL backend, or the authorisation server links none of it.
 -/
 require «lean-libcrypto» from git
   "https://github.com/paulbutcher/lean-libcrypto" @ "v0.2.0"
+
+/-
+JOSE, and the backend that gives it the elliptic curve half. `lean-jose` is pure Lean and holds the
+algorithm allowlist in its `Policy`, so a token never selects the means of its own verification
+(AUTH-6.5); `jose-libcrypto` supplies ES256 and the private key operations, over the binding below.
+-/
+require jose from git
+  "https://github.com/paulbutcher/lean-jose" @ "v0.2.1"
+
+require «jose-libcrypto» from git
+  "https://github.com/paulbutcher/jose-libcrypto" @ "v0.1.1"
 
 require leanaws from git
   "https://github.com/paulbutcher/lean-aws" @ "v0.3.1"
