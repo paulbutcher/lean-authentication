@@ -195,6 +195,103 @@ Service.consenting ports ⟨"marketing"⟩ -- the accounts to write to
 
 Subject and version are your own strings, stored verbatim and never interpreted. The history is append only: withdrawing adds an entry rather than editing one.
 
+## Federated sign-in
+
+Signing in with somebody else's provider. The other direction from the authorisation server below: this is the client, that is the server.
+
+Three targets, because verification links OpenSSL and a client taking only the magic link flow must not: `AuthenticationFetch` makes the outbound requests, `AuthenticationOidc` speaks the protocol, `AuthenticationOidcHttp` serves the routes.
+
+### Wiring
+
+```lean
+open Authentication
+
+def federation (secrets : Oidc.SealingRing) : IO (Oidc.SignInPorts IO) := do
+  let http := Fetch.curlHttp
+  let resolved := Oidc.clientSecrets (Oidc.secrets secrets)
+  let tokens := Oidc.tokenEndpoint http
+  pure
+    { metadata := ← Oidc.metadata http
+      identities := Oidc.identities http tokens resolved (← Oidc.keys http) }
+```
+
+`metadata` and `keys` return `IO` because each holds a cache: the discovery document and the key set are fetched once and held for as long as the response allows. Build them at startup, not per request, or the caches are new every time and every sign-in becomes a request to the provider.
+
+`identities` picks the implementation per provider, because a tenant may offer providers of different kinds at once. A provider that publishes a discovery document is OpenID Connect and its ID token says who somebody is; one that does not is not, and two further calls do.
+
+### Providers
+
+Providers are per tenant, on `TenantConfig.providers`.
+
+```lean
+-- OpenID Connect, which is most of them
+{ id := ⟨"google"⟩
+  issuer := "https://accounts.google.com"
+  clientId := "1234.apps.googleusercontent.com"
+  credentials := .clientSecret sealedSecret }
+
+-- Apple, whose secret is minted per request from a key rather than held
+{ id := ⟨"apple"⟩
+  issuer := "https://appleid.apple.com"
+  clientId := "com.example.service"
+  credentials := .signingKey "TEAM123456" "KEY7890AB" sealedKey
+  formPost := true
+  scopes := ["openid", "email", "name"] }
+
+-- GitHub, which is not OpenID Connect and has no document to discover
+{ id := ⟨"github"⟩
+  issuer := "https://github.com"
+  clientId := "Iv1.0123456789abcdef"
+  credentials := .clientSecret sealedSecret
+  endpoints := .configured
+    "https://github.com/login/oauth/authorize"
+    "https://github.com/login/oauth/access_token"
+    "https://api.github.com/user"
+    "https://api.github.com/user/emails"
+  scopes := ["read:user", "user:email"] }
+```
+
+`formPost` is Apple's, and it changes the state cookie to `SameSite=None`: a cross-site `POST` carries no `Lax` cookie, so without it every Apple sign-in would arrive with no cookie and be refused.
+
+### Secrets
+
+A provider's secret is never configured in clear. Seal it once, with a key of your own, and store what comes back:
+
+```lean
+Oidc.sealSecret
+  { keyId := ⟨"sealing-2026-01"⟩, secret := sealingKey }
+  { tenant := ⟨"acme"⟩, provider := ⟨"google"⟩, field := .clientSecret }
+  "the-secret-google-gave-you".toUTF8
+```
+
+The tenant, the provider and the field are bound into the ciphertext, so a sealed secret cannot be moved between any of them. Apple's `.p8` is sealed the same way, as the file's bytes, under `.signingKey`.
+
+A deployment whose secrets live in KMS or Vault supplies its own `Secrets` port instead and configures `.external "some/reference"`; the shipped implementation refuses those rather than guessing.
+
+### Mounting
+
+```lean
+def federatedRoutes (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) :
+    Std.Http.Server.StatelessHandler :=
+  OidcHttp.handler
+    { ports
+      oidc
+      tenant := fun t => pure (some (config t)) }
+```
+
+| Path | Method |
+| --- | --- |
+| `/t/<tenant>/federated/<provider>` | `GET`, sends the browser to the provider |
+| `/t/<tenant>/federated/<provider>/callback` | `GET` or `POST`, the provider's answer |
+
+The start accepts `returnTo` and `invitation` as query parameters, the first checked against the tenant's allowlist when it is used and the second required to name the address the provider goes on to assert.
+
+Three things remain yours:
+
+- **Register the redirect URI** with each provider, exactly as `OidcHttp.callbackUri` builds it from the tenant's base URL. Providers match it as a string.
+- **Apply the migrations.** Federated sign-in adds two, and the library never applies them (see Schema below).
+- **Seal the secrets**, and keep the sealing key somewhere other than the database it protects.
+
 ## Authorisation server
 
 `AuthenticationOAuth` is the other direction from signing in with somebody else's provider: it is the provider that somebody else's client gets tokens from. It implements the MCP authorization specification of 2026-07-28 and the OAuth 2.1 subset that one selects, which is `authorization_code` with PKCE `S256`, refresh tokens rotated on every use, and public clients only.

@@ -25,6 +25,7 @@ import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres
 import Tests.RateLimit
+import Tests.ReadmeWiring
 import Tests.Response
 import Tests.Secrets
 import Tests.Session

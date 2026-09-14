@@ -105,4 +105,28 @@ def oauth2Identities (http : Fetch.Http IO) (tokens : TokenEndpoint IO) (secrets
                           addressVerified := true
                           hostedDomain := none })
 
+/--
+The seam, wired for a tenant whose providers are not all of one kind.
+
+A tenant may offer Google and GitHub at once, and they are different protocols, so which
+implementation answers has to be decided per provider rather than per deployment. What decides it
+is whether the provider publishes a discovery document: one that does is OpenID Connect and its
+ID token is the answer, and one that does not is not, so who somebody is takes the two further
+calls of AUTH-6.9.
+
+That equation is safe rather than convenient. OpenID Connect Discovery is how an OpenID Connect
+provider is found at all, so a provider that publishes no document is not one, whatever else it
+speaks.
+-/
+def identities (http : Fetch.Http IO) (tokens : TokenEndpoint IO) (secrets : ClientSecrets IO)
+    (keys : ProviderKeys IO) (limits : Fetch.Limits := {}) : ProviderIdentities IO where
+  redeem tenant provider discovery code redirectUri verifier nonce now :=
+    match provider.endpoints with
+    | .discovered =>
+      (oidcIdentities tokens secrets keys).redeem tenant provider discovery code redirectUri
+        verifier nonce now
+    | .configured _ _ _ _ =>
+      (oauth2Identities http tokens secrets limits).redeem tenant provider discovery code
+        redirectUri verifier nonce now
+
 end Authentication.Oidc

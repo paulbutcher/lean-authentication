@@ -112,4 +112,22 @@ def endpointChecks : IO (List (String × Bool)) := do
         (found.toOption.map (·.tokenEndpoint))
           == some "https://github.test/login/oauth/access_token") ]
 
+
+/-- One tenant offering two providers of different kinds reaches a different implementation for
+each, which is the case a single wired implementation would get wrong. -/
+def dispatchChecks : IO (List (String × Bool)) := do
+  let seen ← IO.mkRef []
+  let http := scripted "{\"id\":7,\"login\":\"o\"}"
+    "[{\"email\":\"p@example.com\",\"primary\":true,\"verified\":true}]" seen
+  let keys ← keys http
+  let port := identities http tokens secrets keys
+  let viaCalls ← port.redeem ⟨"acme"⟩ provider discovery "code" "https://back" "v" "" now
+  let calls ← seen.get
+  let discovering := { provider with endpoints := .discovered }
+  let viaToken ← port.redeem ⟨"acme"⟩ discovering discovery "code" "https://back" "v" "n" now
+  pure
+    [ ("oauth2: a provider with configured endpoints is answered by the profile calls",
+        (viaCalls.toOption.map (·.identity.subject)) == some "7" && calls.length == 2)
+    , ("oauth2: one that publishes a document is answered by its ID token instead",
+        match viaToken with | .error _ => true | .ok _ => false) ]
 end Tests.OAuth2Provider
