@@ -102,6 +102,11 @@ authorisation server, so either may be wired to it without depending on the othe
 @[default_target]
 lean_lib AuthenticationFetch
 
+/-- The federated sign-in routes (AUTH-6.11). Separate from `AuthenticationHttp` because mounting
+these means linking OpenSSL, and mounting those must not. -/
+@[default_target]
+lean_lib AuthenticationOidcHttp
+
 /--
 Tests live in the `test/` subproject rather than here, so that a project depending on this one is
 free to name its own modules `Tests.*` and acquires nothing this library does not ship.

@@ -108,7 +108,7 @@ else: reading `X-Forwarded-For` here unconditionally would hand the source-addre
 scope (AUTH-14.1.1) to anyone willing to set a header. Its absence is a proxy that did not say,
 which the limiter already treats as a request that still counts against every other scope.
 -/
-private def requesterOf (request : Request Body.Stream) : RequestContext :=
+def requesterOf (request : Request Body.Stream) : RequestContext :=
   { ip := (request.extensions.get Middleware.ForwardedFor).map (·.addr)
     userAgent := (request.line.headers.get? (Header.Name.mk "user-agent")).map (·.value) }
 
@@ -164,15 +164,15 @@ back. So what arrives is escaped only where it has to be (`escapeLocation`), rat
 again from end to end. A single byte a header value may not hold would otherwise make
 `Header.Value.ofString?` refuse the whole thing, and the answer would then be a redirect naming
 nowhere to go. -/
-private def locationValue (target : String) : Header.Value :=
+def locationValue (target : String) : Header.Value :=
   headerValue (String.ofList (escapeLocation target.toUTF8.toList))
 
-private def setCookieName : Header.Name := Middleware.Header.Name.setCookie
+def setCookieName : Header.Name := Middleware.Header.Name.setCookie
 
 /-- The attributes are the `CookieSpec`'s, which the core fixed and no caller can weaken
 (AUTH-9.2). The lifetime travels as `Max-Age` rather than `Expires` so that nothing here depends
 on a date format. -/
-private def setCookie (now : Timestamp) (spec : CookieSpec) : Header.Value :=
+def setCookie (now : Timestamp) (spec : CookieSpec) : Header.Value :=
   (Middleware.SetCookie.serialize
     { name := spec.name
       value := spec.value
@@ -186,7 +186,7 @@ private def setCookie (now : Timestamp) (spec : CookieSpec) : Header.Value :=
             | .strict => .strict
             | .none => .none) } }).2
 
-private def clearCookie (base : BaseUrl) (name : String) (path : String) : Header.Value :=
+def clearCookie (base : BaseUrl) (name : String) (path : String) : Header.Value :=
   (Middleware.SetCookie.serialize
     { name
       value := ""
@@ -201,7 +201,7 @@ Every response these routes produce, so that the header set does not vary with t
 an authentication page is never framed (AUTH-14.1.5, AUTH-14.2.4). `no-store` is here because a
 page showing a verification code has no business in a shared cache or a back button.
 -/
-private def finish (status : Status) (body : String) (cookies : List Header.Value)
+def finish (status : Status) (body : String) (cookies : List Header.Value)
     (location : Option String := none) : ContextAsync (Response Body.Any) := do
   let response ← Response.withStatus status |>.html body
   let headers := response.line.headers

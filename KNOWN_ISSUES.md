@@ -2,17 +2,13 @@
 
 Deliberate limitations of the current implementation, with the reasoning behind them. Each entry names the requirement it falls short of and what would close the gap.
 
-## Federated sign-in is specified and not built (§6)
+## Only OpenID Connect providers are implemented (§6)
 
-None of §6 exists. There is no target holding the outbound fetch, the protocol or the routes that AUTH-6.11 divides between three, no storage for a linked identity, no `state` record, and no provider adapter. `CredentialKind.federatedIdentity` and the open `Credential` of AUTH-4.4.2 are the forward provision the section was written around, and nothing reads either.
+An OpenID Connect provider works end to end: discovery, the cached key set, the `state` record, ID token validation, the linking rule of AUTH-6.7, and the routes. Google needs nothing of its own, which is the result AUTH-6.9 was hoping for: `email_verified` is what `Federation.decide` already turns on, and `hd` is carried as evidence while the domain is still checked by §7.
 
-The cryptography is no longer what stands in the way. `lean-jose` and `jose-libcrypto` cover ID token validation and the ES256 client secret of AUTH-6.9, which was the one requirement in the section with no implementable path when it was written, and AUTH-2.4's survey was answered again rather than reopened.
+Two of AUTH-6.9's three are missing. **Apple** needs its client secret minted as an ES256 JWT on demand rather than held, and answers by `form_post`, which is a cross-site `POST` and so does not carry the `SameSite=Lax` state cookie the GET callback relies on; that cookie's attributes are the thing to revisit rather than the signing. **GitHub** is not OpenID Connect at all: there is no ID token, and a verified address takes a second call. `TokenEndpoint` and `IdTokens` are ports, so neither needs the shape here to change, but neither has an adapter.
 
-While it stands, a tenant wanting Google or Apple sign-in cannot have it, and two requirements elsewhere are unreachable rather than merely unused: AUTH-8.6, an invitation completed with a provider instead of email, and the unverified-provider-email case of AUTH-16.7.
-
-Closing it is stages 10 to 15 of §19, in that order. The linking rule of AUTH-6.7 is the part to write first and review hardest, because it is the one whose failure is an account takeover rather than a refusal.
-
-## Internationalised domain names are not accepted (AUTH-4.5.2)
+`Credential.descriptor` also has no `emailAddress` row written for it. The magic link route identifies an account by its primary address rather than by a credential, so the variant exists and nothing creates one; a passkey would be the first kind that did.
 
 `Domain.parse` accepts ASCII domains only. A domain containing non-ASCII characters (a U-label, for example `münchen.de`) is rejected with a distinct error rather than being converted to punycode. Already-encoded A-labels (`xn--mnchen-3ya.de`) are ordinary ASCII and are accepted, so an address whose domain has been punycoded upstream works today.
 

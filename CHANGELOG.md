@@ -5,8 +5,8 @@
 - `Authentication.OAuth.Pkce` is now `Authentication.Pkce`, and `OAuth.Uri`'s URL helpers are now `Authentication.Url`.
 - `Service.issueFor` signs in a subject that has already proven itself. `SessionSubject` names the route it came by, and `SignInOutcome` and `SignInRefusal` gain `addressNotVerified`.
 - `Credential` carries a typed descriptor, and `AuthStore` gains linked identities, verified addresses and the state record of AUTH-6.2, with migrations for both backends.
-- Two new targets: `AuthenticationFetch` for the fetch of AUTH-6.13, and `AuthenticationOidc`, which holds per-tenant provider secrets (AUTH-15.7.3), discovery, the cached key set of AUTH-6.4 and ID token validation.
-- Federated sign-in is specified rather than deferred (§6).
+- Federated sign-in over OpenID Connect, in three new targets: `AuthenticationFetch`, `AuthenticationOidc` and `AuthenticationOidcHttp` (§6).
+- `Http.finish`, `setCookie`, `clearCookie`, `locationValue` and `requesterOf` are public, so a sibling target can answer in the same shape.
 
 ## [0.15.2] - 2026-09-09
 

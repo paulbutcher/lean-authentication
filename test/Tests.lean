@@ -8,6 +8,7 @@ import Tests.EndToEnd
 import Tests.Digest
 import Tests.Email
 import Tests.Federation
+import Tests.FederatedFlow
 import Tests.FederatedSignIn
 import Tests.Fetch
 import Tests.Flow
@@ -17,6 +18,7 @@ import Tests.Migrations
 import Tests.OAuth
 import Tests.OAuthHttp
 import Tests.Oidc
+import Tests.OidcHttp
 import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres

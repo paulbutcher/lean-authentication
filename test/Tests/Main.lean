@@ -40,6 +40,7 @@ def main : IO UInt32 := do
     ++ Tests.Fetch.permittedChecks ++ (← Tests.Fetch.checks)
     ++ Tests.Oidc.discoveryChecks ++ (← Tests.Oidc.checks) ++ (← Tests.Oidc.cacheChecks)
     ++ (← Tests.Oidc.refetchChecks) ++ (← Tests.FederatedSignIn.checks)
+    ++ (← Tests.FederatedFlow.checks)
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do
     IO.eprintln s!"FAILED: {name}"
