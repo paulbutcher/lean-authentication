@@ -349,8 +349,8 @@ def authorize {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : 
                     client
                     clientHost := request.clientId.host?
                     redirectHost :=
-                      ((Uri.parts? redirectUri).bind
-                        (fun parts => (Uri.hostAndPort? parts.authority).map (·.1))).getD redirectUri
+                      ((Url.parts? redirectUri).bind
+                        (fun parts => (Url.hostAndPort? parts.authority).map (·.1))).getD redirectUri
                     loopbackOnly :=
                       client.metadata.redirectUris.all fun uri => (Uri.loopback? uri).isSome
                     resource := request.resource

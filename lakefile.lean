@@ -86,6 +86,11 @@ links OpenSSL, which is why it is its own and why the routes are not in `Authent
 @[default_target]
 lean_lib AuthenticationOidc
 
+/-- The outbound fetch of AUTH-6.11, and only that: it knows nothing of OIDC or of the
+authorisation server, so either may be wired to it without depending on the other. -/
+@[default_target]
+lean_lib AuthenticationFetch
+
 /--
 Tests live in the `test/` subproject rather than here, so that a project depending on this one is
 free to name its own modules `Tests.*` and acquires nothing this library does not ship.

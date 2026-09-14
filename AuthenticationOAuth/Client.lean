@@ -202,15 +202,15 @@ with the server as the deputy.
 def metadataDocumentUrl? (id : ClientId) : Option String :=
   if id.value.toList.contains '#' then none
   else
-    match Uri.parts? id.value with
+    match Url.parts? id.value with
     | none => none
     | some parts =>
       if parts.scheme != "https" then none
       else
-        match Uri.hostAndPort? parts.authority with
+        match Url.hostAndPort? parts.authority with
         | none => none
         | some (host, port) =>
-          if host.isEmpty || !Uri.isPort port || Uri.isPrivateHost host then none
+          if host.isEmpty || !Url.isPort port || Url.isPrivateHost host then none
           else
             let path := String.ofList (parts.rest.toList.takeWhile (· != '?'))
             if !path.startsWith "/" || path.length < 2 then none
@@ -219,7 +219,7 @@ def metadataDocumentUrl? (id : ClientId) : Option String :=
             else some id.value
 
 def registration (id : ClientId) : Registration :=
-  match Uri.parts? id.value with
+  match Url.parts? id.value with
   | none => .dynamic
   | some _ =>
     match metadataDocumentUrl? id with
@@ -229,9 +229,9 @@ def registration (id : ClientId) : Registration :=
 /-- What the consent page has to display beside the client's own name (client ID metadata
 document draft §6.4). -/
 def host? (id : ClientId) : Option String :=
-  match Uri.parts? id.value with
+  match Url.parts? id.value with
   | none => none
-  | some parts => (Uri.hostAndPort? parts.authority).map (·.1)
+  | some parts => (Url.hostAndPort? parts.authority).map (·.1)
 
 end ClientId
 

@@ -83,12 +83,12 @@ that admitted a host on the internet would hand authorization codes to it.
 
 `Uri.loopback?` reads a URI and returns `some host` when it is one this exception covers. `h`
 says the read succeeded, so the claim is about URIs the function accepted. The conclusion is
-that the host is in `Uri.loopbackHosts`, the fixed list of addresses that resolve to the machine
+that the host is in `Url.loopbackHosts`, the fixed list of addresses that resolve to the machine
 itself. Nothing is assumed about `uri`'s scheme, path or port, so a URI that dresses a public
 host up in any other way still has to pass this check.
 -/
 theorem loopback_is_loopback {uri : String} {host : Uri.Loopback}
-    (h : Uri.loopback? uri = some host) : Uri.loopbackHosts.contains host.host = true := by
+    (h : Uri.loopback? uri = some host) : Url.loopbackHosts.contains host.host = true := by
   unfold Uri.loopback? at h
   split at h
   · simp at h
@@ -111,7 +111,7 @@ exception to addresses that cannot be reached from the internet.
 
 `Uri.matchesIgnoringPort` is the comparison used for a registered redirect URI against a
 presented one. `h` says it answered `true`. The existential produces the loopback readings of
-both URIs together with the fact that each host is in `Uri.loopbackHosts`. So a match that
+both URIs together with the fact that each host is in `Url.loopbackHosts`. So a match that
 ignored the port implies both sides parsed as loopback, which with `loopback_is_loopback` above
 means neither host is a public one. Whether the rest of either URI matched is not stated here;
 that part is the string comparison the function does anyway.
@@ -119,7 +119,7 @@ that part is the string comparison the function does anyway.
 theorem matchesIgnoringPort_is_loopback {registered presented : String}
     (h : Uri.matchesIgnoringPort registered presented = true) :
     ∃ r p, Uri.loopback? registered = some r ∧ Uri.loopback? presented = some p
-      ∧ Uri.loopbackHosts.contains r.host = true ∧ Uri.loopbackHosts.contains p.host = true := by
+      ∧ Url.loopbackHosts.contains r.host = true ∧ Url.loopbackHosts.contains p.host = true := by
   unfold Uri.matchesIgnoringPort at h
   split at h
   · rename_i r p heqr heqp
