@@ -51,26 +51,49 @@ private def store (state : CacheState) (uri : String) (entry : CachedKeys) : Cac
   (uri, entry) :: state.filter (·.1 != uri)
 
 /--
-The metadata port over a fetcher (AUTH-6.14).
+The metadata port over a fetcher, cached (AUTH-6.4, AUTH-6.14).
 
 The document is read for the issuer it names, which is checked against the one configured before
 anything in it is used.
+
+It is cached for the same reason the key set is, and the reason is sharper here: a discovery
+fetch happens when somebody begins a sign-in, so without a cache every inbound request becomes an
+outbound one to a third party, at whatever rate the inbound arrive. The rate limit of AUTH-14.1.1
+bounds that too, and neither is a substitute for the other: the limit bounds a stranger, and the
+cache bounds a busy day.
 -/
-def metadata (http : Fetch.Http IO) (limits : Fetch.Limits := {}) : ProviderMetadata IO where
-  discover config := do
-    match config.endpoints with
-    -- A provider that publishes no document has nothing to fetch and nothing to check its issuer
-    -- against; what would have been discovered is configuration instead (AUTH-6.9).
-    | .configured authorization token _ _ =>
-      pure (.ok
-        { issuer := config.issuer
-          authorizationEndpoint := authorization
-          tokenEndpoint := token
-          jwksUri := "" })
-    | .discovered =>
-      match ← Fetch.document http limits (wellKnownUrl config.issuer) with
-      | .error reason => pure (.error (.fetch reason))
-      | .ok document => pure (readDiscovery config.issuer document.body)
+def metadata [Clock IO] (http : Fetch.Http IO) (config : KeysConfig := {}) :
+    IO (ProviderMetadata IO) := do
+  let cache ← IO.mkRef ([] : List (String × (Discovery × Timestamp)))
+  let fetchInto (provider : ProviderConfig) (now : Timestamp) : IO (Except OidcError Discovery) := do
+    match ← Fetch.document http config.limits (wellKnownUrl provider.issuer) with
+    | .error reason => pure (.error (.fetch reason))
+    | .ok document =>
+      match readDiscovery provider.issuer document.body with
+      | .error reason => pure (.error reason)
+      | .ok found =>
+        let held := document.freshFor.getD config.defaultFreshness
+        cache.modify (fun entries =>
+          (provider.issuer, (found, now.advance held)) :: entries.filter (·.1 != provider.issuer))
+        pure (.ok found)
+  pure
+    { discover provider := do
+        match provider.endpoints with
+        -- A provider that publishes no document has nothing to fetch and nothing to check its
+        -- issuer against; what would have been discovered is configuration instead (AUTH-6.9).
+        | .configured authorization token _ _ =>
+          pure (.ok
+            { issuer := provider.issuer
+              authorizationEndpoint := authorization
+              tokenEndpoint := token
+              jwksUri := "" })
+        | .discovered =>
+          let now ← Clock.now
+          let held := ((← cache.get).find? (·.1 == provider.issuer)).map (·.2)
+          match held with
+          | some (found, freshUntil) =>
+            if now < freshUntil then pure (.ok found) else fetchInto provider now
+          | none => fetchInto provider now }
 
 /--
 The keys port, with the cache and the refetch limit of AUTH-6.4.

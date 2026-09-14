@@ -3,10 +3,10 @@
 ## [Unreleased]
 
 - Federated sign-in (§6), in three new targets: `AuthenticationFetch`, `AuthenticationOidc` and `AuthenticationOidcHttp`. OpenID Connect providers, Apple, and providers that are neither.
+- Beginning a federated sign-in is rate limited, and the discovery document is cached (AUTH-14.1.1, AUTH-6.4). `LimitAction` gains `federatedStart`.
 - `Service.unlinkIdentity` removes a linked identity and refuses to leave an account with no way in (AUTH-6.8); `Service.linkedIdentities` lists them.
 - An invitation can be completed with a provider, where it asserts the invited address (AUTH-8.6).
-- `Credential` carries a typed descriptor, and `AuthStore` gains linked identities, verified addresses and the state record of AUTH-6.2, with migrations for both backends.
-- `Service.issueFor`, a relay address no longer satisfying a domain allowlist (AUTH-6.9), and `Authentication.OAuth.Pkce` is now `Authentication.Pkce`.
+- `Credential` carries a typed descriptor, `AuthStore` gains linked identities, verified addresses and the state record of AUTH-6.2, and `Authentication.OAuth.Pkce` is now `Authentication.Pkce`.
 
 ## [0.15.2] - 2026-09-09
 

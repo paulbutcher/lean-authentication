@@ -100,7 +100,7 @@ private def openDb : IO SQLite := do
 def checks : IO (List (String × Bool)) := do
   let db ← openDb
   let ports := portsOn db
-  let started ← beginFederated ports.store peppers config provider discovery redirectUri (some "/dashboard")
+  let started ← beginFederated ports config provider discovery redirectUri (some "/dashboard")
   let url := (started.map (·.authorizationUrl)).getD ""
   let state := (started.bind fun s => parameter s.authorizationUrl "state").getD ""
   let cookieValue := (started.map (·.cookie.value)).getD ""
@@ -117,7 +117,7 @@ def checks : IO (List (String × Bool)) := do
   -- A `state` that does not pair with the browser's cookie, which is the login-CSRF case.
   let fresh ← openDb
   let freshPorts := portsOn fresh
-  let other ← beginFederated freshPorts.store peppers config provider discovery redirectUri none
+  let other ← beginFederated freshPorts config provider discovery redirectUri none
   let otherState := (other.bind fun s => parameter s.authorizationUrl "state").getD ""
   exchanges.set 0
   let mismatched ← completeFederated freshPorts (oidcPorts) config provider discovery redirectUri
@@ -129,7 +129,7 @@ def checks : IO (List (String × Bool)) := do
   -- An unverified assertion is refused where the linking rule is, not here (AUTH-6.7).
   let strict ← openDb
   let strictPorts := portsOn strict
-  let begun ← beginFederated strictPorts.store peppers config provider discovery redirectUri none
+  let begun ← beginFederated strictPorts config provider discovery redirectUri none
   let begunState := (begun.bind fun s => parameter s.authorizationUrl "state").getD ""
   let begunCookie := (begun.map (·.cookie.value)).getD ""
   let unverified ← completeFederated strictPorts (oidcPorts false) config provider discovery
@@ -186,7 +186,7 @@ def invitationChecks : IO (List (String × Bool)) := do
       metadata := ⟨"{}"⟩
       expiresAt := ⟨1700009999⟩
       createdBy := .client "admin" }
-  let begun ← beginFederated ports.store peppers inviteOnly provider discovery redirectUri none
+  let begun ← beginFederated ports inviteOnly provider discovery redirectUri none
     (some ⟨"invite-1"⟩)
   let state := (begun.bind fun s => parameter s.authorizationUrl "state").getD ""
   let cookie := (begun.map (·.cookie.value)).getD ""
@@ -203,7 +203,7 @@ def invitationChecks : IO (List (String × Bool)) := do
       metadata := ⟨"{}"⟩
       expiresAt := ⟨1700009999⟩
       createdBy := .client "admin" }
-  let begunOther ← beginFederated otherPorts.store peppers inviteOnly provider discovery
+  let begunOther ← beginFederated otherPorts inviteOnly provider discovery
     redirectUri none (some ⟨"invite-2"⟩)
   let otherState := (begunOther.bind fun s => parameter s.authorizationUrl "state").getD ""
   let otherCookie := (begunOther.map (·.cookie.value)).getD ""
@@ -220,4 +220,38 @@ def invitationChecks : IO (List (String × Bool)) := do
         match mismatched with | .error _ => true | .ok _ => false)
     , ("invitation: and the invitation is left unspent",
         (stillInvited.map (·.state)) == some .pending) ]
+
+/--
+The start of a federated sign-in is rate limited (AUTH-14.1.1).
+
+It is an unauthenticated endpoint that writes a row and asks somebody else a question, so what
+bounds it is the source and the tenant. Nobody has said who they are yet, which is why the two
+scopes that need an address are not among them.
+-/
+def limitChecks : IO (List (String × Bool)) := do
+  let db ← openDb
+  let counted ← IO.mkRef 0
+  let limited : Ports IO :=
+    { portsOn db with
+      limiter :=
+        { admit := fun action _ scopes => do
+            counted.modify (· + 1)
+            pure (action != .federatedStart || (← counted.get) ≤ 2 && !scopes.isEmpty) } }
+  let requester : RequestContext := { ip := some "198.51.100.7" }
+  let first ← beginFederated limited config provider discovery redirectUri none none requester
+  let second ← beginFederated limited config provider discovery redirectUri none none requester
+  let third ← beginFederated limited config provider discovery redirectUri none none requester
+  let scopes := startScopes tenant requester
+  let anonymous := startScopes tenant {}
+  pure
+    [ ("federated flow: the start is admitted while inside the budget",
+        first.isSome && second.isSome)
+    , ("federated flow: and refused once past it (AUTH-14.1.1)", third.isNone)
+    , ("federated flow: a refused start writes no state record",
+        (← (portsOn db).store.federationStateByDigest tenant ⟨1700000000⟩
+          (peppers.current.digest ⟨"nothing"⟩)).isNone)
+    , ("federated flow: the source, the tenant and everyone are counted",
+        scopes.length == 3 && scopes.contains (.sourceIp "198.51.100.7"))
+    , ("federated flow: a request with no source still counts against the other two",
+        anonymous.length == 2) ]
 end Tests.FederatedFlow

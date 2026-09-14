@@ -108,6 +108,13 @@ def oidcIdentities (tokens : TokenEndpoint IO) (secrets : ClientSecrets IO)
       | .error reason => pure (.error reason)
       | .ok idToken => verifyIdToken keys provider discovery nonce idToken now
 
+/-- The three of AUTH-14.1.1's five scopes that do not need an address. A request with no source
+address contributes to the other two rather than being waved through, as `Service.limitScopes`
+treats one. -/
+def startScopes (tenant : TenantId) (requester : RequestContext) : List LimitScope :=
+  [ .tenant tenant, .global ]
+    ++ (match requester.ip with | some ip => [.sourceIp ip] | none => [])
+
 /-- The cookie that binds the state record to the browser that began the flow.
 
 It carries the same value the URL does, and the callback accepts only a `state` that matches it.
@@ -156,18 +163,23 @@ The verifier is 43 characters of base64url, which is the shortest RFC 7636 allow
 from 32 bytes, so it is at the length's floor and the entropy's ceiling at once.
 -/
 def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
-    (store : AuthStore m) (peppers : PepperRing) (config : TenantConfig tenant)
+    (ports : Ports m) (config : TenantConfig tenant)
     (provider : ProviderConfig) (discovery : Discovery) (redirectUri : String)
-    (returnTo : Option String) (invitation : Option (InvitationId tenant) := none) :
-    m (Option (FederatedStart tenant)) := do
+    (returnTo : Option String) (invitation : Option (InvitationId tenant) := none)
+    (requester : RequestContext := {}) : m (Option (FederatedStart tenant)) := do
   let now ← Clock.now
+  -- Nothing here has said who they are, so only the scopes that do not need an address can be
+  -- counted. Without them this endpoint turns one inbound request into a stored row and an
+  -- outbound one, for anybody, as often as they like (AUTH-14.1.1).
+  if !(← ports.limiter.admit .federatedStart now (startScopes tenant requester)) then
+    return none
   match ← drawValue 16, ← drawValue 32, ← drawValue 16, ← drawValue 12 with
   | some state, some verifier, some nonce, some identifier =>
     let expiresAt := now.advance FederationState.maxLifetime
-    store.createFederationState tenant
+    ports.store.createFederationState tenant
       { id := ⟨identifier⟩
         provider := provider.id
-        stateDigest := peppers.current.digest ⟨state⟩
+        stateDigest := ports.peppers.current.digest ⟨state⟩
         verifier
         nonce
         returnTo

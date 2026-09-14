@@ -75,9 +75,9 @@ private def start [Clock IO] [RandomBytes IO] (config : Config) (rawTenant rawPr
     match ← (config.oidc.metadata.discover provider : IO _) with
     | .error _ => refused config
     | .ok discovery =>
-      match ← (beginFederated config.ports.store config.ports.peppers tenantConfig provider
+      match ← (beginFederated config.ports tenantConfig provider
           discovery (callbackUri tenantConfig provider.id) returnTo
-          ((request.line.uri.query.get "invitation").map (⟨·⟩)) : IO _) with
+          ((request.line.uri.query.get "invitation").map (⟨·⟩)) (requesterOf request) : IO _) with
       | none => refused config
       | some begun =>
         let now ← (Clock.now : IO _)

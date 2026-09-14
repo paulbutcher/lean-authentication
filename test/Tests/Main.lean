@@ -39,8 +39,8 @@ def main : IO UInt32 := do
     ++ (← Tests.Secrets.checks) ++ Tests.Secrets.associatedDataChecks
     ++ Tests.Fetch.permittedChecks ++ (← Tests.Fetch.checks)
     ++ Tests.Oidc.discoveryChecks ++ (← Tests.Oidc.checks) ++ (← Tests.Oidc.cacheChecks)
-    ++ (← Tests.Oidc.refetchChecks) ++ (← Tests.FederatedSignIn.checks) ++ (← Tests.FederatedSignIn.unlinkChecks)
-    ++ (← Tests.FederatedFlow.checks) ++ (← Tests.FederatedFlow.invitationChecks)
+    ++ (← Tests.Oidc.refetchChecks) ++ (← Tests.Oidc.discoveryCacheChecks) ++ (← Tests.FederatedSignIn.checks) ++ (← Tests.FederatedSignIn.unlinkChecks)
+    ++ (← Tests.FederatedFlow.checks) ++ (← Tests.FederatedFlow.invitationChecks) ++ (← Tests.FederatedFlow.limitChecks)
     ++ (← Tests.Apple.checks) ++ (← Tests.Apple.formPostChecks)
     ++ (← Tests.OAuth2Provider.checks) ++ (← Tests.OAuth2Provider.endpointChecks)
   let failed := checks.filter fun (_, passed) => !passed

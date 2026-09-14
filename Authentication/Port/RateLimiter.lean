@@ -17,6 +17,10 @@ spent to exhaust the other. -/
 inductive LimitAction where
   | send
   | codeSubmission
+  /-- Beginning a federated sign-in. It is its own action because what it spends is not a
+  message but a row and an outbound request to somebody else, and because the request carries no
+  address, so only three of the five scopes can be counted against it. -/
+  | federatedStart
   deriving DecidableEq, Repr, Inhabited
 
 /--
@@ -58,6 +62,7 @@ namespace LimitAction
 def key : LimitAction → String
   | .send => "send"
   | .codeSubmission => "code"
+  | .federatedStart => "federated-start"
 
 end LimitAction
 
@@ -139,6 +144,15 @@ structure RateLimits where
       sourceIp := ⟨60, Duration.hours 1⟩
       tenant := ⟨2000, Duration.hours 1⟩
       global := ⟨20000, Duration.hours 1⟩ }
+  /-- No address is known when a federated sign-in begins, so `tenantAddress` and `address` are
+  never counted against and their numbers here are never reached. What bounds this is the source
+  and the tenant. -/
+  federatedStart : ActionLimits :=
+    { tenantAddress := ⟨0, Duration.hours 1⟩
+      address := ⟨0, Duration.hours 1⟩
+      sourceIp := ⟨30, Duration.hours 1⟩
+      tenant := ⟨1000, Duration.hours 1⟩
+      global := ⟨10000, Duration.hours 1⟩ }
   deriving Inhabited
 
 namespace RateLimits
@@ -146,6 +160,7 @@ namespace RateLimits
 def forAction (limits : RateLimits) : LimitAction → ActionLimits
   | .send => limits.send
   | .codeSubmission => limits.codeSubmission
+  | .federatedStart => limits.federatedStart
 
 end RateLimits
 

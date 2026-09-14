@@ -186,7 +186,7 @@ def cacheChecks : IO (List (String × Bool)) := do
     "/authorize\",\"token_endpoint\":\"" ++ issuer ++ "/token\",\"jwks_uri\":\"" ++ issuer ++
     "/jwks\"}"
   let discovered ← IO.mkRef 0
-  let found ← (metadata (counting document discovered)).discover provider
+  let found ← (← metadata (counting document discovered)).discover provider
 
   pure
     [ ("oidc: the first ask for a key set fetches it", afterFirst == 1)
@@ -230,4 +230,36 @@ def refetchChecks : IO (List (String × Bool)) := do
     , ("oidc: and costs exactly one refetch, never more (AUTH-6.4)", eagerCount == 2)
     , ("oidc: a recent fetch means no refetch at all", heldCount == 1)
     , ("oidc: which is still a refusal rather than an acceptance", rejected limitedOutcome) ]
+
+/-- The discovery document is cached, so a busy day is not a request per sign-in (AUTH-6.4). -/
+def discoveryCacheChecks : IO (List (String × Bool)) := do
+  let document := "{\"issuer\":\"" ++ issuer ++ "\",\"authorization_endpoint\":\"" ++ issuer ++
+    "/authorize\",\"token_endpoint\":\"" ++ issuer ++ "/token\",\"jwks_uri\":\"" ++ issuer ++
+    "/jwks\"}"
+  let held ← IO.mkRef 0
+  let cached ← metadata (counting document held) { defaultFreshness := Duration.hours 1 }
+  let _ ← cached.discover provider
+  let _ ← cached.discover provider
+  let afterTwo ← held.get
+
+  let stale ← IO.mkRef 0
+  let expiring ← metadata (counting document stale) { defaultFreshness := ⟨0⟩ }
+  let _ ← expiring.discover provider
+  let _ ← expiring.discover provider
+  let afterStale ← stale.get
+
+  -- A provider with configured endpoints is never fetched for at all.
+  let never ← IO.mkRef 0
+  let configured ← metadata (counting document never)
+  let staticProvider : ProviderConfig :=
+    { provider with
+        endpoints := .configured "https://a.test/auth" "https://a.test/token"
+          "https://a.test/user" "https://a.test/emails" }
+  let found ← configured.discover staticProvider
+  let afterConfigured ← never.get
+  pure
+    [ ("oidc: a second sign-in reuses the cached document (AUTH-6.4)", afterTwo == 1)
+    , ("oidc: a stale document is fetched again", afterStale == 2)
+    , ("oidc: configured endpoints are never fetched for",
+        afterConfigured == 0 && (found.toOption.map (·.tokenEndpoint)) == some "https://a.test/token") ]
 end Tests.Oidc

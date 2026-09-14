@@ -3,6 +3,7 @@ Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import AuthenticationOidc
+import Authentication.Instances
 
 /-!
 A provider that is not OpenID Connect (AUTH-6.9).
@@ -102,7 +103,7 @@ def endpointChecks : IO (List (String × Bool)) := do
   let answer ← port.redeem ⟨"acme"⟩ misconfigured discovery "code" "https://back" "v" "" now
   let calls ← seen.get
   let never : Fetch.Http IO := { send := fun _ => pure (.error (Leancurl.CurlError.ofCode 7)) }
-  let found ← (metadata never).discover provider
+  let found ← (← metadata never).discover provider
   pure
     [ ("oauth2: a provider with no configured endpoints is refused",
         match answer with | .error _ => true | .ok _ => false)
