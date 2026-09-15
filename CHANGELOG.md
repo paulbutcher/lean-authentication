@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.16.3] - 2026-09-15
 
 - `OidcHttp.Config.observeRefusal` is handed every refusal the federated routes answer with, and the tenant and provider it was for, because the page they render will never say which one it was (AUTH-14.2.6).
 - `LinkFailure.name` is the operator's name for a refused link, as the refusals around it already had.
