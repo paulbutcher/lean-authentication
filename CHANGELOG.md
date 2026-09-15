@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.16.5] - 2026-09-15
 
 - `auth-seal`, an executable that mints a sealing key, seals a provider secret under a `SecretRef`, and says whether a configured value still opens, so that a deployment no longer writes that tool for itself (§21); `SecretField.parse` reads the field names back.
 - `Service.Outcome` carries the code the cross-device page shows, derived under the pepper the attempt was minted with rather than the current one, which after a rotation revealed a code the attempt then refused (AUTH-5.2.2, AUTH-15.7.2); `Service.revealedCode` names that pepper.
