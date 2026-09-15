@@ -52,14 +52,7 @@ def providers : List ProviderConfig :=
         "https://api.github.com/user/emails"
       scopes := ["read:user", "user:email"] } ]
 
-/-- The two under "Secrets". -/
-def sealedText (sealingKey : ByteArray) : IO (Except SecretError String) := do
-  let sealed ← Oidc.sealSecret
-    { keyId := ⟨"sealing-2026-01"⟩, secret := sealingKey }
-    { tenant := ⟨"acme"⟩, provider := ⟨"google"⟩, field := .clientSecret }
-    "the-secret-google-gave-you".toUTF8
-  pure (sealed.map fun value => (StoredSecret.sealed value).render)
-
+/-- The one under "Secrets". -/
 def googleCredentials (text : Option String) : Option ProviderCredentials :=
   (text.bind StoredSecret.parse).map .clientSecret
 

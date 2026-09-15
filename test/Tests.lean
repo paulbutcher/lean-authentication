@@ -28,6 +28,7 @@ import Tests.Postgres
 import Tests.RateLimit
 import Tests.ReadmeWiring
 import Tests.Response
+import Tests.Seal
 import Tests.Secrets
 import Tests.Session
 import Tests.Ses

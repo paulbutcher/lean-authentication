@@ -202,6 +202,20 @@ theorem parse_render_external (reference : String) :
       = some (.external reference) := by
   simp [StoredSecret.parse, StoredSecret.render, String.toList_append]
 
+/--
+Every field's name reads back as the field it names. The names are the text a deployment writes
+into a `SecretRef` when it seals a secret, and a name that did not read back would seal that
+secret under a field nothing can ask for again: configured, unopenable, and refusing every sign-in
+through the provider it belongs to.
+
+`field` is any `SecretField` at all, so the claim is about every field there is rather than the
+two an example would pick. `SecretField.parse` searches `SecretField.all`, so this also says that
+`all` omits nothing: a field left out of that list would have no name to find, and the proof would
+fail on it rather than quietly pass.
+-/
+theorem parse_name (field : SecretField) : SecretField.parse field.name = some field := by
+  cases field <;> decide
+
 end Format
 
 end Tests.Secrets

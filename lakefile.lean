@@ -108,6 +108,19 @@ these means linking OpenSSL, and mounting those must not. -/
 lean_lib AuthenticationOidcHttp
 
 /--
+The sealing tool (§21). Its own library rather than modules of `AuthenticationOidc`, so that
+nothing a consumer imports reaches it, and it adds no `require`: it links what that target
+already links.
+-/
+lean_lib AuthSeal
+
+/-- Named for the workspace rather than for this package, because `lake exe` resolves across the
+whole of one and two executables of a name leave the invocation ambiguous. -/
+@[default_target]
+lean_exe «auth-seal» where
+  root := `AuthSeal.Main
+
+/--
 Tests live in the `test/` subproject rather than here, so that a project depending on this one is
 free to name its own modules `Tests.*` and acquires nothing this library does not ship.
 -/

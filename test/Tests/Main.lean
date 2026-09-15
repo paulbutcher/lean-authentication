@@ -39,6 +39,8 @@ def main : IO UInt32 := do
     ++ (← Tests.OAuthHttp.antiForgeryChecks) ++ (← Tests.OidcHttp.linkRouteChecks)
     ++ (← Tests.OidcHttp.refusalChecks)
     ++ (← Tests.Secrets.checks) ++ Tests.Secrets.associatedDataChecks ++ (← Tests.Secrets.formatChecks)
+    ++ Tests.Seal.parsingChecks ++ Tests.Seal.keyChecks ++ (← Tests.Seal.mintChecks)
+    ++ (← Tests.Seal.sealChecks)
     ++ Tests.Fetch.permittedChecks ++ (← Tests.Fetch.checks)
     ++ Tests.Oidc.discoveryChecks ++ (← Tests.Oidc.checks) ++ (← Tests.Oidc.cacheChecks)
     ++ (← Tests.Oidc.refetchChecks) ++ (← Tests.Oidc.discoveryCacheChecks) ++ (← Tests.FederatedSignIn.checks) ++ (← Tests.FederatedSignIn.unlinkChecks)

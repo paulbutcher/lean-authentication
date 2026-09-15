@@ -742,3 +742,49 @@ The endpoint layer is where an application's OAuth defects live, and each of the
 - **AUTH-20.19.7** The authorization endpoint MUST NOT be put behind a sign-in guard. Whether a request with no session signs somebody in, is refused, or redirects an error to the client is the answer AUTH-20.13.2 gives, and `prompt=none` is the case a sign-in page is wrong for.
 - **AUTH-20.19.8** A request naming no `scope` MUST be refused unless the deployment has said what to offer instead. The default set of AUTH-20.9.5 is a separate statement from `scopes_supported`, and reading one as the other is how a scopeless request comes to be answered with a set nobody chose.
 - **AUTH-20.19.9** The consent page is the client's to replace, as the sign-in pages are (AUTH-10.7), but the form's field names are not: the encoding of AUTH-20.9's approval field and the field carrying the answer ship with the reader that reads them back.
+
+---
+
+## 21. The sealing tool
+
+AUTH-15.7.3.2 gives the stored form a reader and a writer, and the library ships both. Nothing in the library produces one, so every deployment that configures a per-tenant provider secret writes the same tool for itself: mint a key, seal a secret under a `SecretRef`, and say whether a configured value still opens.
+
+Each such copy restates invariants that belong here. The key length and its encoding, the field names, the cases of `SecretError`, and above all the binding of AUTH-15.7.3.1, which is the one the library exists to guarantee and the one whose failure is silent: a secret sealed against the wrong tenant, provider or field configures cleanly and refuses every sign-in.
+
+### 21.1 The target
+
+- **AUTH-21.1.1** The tool MUST be a `lean_exe` in this package, beside the existing libraries. It is not a new package and not a new repository.
+- **AUTH-21.1.2** It MUST NOT be reachable from any `lean_lib` a consumer imports, so that nothing it needs enters the dependency graph a consumer resolves. It links what `AuthenticationOidc` already links and MUST require nothing further.
+- **AUTH-21.1.3** Its name SHOULD be one a consumer would not plausibly choose for an executable of its own, `auth-seal` rather than `seal`, because `lake exe` resolves across the whole workspace and two executables of one name leave the invocation ambiguous.
+- **AUTH-21.1.4** Nothing is `partial`, nothing may panic, and nothing is left `sorry`, as everywhere else in this package.
+
+### 21.2 What it does
+
+- **AUTH-21.2.1** It MUST mint a sealing key: the AEAD's key length drawn from `RandomBytes`, printed in base64url, as the fields of the stored form already are (AUTH-15.7.3.2), so that what it prints can be pasted without translation.
+- **AUTH-21.2.2** It MUST seal a secret read from standard input as bytes. Not an argument, which is in the process list while it runs and in a shell history afterwards, and not a string, which puts an Apple `.p8` at the mercy of whatever that file happens to encode.
+- **AUTH-21.2.3** It MUST report whether a configured value opens under the key it holds, and MUST NOT report what it opens to. That makes it safe to run against production configuration, which is the only configuration anybody needs to diagnose.
+- **AUTH-21.2.4** The tenant, the provider and the field MUST be explicit arguments with no defaults. They are the associated data of AUTH-15.7.3.1, and a defaulted tenant is how a single-tenant consumer seals against a binding it never chose.
+- **AUTH-21.2.5** It MUST write nowhere and MUST print only what a deployment sets. The one copy of a provider's secret stays with whoever ran it.
+
+### 21.3 The names belong to the library
+
+- **AUTH-21.3.1** `SecretField` MUST gain a total parse that inverts `SecretField.name`. The names are part of the supported text form, so the reading of them belongs beside the writing rather than in each tool that has to accept one.
+- **AUTH-21.3.2** That round trip MUST be a theorem rather than a handful of examples. The case analysis is finite, and a field that does not survive it seals a secret under a name nothing can ask for again.
+- **AUTH-21.3.3** The tenant and the provider MUST stay opaque strings. Which providers exist is a client's configuration (§6), so a tool that checked them against a list would refuse a provider the library supports.
+
+### 21.4 Diagnostics
+
+- **AUTH-21.4.1** Every refusal MUST name the argument or the variable to change. This tool is the only place that can say it: a deployment that got it wrong renders a sign-in page with a button missing, and tells nobody.
+- **AUTH-21.4.2** A check MUST distinguish a value sealed under a key id that is not held, a key that cannot be used, and a value that will not open under the right key. It MUST match `SecretError` exhaustively with no catch-all, so that a case added to that type does not compile until the tool has an answer for it.
+- **AUTH-21.4.3** A value that will not open MUST NOT say which of the two causes it was, a key that is not the one it was sealed under or a reference that differs. Distinguishing them is a service to whoever is tampering, and both have the same remedy.
+- **AUTH-21.4.4** A key that is not base64url, or does not decode to the AEAD's key length, MUST refuse. It MUST NOT be truncated, padded, or hashed into shape.
+
+### 21.5 Rotation
+
+- **AUTH-21.5.1** The key identifier a value is sealed under MUST be settable per invocation, so that a deployment can reseal each secret under a new key while the old one is still in the ring, which is the overlap window AUTH-15.7.2 requires rotation to have.
+- **AUTH-21.5.2** A check MUST report the key identifier found inside the value alongside the one it holds. That comparison is what says whether a reseal is still outstanding, and nothing else in a running deployment reveals it.
+
+### 21.6 Documentation and testing
+
+- **AUTH-21.6.1** The README MUST carry the workflow end to end, from minting a key to setting what the tool printed. The text form of AUTH-15.7.3.2 is unusable without it, and a client that cannot follow it will hold its provider secrets in clear instead.
+- **AUTH-21.6.2** Every decision MUST sit in a function the suite can call, leaving `main` to dispatch and nothing else. The binding, the parsing and the refusals are already testable in process, and none of them needs a shell to exercise (AUTH-16.5).

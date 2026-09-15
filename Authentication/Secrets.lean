@@ -38,6 +38,14 @@ def SecretField.name : SecretField → String
   | .clientSecret => "client-secret"
   | .signingKey => "signing-key"
 
+/-- Every field there is, so whatever has to offer the names can list them. -/
+def SecretField.all : List SecretField := [.clientSecret, .signingKey]
+
+/-- The names are part of the text form a deployment writes, so reading one back belongs here
+beside the writing rather than in each tool that has to accept one. -/
+def SecretField.parse (text : String) : Option SecretField :=
+  SecretField.all.find? (fun field => field.name == text)
+
 /-- What is being asked for. The three parts are also what the shipped implementation binds as
 associated data, so a ciphertext cannot be lifted from one tenant's row into another's, nor from
 one field into another (AUTH-15.7.3.1). -/

@@ -256,15 +256,21 @@ Providers are per tenant, on `TenantConfig.providers`.
 
 ### Secrets
 
-A provider's secret is never configured in clear. Seal it once, with a key of your own, and write down what comes back:
+A provider's secret is never configured in clear. `auth-seal` is the tool that seals one.
 
-```lean
-def sealedText (sealingKey : ByteArray) : IO (Except SecretError String) := do
-  let sealed ← Oidc.sealSecret
-    { keyId := ⟨"sealing-2026-01"⟩, secret := sealingKey }
-    { tenant := ⟨"acme"⟩, provider := ⟨"google"⟩, field := .clientSecret }
-    "the-secret-google-gave-you".toUTF8
-  pure (sealed.map fun value => (StoredSecret.sealed value).render)
+Mint a sealing key, and keep it wherever the deployment keeps its secrets, never in the database it protects:
+
+```sh
+$ lake exe auth-seal key
+0NKWg0-wFDSSobc8JGKt3PadxinGuX5lHgMThxnlMvk
+```
+
+Seal each secret under it. The secret is read from standard input, so it is never in the process list or a shell history, and the tenant, the provider and the field are given explicitly because they are bound into the ciphertext:
+
+```sh
+$ export AUTH_SEALING_KEY=0NKWg0-wFDSSobc8JGKt3PadxinGuX5lHgMThxnlMvk
+$ lake exe auth-seal seal acme google client-secret sealing-2026-01 < google-client-secret.txt
+v1.s.c2VhbGluZy0yMDI2LTAx.oENlJX5Lt9ok-GY9.g8kiJeRjFpqnVg.dc9zy6lwzRgzucgNZqyoCA
 ```
 
 That text is what an environment variable, a file, or a secrets manager holds, and `StoredSecret.parse` is what reads it back. It is total: a variable that is missing or mistyped is a startup that says so rather than one that panics.
@@ -274,9 +280,16 @@ def googleCredentials (text : Option String) : Option ProviderCredentials :=
   (text.bind StoredSecret.parse).map .clientSecret
 ```
 
-The tenant, the provider and the field are bound into the ciphertext, so a sealed secret cannot be moved between any of them, and the text carries that binding with it. Apple's `.p8` is sealed the same way, as the file's bytes, under `.signingKey`.
+Apple's `.p8` is sealed the same way, as the file's bytes, under `signing-key`. A secret sealed against the wrong tenant, provider or field configures cleanly and then refuses every sign-in, so ask the tool which it was sealed against. It says whether the value opens and never what it opens to, which makes it safe to run against the configuration of a live deployment:
 
-A deployment whose secrets live in KMS or Vault supplies its own `Secrets` port instead and configures `.external "some/reference"`; the shipped implementation refuses those rather than guessing. The same two functions write those down and read them back.
+```sh
+$ lake exe auth-seal check acme google client-secret sealing-2026-01 <<< "$GOOGLE_CLIENT_SECRET"
+opens, sealed under key id sealing-2026-01, key id held sealing-2026-01
+```
+
+To rotate, mint a second key, keep the retired one in `SealingRing.retired` until nothing is sealed under it, and reseal each secret under the new key identifier. A check names the key identifier the value carries beside the one it holds, which is what says whether a reseal is still outstanding.
+
+A deployment whose secrets live in KMS or Vault supplies its own `Secrets` port instead and configures `.external "some/reference"`; the shipped implementation refuses those rather than guessing.
 
 ### Mounting
 
