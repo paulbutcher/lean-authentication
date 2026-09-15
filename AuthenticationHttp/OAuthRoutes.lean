@@ -187,8 +187,8 @@ Which token the consent form carries, and who checks it.
 Where `Middleware.antiForgery` wraps these routes it has already established a token and answered
 whatever did not carry one, so the page renders that middleware's field and nothing more is
 checked here. Where it does not, the token is derived from the session cookie under the current
-pepper, exactly as the sign-in routes derive theirs from the attempt cookie, and it is checked
-here.
+pepper and accepted under any live one, exactly as the sign-in routes derive theirs from the
+attempt cookie, and it is checked here.
 
 A consent form has to be unpostable from another site either way. What it grants is an access
 token, and a deployment that mounted these bare would otherwise be one where any page on the
@@ -196,23 +196,28 @@ internet can silently grant scopes to a client of its own.
 -/
 private inductive Guard where
   | middleware (token : String)
-  | derived (token : String)
+  /-- `alternates` are the retired peppers' tokens, which a form rendered before a rotation
+  carries (AUTH-15.7.2). -/
+  | derived (token : String) (alternates : List String)
 
 private def guardOf (config : Config) (request : Request Body.Stream)
     (session : Option CredentialValue) : Guard :=
   match request.extensions.get Middleware.AntiForgeryToken with
   | some established => .middleware established.value
   | none =>
-    .derived (Leancrypto.Codec.Base64Url.encodeString
-      (config.ports.peppers.current.derive "oauth-consent" (session.getD ⟨""⟩)))
+    let derived (pepper : Pepper) : String :=
+      Leancrypto.Codec.Base64Url.encodeString (pepper.derive "oauth-consent" (session.getD ⟨""⟩))
+    .derived (derived config.ports.peppers.current) (config.ports.peppers.retired.map derived)
 
 private def Guard.token : Guard → String
-  | .middleware value | .derived value => value
+  | .middleware value | .derived value _ => value
 
 private def Guard.accepts : Guard → Option String → Bool
   | .middleware _, _ => true
-  | .derived _, none => false
-  | .derived expected, some offered => Leancrypto.bytesEqual offered.toUTF8 expected.toUTF8
+  | .derived _ _, none => false
+  | .derived expected alternates, some offered =>
+    (expected :: alternates).any fun candidate =>
+      Leancrypto.bytesEqual offered.toUTF8 candidate.toUTF8
 
 /-! ## Handlers -/
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- `Service.Outcome` carries the code the cross-device page shows, derived under the pepper the attempt was minted with rather than the current one, which after a rotation revealed a code the attempt then refused (AUTH-5.2.2, AUTH-15.7.2); `Service.revealedCode` names that pepper.
+- The anti-forgery token on the sign-in forms and on the OAuth consent form is accepted under any pepper still inside its overlap window, so a rotation no longer refuses every form in flight (AUTH-14.1.4, AUTH-15.7.2).
+
 ## [0.16.4] - 2026-09-15
 
 - `Oidc.TokenEndpoint.exchange` answers `ProviderTokens` rather than a bare token, so the exchange no longer assumes an ID token: it read `id_token` alone, which refused every sign-in through a provider that is not OpenID Connect (AUTH-6.9).

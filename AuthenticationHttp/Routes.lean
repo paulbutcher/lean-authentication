@@ -265,18 +265,26 @@ end AttemptCookie
 
 /--
 The anti-forgery token (AUTH-14.1.4). Derived from the binding nonce in the attempt cookie under
-the current pepper, so it is bound to that cookie by construction rather than by a second record
-somebody has to keep: a form posted from another origin cannot carry the right one, because the
-origin that would have to read the cookie cannot.
+a pepper, so it is bound to that cookie by construction rather than by a second record somebody
+has to keep: a form posted from another origin cannot carry the right one, because the origin
+that would have to read the cookie cannot.
+
+Issued under the current pepper and accepted under any live one, as a digest lookup is, so that
+a rotation does not refuse every form in flight at the moment it happens (AUTH-15.7.2).
 -/
+private def formTokenUnder (pepper : Pepper) (nonce : CredentialValue) : String :=
+  Leancrypto.Codec.Base64Url.encodeString (pepper.derive "form-token" nonce)
+
 private def formToken (peppers : PepperRing) (nonce : CredentialValue) : String :=
-  Leancrypto.Codec.Base64Url.encodeString (peppers.current.derive "form-token" nonce)
+  formTokenUnder peppers.current nonce
 
 private def tokenAccepted (peppers : PepperRing) (nonce : CredentialValue)
     (offered : Option String) : Bool :=
   match offered with
   | none => false
-  | some offered => Leancrypto.bytesEqual offered.toUTF8 (formToken peppers nonce).toUTF8
+  | some offered =>
+    peppers.keys.any fun pepper =>
+      Leancrypto.bytesEqual offered.toUTF8 (formTokenUnder pepper nonce).toUTF8
 
 /-! ## Handlers -/
 
@@ -372,8 +380,8 @@ private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : Str
       [setCookie now cookie]
 
 /-- Opening the magic link: a `GET` that issues nothing and consumes nothing (AUTH-5.2.1). The
-code the cross-device page shows is derived from the token the link carried, which is why it can
-be shown again without ever having been stored (AUTH-5.2.2). -/
+code the cross-device page shows comes back on the outcome, already derived from the token the
+link carried, which is why it can be shown again without ever having been stored (AUTH-5.2.2). -/
 private def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let query := queryOf request
@@ -392,8 +400,9 @@ private def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String
       if outcome.views.contains .confirmSignIn then
         finish .ok (config.pages.confirm context) []
       else if outcome.views.contains .showVerificationCode then
-        finish .ok
-          (config.pages.code context (displayCode (revealedCode config.ports.peppers token))) []
+        match outcome.revealedCode with
+        | some code => finish .ok (config.pages.code context (displayCode code)) []
+        | none => notFoundPage config
       else notFoundPage config
 
 /-- What a completed attempt turns into: the session cookie the service built, the attempt

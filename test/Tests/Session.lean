@@ -140,7 +140,7 @@ private def signIn (ports : Ports IO) (cfg : TenantConfig tenant) (raw : String)
   let attempt : AttemptId tenant := ⟨(parameterFrom body "attempt").getD ""⟩
   let token : CredentialValue := ⟨(parameterFrom body "token").getD ""⟩
   let _ ← openLink ports cfg attempt token none
-  let typed := displayCode (revealedCode ports.peppers token)
+  let typed := displayCode (revealedCode ports.peppers.current token)
   match nonceOf begun with
   | some nonce => outcomeOf <$> submitCode ports cfg attempt typed nonce requester
   | none => pure {}

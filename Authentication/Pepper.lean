@@ -45,6 +45,10 @@ namespace PepperRing
 
 def keys (ring : PepperRing) : List Pepper := ring.current :: ring.retired
 
+/-- The live key a stored digest names, so a value derived from a pepper can be derived again
+under the pepper that produced it rather than under whatever is current (AUTH-15.7.2). -/
+def keyed (ring : PepperRing) (id : KeyId) : Option Pepper := ring.keys.find? (·.keyId == id)
+
 /-- Digests the offered secret under every live key, so a credential stored before a rotation
 still matches (AUTH-15.7.2). -/
 def present (ring : PepperRing) (value : CredentialValue) : PresentedSecret :=

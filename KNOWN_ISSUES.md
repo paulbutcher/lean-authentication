@@ -103,6 +103,12 @@ Granting and withdrawing a grant are consent records, so they reach the audit lo
 
 The reason is where `AuditEvent` lives. It is a closed inductive in the core target, and every case of it is decoded by `auditColumns` in the shared SQL store, which a consumer taking only magic links links today. Naming the authorisation server's events there is a change to the core library rather than to this target, and AUTH-20.18.1 records it as a decision rather than making it quietly. The linking events of AUTH-14.1.7 have since been added there, so the cost is one already paid rather than an untouched one; what has not changed is that nothing requires these.
 
+## A rotated pepper must stay in the ring for the session lifetime (AUTH-15.7.2)
+
+A session digest is written once, when the session is issued, and never written again: `touchSession` slides the idle timeout and records the last use, and touches no digest. The pepper that minted a session therefore has to stay in `PepperRing.retired` until every session minted under it has expired, which `sessionAbsoluteLifetime` puts at 90 days by default. Rotating twice inside that window, or dropping a retired pepper early, signs everybody holding an older session out.
+
+Refresh tokens do not have this problem, because rotation on use re-digests them under the current pepper, so they leave a retired one behind within a refresh interval. Giving sessions the same property means re-digesting the presented credential at touch time, which is a change to the store port rather than to the service, and it buys a shorter window at the cost of a write on every request.
+
 ## The authorisation server's endpoints are not rate limited (AUTH-20.18.2)
 
 The limiter of §15.6 covers beginning a sign-in and submitting a code. Nothing counts authorization requests, token requests, or registrations.

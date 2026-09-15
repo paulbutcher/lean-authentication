@@ -104,7 +104,7 @@ def checks : IO (List (String × Bool)) := do
   -- The link is opened on another device, which has no cookie.
   let opened ← openLink ports config ⟨attemptId⟩ ⟨token⟩ none
   -- That page shows the code, which it derives from the token it was opened with.
-  let shownCode := displayCode (revealedCode peppers ⟨token⟩)
+  let shownCode := displayCode (revealedCode peppers.current ⟨token⟩)
 
   -- A guess from a browser holding no attempt cookie.
   let guessed ← submitCode ports config ⟨attemptId⟩ shownCode ⟨"not-the-nonce"⟩ requester
@@ -148,8 +148,29 @@ def checks : IO (List (String × Bool)) := do
     | some credential => Except.toOption <$> identify (tenant := tenant) ports config credential
     | none => pure none
 
+  -- A third flow, begun under one pepper and opened after that pepper has been retired.
+  let rotated : Ports IO :=
+    { ports with
+      peppers :=
+        { current := { keyId := ⟨"pepper-2"⟩, secret := Leancrypto.Sha256.hashUtf8 "next pepper" }
+          retired := [peppers.current] } }
+  let (thirdBegun, _) ← begin ports config person {}
+  let thirdBody := ((← sentRef.get)[2]?.map (·.textBody)).getD ""
+  let thirdAttempt : AttemptId tenant := ⟨(parameterFrom thirdBody "attempt").getD ""⟩
+  let thirdToken : CredentialValue := ⟨(parameterFrom thirdBody "token").getD ""⟩
+  let thirdCookie := (thirdBegun.setCookies[0]?.bind fun c => cookieParts c.value)
+  let afterRotation ← openLink rotated config thirdAttempt thirdToken none
+  let revealed := match afterRotation with
+    | .ok outcome => outcome.revealedCode
+    | .error _ => none
+  let completedAfterRotation ←
+    match thirdCookie, revealed with
+    | some (_, nonce), some code =>
+      submitCode rotated config thirdAttempt (displayCode code) ⟨nonce⟩ requester
+    | _, _ => pure (.error .notOriginatingBrowser)
+
   pure
-    [ ("flow: a link is sent when a sign-in begins", (← sentRef.get).length == 2),
+    [ ("flow: a link is sent when a sign-in begins", (← sentRef.get).length == 3),
       ("flow: the mail names the tenant in its subject",
         (mail.map (·.subject)) == some "Sign in to Acme"),
       ("flow: the mail states where the request came from",
@@ -184,6 +205,12 @@ def checks : IO (List (String × Bool)) := do
       ("flow: the second sign-in issues a different session",
         (sessionOf confirmed).isSome && (sessionOf confirmed) != session),
       ("flow: the first session is still valid after the second sign-in", stillValid.isSome),
+      ("flow: rotating the pepper does not change the code the link reveals",
+        revealed == some (revealedCode peppers.current thirdToken)),
+      ("flow: the revealed code is not derived under whatever pepper is current",
+        revealed != some (revealedCode rotated.peppers.current thirdToken)),
+      ("flow: an attempt begun before a rotation still completes",
+        viewsOf completedAfterRotation == [.signedIn]),
       ("flow: both sessions belong to the same account",
         (← match sessionOf confirmed with
           | some credential =>

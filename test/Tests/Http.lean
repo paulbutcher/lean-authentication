@@ -150,7 +150,7 @@ def checks : IO (List (String × Bool)) := do
   let magicToken := (parameterFrom mailBody "token").getD ""
   let opened ← send http
     (mkGetClose s!"/t/acme/signin/link?attempt={attemptId}&token={magicToken}")
-  let shown := displayCode (revealedCode peppers ⟨magicToken⟩)
+  let shown := displayCode (revealedCode peppers.current ⟨magicToken⟩)
 
   -- The code, typed back into the browser that asked.
   let cookieHeader := s!"Cookie: {attemptCookie}\x0d\n"
@@ -329,7 +329,7 @@ def returnToChecks : IO (List (String × Bool)) := do
   let attemptId := (parameterFrom mailBody "attempt").getD ""
   let magicToken := (parameterFrom mailBody "token").getD ""
   let _ ← send http (mkGetClose s!"/t/acme/signin/link?attempt={attemptId}&token={magicToken}")
-  let shown := displayCode (revealedCode peppers ⟨magicToken⟩)
+  let shown := displayCode (revealedCode peppers.current ⟨magicToken⟩)
   let signedIn ← send http
     (mkPost "/t/acme/signin/code"
       s!"code={shown}&token={token}&returnTo=https%3A%2F%2Fevil.test%2F"
@@ -515,6 +515,52 @@ def sameDeviceReturnToChecks : IO (List (String × Bool)) := do
       ("http: a cookie of the two fields written before targets rode in one still signs in",
         statusOf unasked == "HTTP/1.1 303 See Other"
           && (cookiePair unasked "auth_session").isSome) ]
+
+private def rotatedPeppers : PepperRing :=
+  { current := { keyId := ⟨"pepper-2"⟩, secret := Leancrypto.Sha256.hashUtf8 "next pepper" }
+    retired := [peppers.current] }
+
+/-- A rotation mid-flow (AUTH-15.7.2). The same store answers both handlers, so what changes
+between the requests is the ring and nothing else, which is what a deployment rotating its
+pepper does.
+
+The code and the anti-forgery token are both derived from a pepper rather than stored, so a
+rotation that reached either would show a different code or refuse every form in flight. -/
+def rotationChecks : IO (List (String × Bool)) := do
+  clockRef.set ⟨1700000000⟩
+  sentRef.set []
+  let db ← Sqlite.openInMemory
+  let before : Authentication.Http.Config := { ports := portsOn db, tenant := resolver }
+  let after : Authentication.Http.Config :=
+    { ports := { portsOn db with peppers := rotatedPeppers }, tenant := resolver }
+  let headers := "Content-Type: application/x-www-form-urlencoded\x0d\nConnection: close\x0d\n"
+
+  let begun ← send before
+    (mkPost "/t/acme/signin" "email=person%40example.com&returnTo=%2Fdashboard" headers)
+  let attemptCookie := (cookiePair begun "auth_attempt").getD ""
+  let token := (fieldValue (bodyOf begun) "token").getD ""
+  let mailBody := (((← sentRef.get)[0]?).map (·.textBody)).getD ""
+  let attemptId := (parameterFrom mailBody "attempt").getD ""
+  let magicToken := (parameterFrom mailBody "token").getD ""
+
+  let opened ← send after
+    (mkGetClose s!"/t/acme/signin/link?attempt={attemptId}&token={magicToken}")
+  let minted := displayCode (revealedCode peppers.current ⟨magicToken⟩)
+  let current := displayCode (revealedCode rotatedPeppers.current ⟨magicToken⟩)
+  let signedIn ← send after
+    (mkPost "/t/acme/signin/code" s!"code={minted}&token={token}&returnTo=%2Fdashboard"
+      (headers ++ s!"Cookie: {attemptCookie}\x0d\n"))
+
+  pure
+    [ ("http: a link opened after a rotation shows the code it was minted with (AUTH-5.2.2)",
+        statusOf opened == "HTTP/1.1 200 OK" && contains (bodyOf opened) minted),
+      ("http: which is not the code the current pepper would derive",
+        minted != current && !contains (bodyOf opened) current),
+      ("http: a form token issued before a rotation is still accepted (AUTH-14.1.4)",
+        statusOf signedIn != "HTTP/1.1 403 Forbidden"),
+      ("http: and the attempt completes under the retired pepper",
+        statusOf signedIn == "HTTP/1.1 303 See Other"
+          && (cookiePair signedIn "auth_session").isSome) ]
 
 private def codedConfig : TenantConfig tenant := { config with emailedCodeEnabled := true }
 

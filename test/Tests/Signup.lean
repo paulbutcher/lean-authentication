@@ -77,7 +77,7 @@ private def finish {tenant : TenantId} (ports : Ports IO) (config : TenantConfig
   let attempt : AttemptId tenant := ⟨(parameterFrom body "attempt").getD ""⟩
   let token : CredentialValue := ⟨(parameterFrom body "token").getD ""⟩
   let _ ← openLink ports config attempt token none
-  let typed := displayCode (revealedCode ports.peppers token)
+  let typed := displayCode (revealedCode ports.peppers.current token)
   match cookieNonce begun with
   | some nonce => submitCode ports config attempt typed nonce {}
   | none => pure (.error .notOriginatingBrowser)

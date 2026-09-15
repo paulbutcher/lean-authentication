@@ -66,6 +66,9 @@ structure Outcome (tenant : TenantId) where
   clearCookies : List (String × String) := []
   session : Option CredentialValue := none
   sent : List SentMessageId := []
+  /-- Present only alongside `showVerificationCode`, and derived here rather than by the caller:
+  the pepper it has to be derived under is the one the attempt names, not the current one. -/
+  revealedCode : Option CredentialValue := none
   /-- Present only when this outcome created an account, not on every sign-in. -/
   admitted : Option (AccountAdmitted tenant) := none
   refused : Option SignInRefusal := none
@@ -80,9 +83,13 @@ private def randomValue {m : Type → Type} [Monad m] [RandomBytes m] (bytes : N
 /-- The code the cross-device landing page shows: at least 40 bits, in an alphabet with no
 confusable pair, and grouped for transcription (AUTH-5.3.2). It is derived from the token that
 opened the link, which is why it can be shown again without ever having been stored
-(AUTH-5.2.2). -/
-def revealedCode (peppers : PepperRing) (token : CredentialValue) : CredentialValue :=
-  ⟨Base32.encodeString ((peppers.current.derive "revealed-code" token).extract 0 5)⟩
+(AUTH-5.2.2).
+
+The pepper is named rather than taken from the ring, because the value and not merely a digest
+of it comes out of here: derived under a pepper the attempt was not minted under, it is a
+different code, which the digest on the attempt then refuses (AUTH-15.7.2). -/
+def revealedCode (pepper : Pepper) (token : CredentialValue) : CredentialValue :=
+  ⟨Base32.encodeString ((pepper.derive "revealed-code" token).extract 0 5)⟩
 
 /-- The grouping is for the eye and the typing hand only. What is digested is the canonical
 form, so a code typed back with or without the grouping is the same code. -/
@@ -107,7 +114,7 @@ def mintSecrets {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId
   | .error e, _ => pure (.error e)
   | _, .error e => pure (.error e)
   | .ok token, .ok nonce =>
-    let code := revealedCode peppers token
+    let code := revealedCode peppers.current token
     let emailed : Except String (Option MintedCredential) ←
       if config.emailedCodeEnabled then
         match ← RandomBytes.draw 4 with
@@ -485,10 +492,12 @@ def begin {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : Tena
 
 /-- Feeds one event to the state machine and, if it was accepted, writes the new state back
 under compare-and-set before performing anything. A commit that lost changes nothing and
-performs nothing. -/
+performs nothing. `decorate` is where an outcome picks up something only the stored attempt can
+supply. -/
 private def advance {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (attempt : AttemptId tenant)
-    (submission : Option RequestContext) (event : AttemptEvent) :
+    (submission : Option RequestContext) (event : AttemptEvent)
+    (decorate : AttemptState tenant → Outcome tenant → Outcome tenant := fun _ outcome => outcome) :
     m (Except AuthError (Outcome tenant)) := do
   let now ← Clock.now
   match ← ports.store.attemptById tenant attempt with
@@ -508,17 +517,29 @@ private def advance {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {ten
     | .error e => pure (.error e)
     | .ok (next, effects) =>
       if ← ports.store.commitAttempt tenant state next then
-        .ok <$> performAll ports config now effects
+        .ok <$> decorate state <$> performAll ports config now effects
       else
         pure (.error .attemptNotLive)
 
-/-- Opening the magic link. A `GET` that issues nothing and consumes nothing (AUTH-5.2.1). -/
+/-- Opening the magic link. A `GET` that issues nothing and consumes nothing (AUTH-5.2.1).
+
+The code the cross-device page shows comes back on the outcome, derived under the pepper the
+stored digest names. A rotation since the attempt began therefore changes neither the code on
+screen nor whether typing it back completes the attempt (AUTH-5.2.2, AUTH-15.7.2); a rotation
+past the end of the overlap window leaves no code to show, and the attempt is already
+uncompletable. -/
 def openLink {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (attempt : AttemptId tenant)
     (token : CredentialValue) (cookie : Option CredentialValue) :
     m (Except AuthError (Outcome tenant)) :=
   advance ports config attempt none
     (.linkOpened (ports.peppers.present token) (cookie.map ports.peppers.present))
+    fun state outcome =>
+      if outcome.views.contains .showVerificationCode then
+        { outcome with
+          revealedCode :=
+            (ports.peppers.keyed state.revealedCode.keyId).map (revealedCode · token) }
+      else outcome
 
 /-- The `POST` from the same-device landing page (AUTH-5.2.1). -/
 def confirmSignIn {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
