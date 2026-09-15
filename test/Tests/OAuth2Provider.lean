@@ -36,8 +36,10 @@ private def discovery : Discovery :=
     jwksUri := "" }
 
 private def secrets : ClientSecrets IO := { produce := fun _ _ _ _ => pure (.ok "a-secret") }
+/-- Answers with both credentials, so that a check on which one travelled means something. -/
 private def tokens : TokenEndpoint IO :=
-  { exchange := fun _ _ _ _ _ _ => pure (.ok "an-access-token") }
+  { exchange := fun _ _ _ _ _ _ =>
+      pure (.ok { idToken := some "not-a-token", accessToken := some "an-access-token" }) }
 
 /-- Answers the profile call and the address call from a script, and records the headers each
 request carried so a check can say the token actually travelled. -/
@@ -130,4 +132,37 @@ def dispatchChecks : IO (List (String × Bool)) := do
         (viaCalls.toOption.map (·.identity.subject)) == some "7" && calls.length == 2)
     , ("oauth2: one that publishes a document is answered by its ID token instead",
         match viaToken with | .error _ => true | .ok _ => false) ]
+
+/-- The exchange too, transcribed from GitHub's published example: an access token, a token type
+and the scopes granted, and no ID token. -/
+private def wired (seen : IO.Ref (List (String × String))) : Fetch.Http IO where
+  send request := do
+    let auth := (request.headers.find? (·.1 == "Authorization")).map (·.2) |>.getD ""
+    seen.modify (· ++ [(request.url, auth)])
+    let body :=
+      if (request.url.splitOn "login/oauth").length > 1 then
+        "{\"access_token\":\"gho_1234\",\"token_type\":\"bearer\",\"scope\":\"read:user,user:email\"}"
+      else if (request.url.splitOn "emails").length > 1 then
+        "[{\"email\":\"person@example.com\",\"primary\":true,\"verified\":true}]"
+      else "{\"id\":4242,\"login\":\"octo\"}"
+    pure (.ok { status := 200, headers := [], body := body.toUTF8 })
+
+/-- The same flow over the token endpoint that ships rather than a stub of it (AUTH-6.14).
+
+Every check above supplies the access token from a stub, so none of them can say whether the
+endpoint this library wires by default obtains one at all from a provider that answers with
+nothing else. -/
+def tokenEndpointChecks : IO (List (String × Bool)) := do
+  let seen ← IO.mkRef []
+  let port := oauth2Identities (wired seen) (tokenEndpoint (wired seen)) secrets
+  let answer ← port.redeem ⟨"acme"⟩ provider discovery "code" "https://back" "verifier" "" now
+  let calls ← seen.get
+  pure
+    [ ("oauth2: a token response carrying no ID token still signs somebody in",
+        (answer.toOption.map (·.identity.subject)) == some "4242")
+    , ("oauth2: the exchange is made before the calls it pays for",
+        (calls.map (·.1))[0]? == some "https://github.test/login/oauth/access_token")
+    , ("oauth2: and the token it answered with is the one those calls present",
+        (calls.drop 1).map (·.2) == ["Bearer gho_1234", "Bearer gho_1234"]) ]
+
 end Tests.OAuth2Provider

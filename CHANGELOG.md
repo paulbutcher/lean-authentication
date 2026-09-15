@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.16.4] - 2026-09-15
+
+- `Oidc.TokenEndpoint.exchange` answers `ProviderTokens` rather than a bare token, so the exchange no longer assumes an ID token: it read `id_token` alone, which refused every sign-in through a provider that is not OpenID Connect (AUTH-6.9).
+
 ## [0.16.3] - 2026-09-15
 
 - `OidcHttp.Config.observeRefusal` is handed every refusal the federated routes answer with, and the tenant and provider it was for, because the page they render will never say which one it was (AUTH-14.2.6).

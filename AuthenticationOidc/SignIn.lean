@@ -22,11 +22,18 @@ namespace Authentication.Oidc
 
 open Authentication.Service
 
+/-- What a token endpoint answered with. Neither credential is required of it, because which one
+is the answer is the provider's protocol to decide and the adapter that asked knows which. -/
+structure ProviderTokens where
+  idToken : Option String
+  accessToken : Option String
+  deriving Repr
+
 /-- Exchanging the authorization code. Its own port because the request carries a client secret
 and a verifier and returns a token, none of which is a document fetch. -/
 structure TokenEndpoint (m : Type → Type) where
   exchange : Discovery → ProviderConfig → (code redirectUri verifier clientSecret : String) →
-    m (Except OidcError String)
+    m (Except OidcError ProviderTokens)
 
 /--
 Redeeming the authorization code for what the provider says about somebody.
@@ -67,9 +74,12 @@ The token exchange over a fetcher (AUTH-6.14).
 
 The client secret travels in the body rather than in `Authorization`, which RFC 6749 §2.3.1
 permits and every provider in AUTH-6.9 accepts, and which keeps it out of the places a header is
-copied to. The response is read for `id_token` alone: an access token from the provider is a
-credential for the provider's own API, and this library has no use for one it would then have to
-store.
+copied to. Both credentials the response may carry are read and neither is demanded, because a
+provider that is not OpenID Connect answers with the other one (AUTH-6.9).
+
+Nothing else the response carries is read. A refresh token and an expiry are for a client that
+will call the provider again, and this one is finished with what it obtained before the request
+that obtained it returns.
 -/
 def tokenEndpoint (http : Fetch.Http IO) (limits : Fetch.Limits := {}) : TokenEndpoint IO where
   exchange discovery provider code redirectUri verifier secret := do
@@ -86,9 +96,8 @@ def tokenEndpoint (http : Fetch.Http IO) (limits : Fetch.Limits := {}) : TokenEn
       match Json.parse document.body with
       | .error _ => pure (.error (.badDocument "json"))
       | .ok value =>
-        match (value.getObjVal? "id_token").toOption.bind (·.getStr?.toOption) with
-        | some token => pure (.ok token)
-        | none => pure (.error (.badDocument "id_token"))
+        let field (name : String) := (value.getObjVal? name).toOption.bind (·.getStr?.toOption)
+        pure (.ok { idToken := field "id_token", accessToken := field "access_token" })
 
 
 /--
@@ -106,7 +115,10 @@ def oidcIdentities (tokens : TokenEndpoint IO) (secrets : ClientSecrets IO)
     | .ok secret =>
       match ← tokens.exchange discovery provider code redirectUri verifier secret with
       | .error reason => pure (.error reason)
-      | .ok idToken => verifyIdToken keys provider discovery nonce idToken now
+      | .ok answered =>
+        match answered.idToken with
+        | none => pure (.error (.badDocument "id_token"))
+        | some idToken => verifyIdToken keys provider discovery nonce idToken now
 
 /-- The three of AUTH-14.1.1's five scopes that do not need an address. A request with no source
 address contributes to the other two rather than being waved through, as `Service.limitScopes`

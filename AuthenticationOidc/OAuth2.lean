@@ -77,33 +77,36 @@ def oauth2Identities (http : Fetch.Http IO) (tokens : TokenEndpoint IO) (secrets
       | .ok secret =>
         match ← tokens.exchange discovery provider code redirectUri verifier secret with
         | .error reason => pure (.error reason)
-        | .ok accessToken =>
-          match ← Fetch.get http limits profileUrl (authorized accessToken) with
-          | .error reason => pure (.error (.fetch reason))
-          | .ok profileDocument =>
-            match Json.parse profileDocument.body with
-            | .error _ => pure (.error (.badDocument "profile"))
-            | .ok profile =>
-              match subjectOf profile with
-              | none => pure (.error .subjectMissing)
-              | some subject =>
-                match ← Fetch.get http limits emailsUrl (authorized accessToken) with
-                | .error reason => pure (.error (.fetch reason))
-                | .ok emailDocument =>
-                  match Json.parse emailDocument.body with
-                  | .error _ => pure (.error (.badDocument "emails"))
-                  | .ok addresses =>
-                    match (verifiedAddress addresses).bind
-                        (fun (raw, _) => (EmailAddress.parse raw).toOption) with
-                    | none => pure (.error (.badDocument "email"))
-                    | some address =>
-                      pure (.ok
-                        { identity := ⟨provider.issuer, subject⟩
-                          address := some address
-                          -- Only verified addresses reach here, so this is not a claim being
-                          -- taken on trust: it is what the filter above already established.
-                          addressVerified := true
-                          hostedDomain := none })
+        | .ok answered =>
+          match answered.accessToken with
+          | none => pure (.error (.badDocument "access_token"))
+          | some accessToken =>
+            match ← Fetch.get http limits profileUrl (authorized accessToken) with
+            | .error reason => pure (.error (.fetch reason))
+            | .ok profileDocument =>
+              match Json.parse profileDocument.body with
+              | .error _ => pure (.error (.badDocument "profile"))
+              | .ok profile =>
+                match subjectOf profile with
+                | none => pure (.error .subjectMissing)
+                | some subject =>
+                  match ← Fetch.get http limits emailsUrl (authorized accessToken) with
+                  | .error reason => pure (.error (.fetch reason))
+                  | .ok emailDocument =>
+                    match Json.parse emailDocument.body with
+                    | .error _ => pure (.error (.badDocument "emails"))
+                    | .ok addresses =>
+                      match (verifiedAddress addresses).bind
+                          (fun (raw, _) => (EmailAddress.parse raw).toOption) with
+                      | none => pure (.error (.badDocument "email"))
+                      | some address =>
+                        pure (.ok
+                          { identity := ⟨provider.issuer, subject⟩
+                            address := some address
+                            -- Only verified addresses reach here, so this is not a claim being
+                            -- taken on trust: it is what the filter above already established.
+                            addressVerified := true
+                            hostedDomain := none })
 
 /--
 The seam, wired for a tenant whose providers are not all of one kind.

@@ -46,6 +46,7 @@ def main : IO UInt32 := do
     ++ (← Tests.FederatedFlow.entropyChecks)
     ++ (← Tests.Apple.checks) ++ (← Tests.Apple.formPostChecks)
     ++ (← Tests.OAuth2Provider.checks) ++ (← Tests.OAuth2Provider.endpointChecks) ++ (← Tests.OAuth2Provider.dispatchChecks)
+    ++ (← Tests.OAuth2Provider.tokenEndpointChecks)
   let failed := checks.filter fun (_, passed) => !passed
   for (name, _) in failed do
     IO.eprintln s!"FAILED: {name}"
