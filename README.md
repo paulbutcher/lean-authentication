@@ -254,6 +254,16 @@ Providers are per tenant, on `TenantConfig.providers`.
 
 `formPost` is Apple's, and it changes the state cookie to `SameSite=None`: a cross-site `POST` carries no `Lax` cookie, so without it every Apple sign-in would arrive with no cookie and be refused.
 
+### Other providers
+
+Google, Apple and GitHub are the three this library has been exercised against, and Google is the only one a live provider has answered. Any other provider publishing a discovery document travels the same code path Google does, so it is a `ProviderConfig` entry and no code: Okta, Auth0, Keycloak, Cognito, Zitadel, Twitch and LinkedIn among them. Two things decide whether it works on the first try.
+
+**The issuer is what everything is checked against**, so a provider whose issuer carries a tenant, a realm or a pool needs one entry per tenant, realm or pool. Microsoft's `common` and `organizations` endpoints name an issuer that matches no single configuration, and are refused rather than guessed at.
+
+**A first sign-in needs `email_verified`**, which is how the provider says it has verified the address it is asserting. A provider that omits the claim, as Microsoft Entra ID does, is refused as `address-not-verified` on the sign-in that would create or link the account. No configuration permits otherwise: linking an account on an address nobody verified is the classic takeover. An identity already linked signs in regardless, because the subject is the key and not the address.
+
+A provider that is not OpenID Connect takes code rather than configuration, because the shipped adapter reads GitHub's own field names for the subject and the address list. Another one is a `ProviderIdentities` of your own, which is the seam `Oidc.identities` picks between and everything above it is written against.
+
 ### Secrets
 
 A provider's secret is never configured in clear. `auth-seal` is the tool that seals one.
@@ -476,7 +486,7 @@ The `From` domain needs all of these before mail is delivered rather than filed:
 - **A token's audience is the `resource` its request named**, and its scopes are a subset of what was consented to. Both are theorems, and verification refuses a token presented anywhere else.
 - **A redirect URI is compared as a string**, with the port ignored for loopback URIs and for nothing else. That the exception admits no other host is a theorem.
 
-`REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls short of it. Inbound email, passkeys and SAML are not implemented, the authorisation server issues no ID tokens, and no federated sign-in has yet been offered to a real provider.
+`REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls short of it. Inbound email, passkeys and SAML are not implemented, the authorisation server issues no ID tokens, and of federated sign-in only Google has been offered to a real provider.
 
 ## Building
 
