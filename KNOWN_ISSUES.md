@@ -2,13 +2,9 @@
 
 Deliberate limitations of the current implementation, with the reasoning behind them. Each entry names the requirement it falls short of and what would close the gap.
 
-## Only Google has met a real provider (§6)
+## No committed test reaches a provider (§6, AUTH-16.5)
 
-Federated sign-in is built: OpenID Connect providers, Apple's minted client secret and `form_post`, and a non-OIDC provider that answers with an access token and two more calls. Every part of it is exercised against stubs, and the ID tokens in the suite are real ones signed by a real key. A sign-in through Google has since been completed against the live provider, which is the first evidence about the machinery the three share: discovery, the key set, the token exchange, ID token verification, and the state and PKCE the callback checks. No request this library builds has ever been offered to Apple or to GitHub.
-
-That is the standing the SES adapter has, and for the same reason: a suite that reached a provider would fail when the provider had a bad day rather than when this library did (AUTH-16.5). What it leaves is the class of defect that passes here and fails there, and the shape of it differs by provider. Apple's assertion is checked for its algorithm, claims, bounded lifetime and 64-byte raw signature, and `jose-libcrypto` is checked against Wycheproof, but Apple has never accepted one. The non-OIDC adapter reads a profile and an address list transcribed from GitHub's published examples, so a field GitHub has since renamed would pass the suite and refuse every sign-in.
-
-What Google settles is the shape of the flow, not either provider's reading of it. The first live sign-in against each of the other two is still the test, and it is worth doing deliberately rather than discovering.
+Federated sign-in is exercised against stubs, and the ID tokens in the suite are real ones signed by a real key. Google, Apple and GitHub have all be tested live in [TodoMVC Max](https://github.com/paulbutcher/lean-todomvc-max).
 
 ## Unlinking refuses only when the address is suppressed (AUTH-6.8)
 

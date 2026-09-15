@@ -1,9 +1,10 @@
 # lean-authentication
 
 - Passwordless authentication for Lean 4 web applications: magic links with a cross-device verification code, per-tenant signup policy, invitations, sessions, bounce handling, and consent records.
+- Federated sign-in with OpenID Connect providers, plus Apple and GitHub.
 - An OAuth 2.1 authorisation server.
 
-The library says who someone is. It holds no roles or permissions and never decides who may call an operation.
+This library handles authentication only, not roles or permissions or any other form of authorisation.
 
 ## Installing
 
@@ -256,7 +257,7 @@ Providers are per tenant, on `TenantConfig.providers`.
 
 ### Other providers
 
-Google, Apple and GitHub are the three this library has been exercised against, and Google is the only one a live provider has answered. Any other provider publishing a discovery document travels the same code path Google does, so it is a `ProviderConfig` entry and no code: Okta, Auth0, Keycloak, Cognito, Zitadel, Twitch and LinkedIn among them. Two things decide whether it works on the first try.
+Google, Apple and GitHub are the three this library has been exercised against, and each has completed a sign-in against the live provider. Any other provider publishing a discovery document travels the same code path Google does, so it is a `ProviderConfig` entry and no code: Okta, Auth0, Keycloak, Cognito, Zitadel, Twitch and LinkedIn among them. Two things decide whether it works on the first try.
 
 **The issuer is what everything is checked against**, so a provider whose issuer carries a tenant, a realm or a pool needs one entry per tenant, realm or pool. Microsoft's `common` and `organizations` endpoints name an issuer that matches no single configuration, and are refused rather than guessed at.
 
@@ -486,7 +487,7 @@ The `From` domain needs all of these before mail is delivered rather than filed:
 - **A token's audience is the `resource` its request named**, and its scopes are a subset of what was consented to. Both are theorems, and verification refuses a token presented anywhere else.
 - **A redirect URI is compared as a string**, with the port ignored for loopback URIs and for nothing else. That the exception admits no other host is a theorem.
 
-`REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls short of it. Inbound email, passkeys and SAML are not implemented, the authorisation server issues no ID tokens, and of federated sign-in only Google has been offered to a real provider.
+`REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls short of it. Inbound email, passkeys and SAML are not implemented, the authorisation server issues no ID tokens, and no committed test reaches a provider or an external service.
 
 ## Building
 
