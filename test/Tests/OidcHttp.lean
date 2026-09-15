@@ -57,9 +57,9 @@ theorem startPathAgrees :
       Routing.renderPattern Federated.patterns.start ++ "/callback" := by decide
 
 
-/-! ## Starting a link over the wire -/
+/-! ## The routes over the wire -/
 
-section LinkRoute
+section Wire
 open Authentication.Service Authentication.Oidc
 open Std.Http.Internal.Test
 
@@ -196,6 +196,122 @@ def linkRouteChecks : IO (List (String × Bool)) := do
         statusOf signIn == "HTTP/1.1 303 See Other"
           && signInRecord.isSome && (signInRecord.bind (·.account)).isNone) ]
 
-end LinkRoute
+
+private def address (raw : String) : EmailAddress := (EmailAddress.parse raw).toOption.getD default
+
+/-- A provider whose discovery document will not read, so both legs of the flow refuse before
+they reach it. -/
+private def undiscoverablePorts : SignInPorts IO :=
+  { oidcPorts with metadata := { discover := fun _ => pure (.error (.badDocument "issuer")) } }
+
+/-- A provider that asserts an address and does not say it has verified it, which AUTH-6.7
+refuses whatever else is true. -/
+private def unverifiedPorts : SignInPorts IO :=
+  { oidcPorts with
+    identities :=
+      { redeem := fun _ _ _ _ _ _ _ _ => pure (.ok
+          { identity := ⟨provider.issuer, "subject-1"⟩
+            address := some (address "person@example.test")
+            addressVerified := false
+            hostedDomain := none }) } }
+
+/-- One request against these routes, and whatever the refusal port was told while it ran. -/
+private def observing (ports : Ports IO) (oidc : SignInPorts IO) (raw : String) :
+    IO (String × List String) := do
+  let seen ← IO.mkRef ([] : List String)
+  let response ← send
+    { ports, oidc, tenant := resolver,
+      observeRefusal := fun _ _ reason => seen.modify (· ++ [reason.name]) } raw
+  pure (response, ← seen.get)
+
+private def bodyOf (response : String) : String :=
+  ((response.splitOn "\x0d\n\x0d\n").drop 1).head?.getD ""
+
+private def callbackOf (state : String) : String :=
+  mkGet s!"/t/acme/federated/google/callback?code=abc&state={state}"
+    s!"Connection: close\x0d\nCookie: auth_federation={state}\x0d\n"
+
+private def stateOf (response : String) : String :=
+  ((headerValue response "location").bind (parameter · "state")).getD ""
+
+/-- A link start, carrying the session cookie it was given or none at all. -/
+private def linkPost (session : Option String) : String :=
+  mkPost "/t/acme/federated/google" ""
+    ("Content-Type: application/x-www-form-urlencoded\x0d\nConnection: close\x0d\n"
+      ++ (match session with
+          | some value => s!"Cookie: auth_session={value}\x0d\n"
+          | none => ""))
+
+/--
+Each refusal the federated routes can answer with reaches the operator under its own name, while
+the page stays the one page (AUTH-14.2.6, AUTH-14.2.4).
+
+One request per refusal the routes decide for themselves, each driven through the handler, so
+that what is established is the wiring and not the naming: a site left unwired reports nothing
+here even though `Refusal.name` still answers. The pages are compared with each other rather than
+with a literal, because what matters is that they do not differ.
+-/
+def refusalChecks : IO (List (String × Bool)) := do
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+
+  let (noCode, noCodeSeen) ← observing ports oidcPorts
+    (mkGetClose "/t/acme/federated/google/callback")
+  let (_, startSeen) ← observing ports undiscoverablePorts
+    (mkGetClose "/t/acme/federated/google")
+  let (_, discoverySeen) ← observing ports undiscoverablePorts
+    (mkGetClose "/t/acme/federated/google/callback?code=abc")
+  let (unpaired, unpairedSeen) ← observing ports oidcPorts
+    (mkGetClose "/t/acme/federated/google/callback?code=abc&state=unheld")
+
+  let (begun, begunSeen) ← observing ports unverifiedPorts
+    (mkGetClose "/t/acme/federated/google")
+  let (unverified, unverifiedSeen) ← observing ports unverifiedPorts
+    (callbackOf (stateOf begun))
+
+  -- A link whose identity another account already holds, which is the takeover AUTH-6.7.1 is
+  -- there to refuse.
+  let accountFor (attempt raw : String) : IO (Outcome tenant) :=
+    issueFor ports liveConfig
+      { origin := .magicLink ⟨attempt⟩, address := address raw, requester := {} }
+  let holder ← accountFor "attempt-2" "holder@example.test"
+  let other ← accountFor "attempt-3" "other@example.test"
+  let _ ← linkIdentity ports ((other.admitted.map (·.account)).getD ⟨""⟩)
+    ⟨provider.issuer, "subject-1"⟩
+  let session := ((holder.setCookies.find? (·.name == "auth_session")).map (·.value)).getD ""
+  let (linkBegun, _) ← observing ports oidcPorts (linkPost (some session))
+  let (refusedLink, linkSeen) ← observing ports oidcPorts (callbackOf (stateOf linkBegun))
+
+  -- The three ways a start refuses, which the callback never reaches.
+  let (_, noCookieSeen) ← observing ports oidcPorts (linkPost none)
+  let (_, strangeSeen) ← observing ports oidcPorts (linkPost (some "not-a-session"))
+  revokeAllSessions (tenant := tenant) ports ((holder.admitted.map (·.account)).getD ⟨""⟩)
+  let (_, revokedSeen) ← observing ports oidcPorts (linkPost (some session))
+  let throttling : Ports IO := { ports with limiter := { admit := fun _ _ _ => pure false } }
+  let (_, throttledSeen) ← observing throttling oidcPorts
+    (mkGetClose "/t/acme/federated/google")
+
+  pure
+    [ ("oidc http: a callback carrying no code is a named refusal", noCodeSeen == ["no-code"])
+    , ("oidc http: so is a provider whose discovery document will not read, on either leg",
+        startSeen == ["bad-document"] && discoverySeen == ["bad-document"])
+    , ("oidc http: so is a callback whose state the browser does not hold",
+        unpairedSeen == ["nonce-mismatch"])
+    , ("oidc http: so is an address the provider has not verified (AUTH-6.7)",
+        unverifiedSeen == ["address-not-verified"])
+    , ("oidc http: so is a link to an identity another account holds (AUTH-6.7.1)",
+        linkSeen == ["already-linked"])
+    , ("oidc http: a link start with no session cookie says that, and not that it was rejected",
+        noCookieSeen == ["no-session-cookie"])
+    , ("oidc http: a cookie matching no session and one matching a revoked one are held apart",
+        strangeSeen == ["session-unknown"] && revokedSeen == ["session-revoked"])
+    , ("oidc http: a throttled start is reported as throttled (AUTH-14.1.1)",
+        throttledSeen == ["throttled"])
+    , ("oidc http: a start that works reports nothing", begunSeen == [])
+    , ("oidc http: and every one of them is the same page",
+        [unpaired, unverified, refusedLink].all fun response =>
+          statusOf response == statusOf noCode && bodyOf response == bodyOf noCode) ]
+
+end Wire
 
 end Tests.OidcHttp

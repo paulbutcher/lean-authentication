@@ -251,8 +251,8 @@ structure TenantConfig (tenant : TenantId) where
   that is harmless rather than merely unlikely: a presented credential is resolved through
   `Store.sessionByDigest`, which is given the tenant it was presented to, and the store
   conformance suite requires a session to be invisible from every other tenant. The cookie
-  arrives, resolves to nothing, and `identify` answers `none`, exactly as it would for a cookie
-  that was never issued.
+  arrives, resolves to nothing, and `identify` answers `unknown`, exactly as it would for a
+  cookie that was never issued.
 
   What a client accepts by widening it is reach: the credential is then sent to everything
   served at or below the path named here, and keeping that to paths the client controls is the

@@ -76,6 +76,8 @@ def federatedRoutes (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) :
   OidcHttp.handler
     { ports
       oidc
-      tenant := fun t => pure (some (config t)) }
+      tenant := fun t => pure (some (config t))
+      observeRefusal := fun t provider reason =>
+        IO.eprintln s!"federated refused: {t.value} {provider.value} {reason.name}" }
 
 end Tests.ReadmeWiring

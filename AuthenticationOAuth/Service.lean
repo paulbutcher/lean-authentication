@@ -294,7 +294,11 @@ private def sessionFor {m : Type → Type} [Monad m] {tenant : TenantId} (ports 
     (now : Timestamp) (presented : Option CredentialValue) : m (Option (Session tenant)) :=
   match presented with
   | none => pure none
-  | some value => byCredential ports.peppers value (ports.store.sessionByDigest tenant now)
+  -- Which of the refusals it was makes no difference here: a request that cannot be satisfied
+  -- without asking somebody something comes back as `authenticate` whichever one it was.
+  | some value =>
+    byCredential ports.peppers value
+      (fun digest => Except.toOption <$> ports.store.sessionByDigest tenant now digest)
 
 /--
 The authorization endpoint.

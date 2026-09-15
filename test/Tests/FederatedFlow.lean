@@ -19,16 +19,25 @@ open Authentication Authentication.Service Authentication.Oidc
 initialize clockRef : IO.Ref Timestamp ← IO.mkRef ⟨1700000000⟩
 initialize drawCounter : IO.Ref Nat ← IO.mkRef 0
 initialize exchanges : IO.Ref Nat ← IO.mkRef 0
+/-- Set while a check needs the random source to stop answering. -/
+initialize dryDraw : IO.Ref Bool ← IO.mkRef false
 
 instance : Clock IO where
   now := clockRef.get
 
 instance : RandomBytes IO where
   draw count := do
-    let index ← drawCounter.modifyGet fun n => (n, n + 1)
-    pure (.ok ((Leancrypto.Sha256.hashUtf8 s!"flow-seed-{index}").extract 0 count))
+    if ← dryDraw.get then pure (.error "no entropy")
+    else
+      let index ← drawCounter.modifyGet fun n => (n, n + 1)
+      pure (.ok ((Leancrypto.Sha256.hashUtf8 s!"flow-seed-{index}").extract 0 count))
 
 private def address (raw : String) : EmailAddress := (EmailAddress.parse raw).toOption.getD default
+
+private def refusalOf {t : TenantId} :
+    Except StartRefusal (FederatedStart t) → Option StartRefusal
+  | .error reason => some reason
+  | .ok _ => none
 
 private def peppers : PepperRing :=
   { current := { keyId := ⟨"pepper-1"⟩, secret := Leancrypto.Sha256.hashUtf8 "flow pepper" } }
@@ -106,7 +115,8 @@ private def openDb : IO SQLite := do
 def checks : IO (List (String × Bool)) := do
   let db ← openDb
   let ports := portsOn db
-  let started ← beginFederated ports config provider discovery redirectUri (some "/dashboard")
+  let started := (← beginFederated ports config provider discovery redirectUri
+    (some "/dashboard")).toOption
   let url := (started.map (·.authorizationUrl)).getD ""
   let state := (started.bind fun s => parameter s.authorizationUrl "state").getD ""
   let cookieValue := (started.map (·.cookie.value)).getD ""
@@ -123,7 +133,7 @@ def checks : IO (List (String × Bool)) := do
   -- A `state` that does not pair with the browser's cookie, which is the login-CSRF case.
   let fresh ← openDb
   let freshPorts := portsOn fresh
-  let other ← beginFederated freshPorts config provider discovery redirectUri none
+  let other := (← beginFederated freshPorts config provider discovery redirectUri none).toOption
   let otherState := (other.bind fun s => parameter s.authorizationUrl "state").getD ""
   exchanges.set 0
   let mismatched ← completeFederated freshPorts (oidcPorts) config provider discovery redirectUri
@@ -135,7 +145,7 @@ def checks : IO (List (String × Bool)) := do
   -- An unverified assertion is refused where the linking rule is, not here (AUTH-6.7).
   let strict ← openDb
   let strictPorts := portsOn strict
-  let begun ← beginFederated strictPorts config provider discovery redirectUri none
+  let begun := (← beginFederated strictPorts config provider discovery redirectUri none).toOption
   let begunState := (begun.bind fun s => parameter s.authorizationUrl "state").getD ""
   let begunCookie := (begun.map (·.cookie.value)).getD ""
   let unverified ← completeFederated strictPorts (oidcPorts false) config provider discovery
@@ -192,8 +202,8 @@ def invitationChecks : IO (List (String × Bool)) := do
       metadata := ⟨"{}"⟩
       expiresAt := ⟨1700009999⟩
       createdBy := .client "admin" }
-  let begun ← beginFederated ports inviteOnly provider discovery redirectUri none
-    (some ⟨"invite-1"⟩)
+  let begun := (← beginFederated ports inviteOnly provider discovery redirectUri none
+    (some ⟨"invite-1"⟩)).toOption
   let state := (begun.bind fun s => parameter s.authorizationUrl "state").getD ""
   let cookie := (begun.map (·.cookie.value)).getD ""
   let admitted ← completeFederated ports (portsAsserting invited) inviteOnly provider discovery
@@ -209,8 +219,8 @@ def invitationChecks : IO (List (String × Bool)) := do
       metadata := ⟨"{}"⟩
       expiresAt := ⟨1700009999⟩
       createdBy := .client "admin" }
-  let begunOther ← beginFederated otherPorts inviteOnly provider discovery
-    redirectUri none (some ⟨"invite-2"⟩)
+  let begunOther := (← beginFederated otherPorts inviteOnly provider discovery
+    redirectUri none (some ⟨"invite-2"⟩)).toOption
   let otherState := (begunOther.bind fun s => parameter s.authorizationUrl "state").getD ""
   let otherCookie := (begunOther.map (·.cookie.value)).getD ""
   let mismatched ← completeFederated otherPorts (portsAsserting elsewhere) inviteOnly provider
@@ -251,8 +261,9 @@ def limitChecks : IO (List (String × Bool)) := do
   let anonymous := startScopes tenant {}
   pure
     [ ("federated flow: the start is admitted while inside the budget",
-        first.isSome && second.isSome)
-    , ("federated flow: and refused once past it (AUTH-14.1.1)", third.isNone)
+        first.toOption.isSome && second.toOption.isSome)
+    , ("federated flow: and refused once past it, as throttled (AUTH-14.1.1)",
+        refusalOf third == some .throttled)
     , ("federated flow: a refused start writes no state record",
         (← (portsOn db).store.federationStateByDigest tenant ⟨1700000000⟩
           (peppers.current.digest ⟨"nothing"⟩)).isNone)
@@ -283,8 +294,8 @@ def linkFlowChecks : IO (List (String × Bool)) := do
         { redeem := fun _ _ _ _ _ _ _ _ => pure (.ok
             { identity, address := none, addressVerified := false, hostedDomain := none }) } }
 
-  let started ← beginFederated ports config provider discovery redirectUri none none
-    (some account)
+  let started := (← beginFederated ports config provider discovery redirectUri none none
+    (some account)).toOption
   let state := (started.bind fun s => parameter s.authorizationUrl "state").getD ""
   let cookieValue := (started.map (·.cookie.value)).getD ""
   let completed ← completeFederated ports silent config provider discovery redirectUri
@@ -293,7 +304,7 @@ def linkFlowChecks : IO (List (String × Bool)) := do
 
   -- The same flow begun without an account, and the same silent provider: a sign-in has nothing
   -- to go on and is refused where a link succeeded.
-  let signingIn ← beginFederated ports config provider discovery redirectUri none
+  let signingIn := (← beginFederated ports config provider discovery redirectUri none).toOption
   let otherState := (signingIn.bind fun s => parameter s.authorizationUrl "state").getD ""
   let otherCookie := (signingIn.map (·.cookie.value)).getD ""
   let withoutAccount ← completeFederated ports silent config provider discovery redirectUri
@@ -311,5 +322,26 @@ def linkFlowChecks : IO (List (String × Bool)) := do
         (completed.toOption.bind (signedIn ·.result)).isNone)
     , ("link flow: the same answer signs nobody in when no account began the flow",
         match withoutAccount with | .error _ => true | .ok _ => false) ]
+
+/--
+A start whose random source will not answer is refused as that, and not as a throttle.
+
+Those two are the whole of what beginning can refuse, and they ask for opposite responses: one is
+the budget of AUTH-14.1.1 doing its job, the other is a deployment that can no longer mint a
+`state` at all. The draw is made to fail here rather than trusted to be reported correctly,
+because reported as one fact the two are indistinguishable.
+-/
+def entropyChecks : IO (List (String × Bool)) := do
+  let db ← openDb
+  let ports := portsOn db
+  dryDraw.set true
+  let begun ← beginFederated ports config provider discovery redirectUri none
+  dryDraw.set false
+  let afterwards ← beginFederated ports config provider discovery redirectUri none
+  pure
+    [ ("federated flow: a start with no entropy says so, rather than reporting a throttle",
+        refusalOf begun == some .noRandomness)
+    , ("federated flow: and the next start, with entropy, is admitted",
+        afterwards.toOption.isSome) ]
 
 end Tests.FederatedFlow

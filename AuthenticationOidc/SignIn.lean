@@ -146,6 +146,19 @@ structure FederatedStart (tenant : TenantId) where
   cookie : CookieSpec
   deriving Repr
 
+/-- Why a federated sign-in did not start. The shipped route answers both with the same page, and
+they are not the same event: one is the endpoint working as AUTH-14.1.1 intends, the other is a
+deployment whose random source has stopped answering. -/
+inductive StartRefusal where
+  | throttled
+  | noRandomness
+  deriving DecidableEq, Repr, Inhabited
+
+/-- The operator's name for one, for a log record or a span attribute. -/
+def StartRefusal.name : StartRefusal → String
+  | .throttled => "throttled"
+  | .noRandomness => "no-randomness"
+
 private def drawValue {m : Type → Type} [Monad m] [RandomBytes m] (bytes : Nat) :
     m (Option String) := do
   match ← RandomBytes.draw bytes with
@@ -167,14 +180,14 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
     (provider : ProviderConfig) (discovery : Discovery) (redirectUri : String)
     (returnTo : Option String) (invitation : Option (InvitationId tenant) := none)
     (account : Option (AccountId tenant) := none)
-    (requester : RequestContext := {}) : m (Option (FederatedStart tenant)) := do
+    (requester : RequestContext := {}) : m (Except StartRefusal (FederatedStart tenant)) := do
   let now ← Clock.now
   -- Only the scopes that do not need an address can be counted: a sign-in has said nothing about
   -- who it is, and a link has named an account and still no address. Without them this endpoint
   -- turns one inbound request into a stored row and an outbound one, as often as anybody likes
   -- (AUTH-14.1.1).
   if !(← ports.limiter.admit .federatedStart now (startScopes tenant requester)) then
-    return none
+    return .error .throttled
   match ← drawValue 16, ← drawValue 32, ← drawValue 16, ← drawValue 12 with
   | some state, some verifier, some nonce, some identifier =>
     let expiresAt := now.advance FederationState.maxLifetime
@@ -200,10 +213,10 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
       , ("code_challenge_method", "S256") ]
       ++ (if provider.formPost then [("response_mode", "form_post")] else [])
     let url := discovery.authorizationEndpoint ++ "?" ++ query parameters
-    pure (some
+    pure (.ok
       { authorizationUrl := url
         cookie := stateCookie config.baseUrl tenant provider.formPost state expiresAt })
-  | _, _, _, _ => pure none
+  | _, _, _, _ => pure (.error .noRandomness)
 
 /-- What the callback did. A flow begun with no account is a sign-in and issues one; a flow begun
 with one is a link, and issues nothing because whoever asked was already signed in (AUTH-6.7.1). -/

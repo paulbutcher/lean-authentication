@@ -224,6 +224,16 @@ inductive LinkFailure where
   | storeRefused (error : StoreError)
   deriving DecidableEq, Repr, Inhabited
 
+/-- The operator's name for one, for a log record or a span attribute, as `LinkRefusal.name`
+gives the refusal of AUTH-6.7 its. Which store error it was stays in the value, because a log
+query groups on the decision rather than on the driver's account of it. -/
+def LinkFailure.name : LinkFailure → String
+  | .unknownAccount => "unknown-account"
+  | .accountDeactivated => "account-deactivated"
+  | .alreadyLinked => "already-linked"
+  | .noIdentifier => "no-identifier"
+  | .storeRefused _ => "store-refused"
+
 /-- Writes a credential and records that a way in was added (AUTH-14.1.7). Both the linking a
 federated sign-in decides and the linking a held session authorises come through here, so neither
 is the one that forgets. -/
@@ -756,16 +766,21 @@ session, and the library has no basis on which to (AUTH-13.2).
 -/
 
 private def sessionByCredential {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
-    (now : Timestamp) (credential : CredentialValue) : m (Option (Session tenant)) :=
-  let rec search : List Digest → m (Option (Session tenant))
-    | [] => pure none
+    (now : Timestamp) (credential : CredentialValue) :
+    m (Except SessionRejection (Session tenant)) :=
+  let rec search (refusal : SessionRejection) :
+      List Digest → m (Except SessionRejection (Session tenant))
+    | [] => pure (.error refusal)
     | digest :: rest => do
       match ← ports.store.sessionByDigest tenant now digest with
-      | some session => pure (some session)
-      | none => search rest
+      | .ok session => pure (.ok session)
+      -- A key whose digest matched a row says what happened to that session; one that matched
+      -- nothing says only that it was not the key. The first answer of the first kind is the
+      -- one to keep.
+      | .error reason => search (if refusal == .unknown then reason else refusal) rest
   -- Every key still in its overlap window, so a rotation does not sign everyone out
   -- (AUTH-15.7.2).
-  search (ports.peppers.present credential).digests
+  search .unknown (ports.peppers.present credential).digests
 
 /--
 Identity and tenant, and nothing else (AUTH-9.7).
@@ -777,15 +792,15 @@ that record it being idle.
 -/
 def identify {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
     (config : TenantConfig tenant) (credential : CredentialValue) :
-    m (Option (SessionIdentity tenant)) := do
+    m (Except SessionRejection (SessionIdentity tenant)) := do
   let now ← Clock.now
   match ← sessionByCredential ports now credential with
-  | none => pure none
-  | some session =>
+  | .error reason => pure (.error reason)
+  | .ok session =>
     if session.dueForTouch now config.sessionTouchInterval then
       ports.store.touchSession tenant session.id now
         (session.refreshedIdleExpiry now config.sessionIdleTimeout)
-    pure (some ⟨session.account⟩)
+    pure (.ok ⟨session.account⟩)
 
 /-- The account's live sessions, newest first, with the one that asked marked (AUTH-9.5).
 `presented` is the credential the request arrived with; without it no session is current. -/
@@ -795,7 +810,7 @@ def sessions {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports 
   let now ← Clock.now
   let current ← match presented with
     | none => pure none
-    | some credential => pure ((← sessionByCredential ports now credential).map (·.id))
+    | some credential => pure ((← sessionByCredential ports now credential).toOption.map (·.id))
   let live ← ports.store.sessionsForAccount tenant now account
   pure ((live.mergeSort fun a b => decide (b.createdAt ≤ a.createdAt)).map fun session =>
     session.summary (current == some session.id))

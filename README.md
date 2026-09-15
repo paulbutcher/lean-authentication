@@ -135,7 +135,7 @@ Routing it yourself is supported; the response guarantees below then become your
 ## Sessions
 
 ```lean
-Service.identify ports config credential          -- Option (SessionIdentity tenant)
+Service.identify ports config credential          -- Except SessionRejection (SessionIdentity tenant)
 Service.sessions ports account (presented := ...) -- List (SessionSummary tenant)
 Service.revokeSession ports account session       -- Bool
 Service.revokeAllSessions ports account reason
@@ -286,7 +286,9 @@ def federatedRoutes (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) :
   OidcHttp.handler
     { ports
       oidc
-      tenant := fun t => pure (some (config t)) }
+      tenant := fun t => pure (some (config t))
+      observeRefusal := fun t provider reason =>
+        IO.eprintln s!"federated refused: {t.value} {provider.value} {reason.name}" }
 ```
 
 | Path | Method |
@@ -373,7 +375,7 @@ The audience is checked against the `resource` the token was issued for and noth
 
 `Service.refusalDocument` is the same refusal as a JSON body. Serve it alongside the header wherever a hop might rewrite headers on the way out: an AWS Lambda function URL renames `WWW-Authenticate`, and a client that never sees the refusal, or the `resource_metadata` in it, reconnects forever against a grant it cannot learn is wrong.
 
-`AccessToken.Rejection.name` is that same refusal for the operator. `unknown`, `expired`, `revoked` and `wrongAudience` all reach the client as `invalid_token`, so a resource server logging why it refused has nothing else to tell them apart; `GrantRejection.name`, `MetadataRejection.name` and `SignInRefusal.name` do the same for their own refusals.
+`AccessToken.Rejection.name` is that same refusal for the operator. `unknown`, `expired`, `revoked` and `wrongAudience` all reach the client as `invalid_token`, so a resource server logging why it refused has nothing else to tell them apart; `GrantRejection.name`, `MetadataRejection.name`, `SignInRefusal.name`, `SessionRejection.name` and `OidcHttp.Refusal.name` do the same for their own refusals.
 
 ## Mounting the authorisation server
 

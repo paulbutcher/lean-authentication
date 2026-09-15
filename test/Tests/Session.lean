@@ -145,10 +145,17 @@ private def signIn (ports : Ports IO) (cfg : TenantConfig tenant) (raw : String)
   | some nonce => outcomeOf <$> submitCode ports cfg attempt typed nonce requester
   | none => pure {}
 
-private def accountOf (identity : Option (SessionIdentity tenant)) : AccountId tenant :=
+private def accountOf (identity : Except SessionRejection (SessionIdentity tenant)) :
+    AccountId tenant :=
   match identity with
-  | some found => found.account
-  | none => ⟨""⟩
+  | .ok found => found.account
+  | .error _ => ⟨""⟩
+
+/-- Which refusal `identify` reported, if it refused. -/
+private def refusalOf {t : TenantId} :
+    Except SessionRejection (SessionIdentity t) → Option SessionRejection
+  | .error reason => some reason
+  | .ok _ => none
 
 def checks : IO (List (String × Bool)) := do
   clockRef.set ⟨1700000000⟩
@@ -197,11 +204,12 @@ def checks : IO (List (String × Bool)) := do
       ("session: the cookie is confined to the tenant's path (AUTH-4.3.3)",
         (cookie.map fun c => (c.path, c.secure, c.httpOnly, c.sameSite))
           == some (BaseUrl.tenantPath tenant, true, true, SameSite.lax)),
-      ("session: the cookie's credential identifies the account (AUTH-9.7)", identity.isSome),
+      ("session: the cookie's credential identifies the account (AUTH-9.7)",
+        identity.toOption.isSome),
       ("session: each sign-in issues its own identifier (AUTH-9.3)",
         credential != otherCredential && listed.length == 2),
       ("session: both sessions belong to the one account",
-        otherIdentity.map (·.account.value) == identity.map (·.account.value)),
+        otherIdentity.toOption.map (·.account.value) == identity.toOption.map (·.account.value)),
       ("session: the listing says which session is asking (AUTH-9.5)",
         currentIds.length == 1),
       ("session: the listing carries what the browser said about itself (AUTH-9.5)",
@@ -209,10 +217,10 @@ def checks : IO (List (String × Bool)) := do
       ("session: a session is not revocable through an account it does not belong to",
         !refusedRevoke),
       ("session: an account holder revokes one of their sessions (AUTH-9.5)",
-        revoked && afterRevoke.length == 1 && revokedIdentity.isNone),
-      ("session: revoking one leaves the others alone", survivor.isSome),
+        revoked && afterRevoke.length == 1 && refusalOf revokedIdentity == some .revoked),
+      ("session: revoking one leaves the others alone", survivor.toOption.isSome),
       ("session: revoking all of them leaves none (AUTH-9.6)",
-        afterAll.isEmpty && noneSurvive.isNone) ]
+        afterAll.isEmpty && refusalOf noneSurvive == some .revoked) ]
 
 private def otherTenant : TenantId := ⟨"beta"⟩
 
@@ -244,8 +252,8 @@ def cookiePathChecks : IO (List (String × Bool)) := do
       ("session: widening the path leaves the fixed attributes fixed (AUTH-9.2)",
         (cookie.map fun c => (c.secure, c.httpOnly, c.sameSite))
           == some (true, true, SameSite.lax)),
-      ("session: a widened cookie identifies nobody at another tenant (AUTH-4.3.3)",
-        own.isSome && elsewhere.isNone) ]
+      ("session: a widened cookie is unknown at another tenant, not merely dead (AUTH-4.3.3)",
+        own.toOption.isSome && refusalOf elsewhere == some .unknown) ]
 
 /-- That the cookies follow the origin is a theorem in `Tests.Config`; what is driven here is
 that the origin reaches them, from two different builders through two different layers. -/
@@ -305,10 +313,11 @@ def lifetimeChecks : IO (List (String × Bool)) := do
   clockRef.set start
   pure
     [ ("session: using a session slides its idle timeout (AUTH-9.4)",
-        used.isSome && stillLive.isSome),
-      ("session: an unused session reaches its idle timeout", idledOut.isNone),
+        used.toOption.isSome && stillLive.toOption.isSome),
+      ("session: an unused session reaches its idle timeout, and says that is why",
+        refusalOf idledOut == some .idleExpired),
       ("session: use does not carry a session past its absolute lifetime (AUTH-9.4)",
-        halfway.isSome && expired.isNone) ]
+        halfway.toOption.isSome && refusalOf expired == some .absolutelyExpired) ]
 
 /-- The occasions AUTH-9.6 names, each of which has to revoke in the same call that changes the
 account: the hazard is entirely in the gap between the two. -/
@@ -353,16 +362,16 @@ def accountChecks : IO (List (String × Bool)) := do
     [ ("account: changing the primary address moves the account (AUTH-9.6)",
         moved matches .ok _ && (underNewAddress.map (·.id.value)) == some account.value),
       ("account: changing the primary address revokes every session (AUTH-9.6)",
-        afterChange.isNone),
+        refusalOf afterChange == some .revoked),
       ("account: deactivation revokes every session (AUTH-9.6)",
-        closed matches .ok _ && afterClosing.isNone),
+        closed matches .ok _ && refusalOf afterClosing == some .revoked),
       ("account: a deactivated account cannot be signed back in",
         whileClosed.session.isNone
           && whileClosed.views == [.refused .accountDeactivated]),
       ("account: reactivating lets the account holder sign in again",
         reopened matches .ok _ && afterReopening.session.isSome),
       ("account: an address another account holds is refused (AUTH-15.4.2)",
-        collided matches .error .duplicateAccount && bystanderSurvives.isSome),
+        collided matches .error .duplicateAccount && bystanderSurvives.toOption.isSome),
       ("account: the log says why the sessions went (AUTH-13.7)",
         reasons.contains .primaryEmailChanged && reasons.contains .accountDeactivated) ]
 
@@ -409,7 +418,7 @@ def purgeChecks : IO (List (String × Bool)) := do
   clockRef.set start
   pure
     [ ("purge: a database with nothing expired loses nothing",
-        immediately == {} && survived.isSome),
+        immediately == {} && survived.toOption.isSome),
       ("purge: the session and the attempt behind it go once both are unreachable",
         swept.sessions == 1 && swept.attempts == 1),
       ("purge: and a second sweep finds nothing left to remove", again == {}) ]

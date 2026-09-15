@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+- `OidcHttp.Config.observeRefusal` is handed every refusal the federated routes answer with, and the tenant and provider it was for, because the page they render will never say which one it was (AUTH-14.2.6).
+- `LinkFailure.name` is the operator's name for a refused link, as the refusals around it already had.
+- `Service.identify` answers `Except SessionRejection` rather than `Option`, so a cookie nothing matches, a revoked session and each of the two timeouts are told apart. `Store.sessionByDigest` reports the same, and `Session.identify` is now `Session.rejection`.
+- `Oidc.beginFederated` answers `Except StartRefusal`, which tells a throttled start from a random source that has stopped answering.
+
 ## [0.16.2] - 2026-09-14
 
 - An identity can be linked to the account already signed in, which is the only way in for a provider that discloses no address an account could match, such as Apple's private relay (AUTH-6.7.1). `POST` the federated start; the account comes from the session and never from the request.

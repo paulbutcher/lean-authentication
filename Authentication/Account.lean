@@ -92,6 +92,29 @@ structure SessionIdentity (tenant : TenantId) where
   account : AccountId tenant
   deriving DecidableEq, Repr
 
+/--
+Why a presented session credential named nobody.
+
+All four reach the client as the same absent identity, because none of them is a difference the
+request may act on. They are held apart for the operator: a cookie nothing matches and a session
+somebody revoked are the same refusal and not the same event.
+-/
+inductive SessionRejection where
+  /-- No session holds this credential under any pepper still in its overlap window, so either
+  it is not a session credential or it was sealed under a key that has since left the ring. -/
+  | unknown
+  | revoked
+  | idleExpired
+  | absolutelyExpired
+  deriving DecidableEq, Repr, Inhabited
+
+/-- The operator's name for one, for a log record or a span attribute. -/
+def SessionRejection.name : SessionRejection → String
+  | .unknown => "session-unknown"
+  | .revoked => "session-revoked"
+  | .idleExpired => "session-idle-expired"
+  | .absolutelyExpired => "session-expired"
+
 /-- What an account holder is shown about a session of theirs (AUTH-9.5). The identifier digest
 is not among the fields: nothing outside the store has a use for it, and a listing that carried
 it would put it in logs. -/
@@ -110,14 +133,21 @@ structure SessionSummary (tenant : TenantId) where
 
 namespace Session
 
-/-- Expiry is enforced on read, so correctness does not depend on a sweeper having run
-(AUTH-15.4.3). -/
-def identify {tenant : TenantId} (s : Session tenant) (now : Timestamp) :
-    Option (SessionIdentity tenant) :=
-  if s.revokedAt.isSome then none
-  else if s.idleExpiresAt ≤ now then none
-  else if s.absoluteExpiresAt ≤ now then none
-  else some ⟨s.account⟩
+/--
+Why this session cannot be used, or `none` while it can. Expiry is enforced on read, so
+correctness does not depend on a sweeper having run (AUTH-15.4.3), and the three conditions are
+tested here rather than by each backend so that they are one rule.
+
+The absolute lifetime is tested before the idle timeout because the two coincide once a touch has
+capped the idle expiry at the ceiling, and it is the ceiling that ended the session. The other
+order would report every capped session as merely idle.
+-/
+def rejection {tenant : TenantId} (s : Session tenant) (now : Timestamp) :
+    Option SessionRejection :=
+  if s.revokedAt.isSome then some .revoked
+  else if s.absoluteExpiresAt ≤ now then some .absolutelyExpired
+  else if s.idleExpiresAt ≤ now then some .idleExpired
+  else none
 
 /-- Where the idle timeout moves to when the session is used. The absolute lifetime is a
 ceiling, not a suggestion: a session used every day for a year would otherwise never end

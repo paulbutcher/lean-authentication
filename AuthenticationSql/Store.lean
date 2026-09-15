@@ -461,12 +461,19 @@ private def liveSession (now : Timestamp) : Statement :=
   sql!" AND revoked_at IS NULL AND idle_expires_at > {timeText now}
         AND absolute_expires_at > {timeText now}"
 
+/-- The liveness the statement does not test, because which of the three conditions refused is
+part of the answer and a row the query never returned cannot say. -/
 private def sessionByDigest [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
-    (digest : Digest) : m (Option (Session tenant)) := do
+    (digest : Digest) : m (Except SessionRejection (Session tenant)) := do
   let row ← c.first (sessionSelect ++
     sql!" WHERE tenant = {tenant.value} AND digest_key = {digest.keyId.value}
-            AND digest_bytes = {digestBytesText digest}" ++ liveSession now)
-  pure (row.map readSession)
+            AND digest_bytes = {digestBytesText digest}")
+  match row.map readSession with
+  | none => pure (.error .unknown)
+  | some session =>
+    pure (match session.rejection now with
+      | some reason => .error reason
+      | none => .ok session)
 
 private def sessionsForAccount [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
     (account : AccountId tenant) : m (List (Session tenant)) := do
@@ -848,7 +855,7 @@ private def commitFederationState [Monad m] (c : Ctx m) (tenant : TenantId)
 /-! ## Sweeping -/
 
 /-- A session is removed once nothing can reach it: past its absolute lifetime, past the idle
-timeout it was last written with, or revoked. Those are the three `Session.identify` refuses on,
+timeout it was last written with, or revoked. Those are the three `Session.rejection` names,
 and `touchSession` cannot resurrect one, so a row matching any of them is unreachable rather than
 merely stale. -/
 private def purgeExpired [Monad m] (c : Ctx m) (tenant : TenantId) (before : Timestamp) :

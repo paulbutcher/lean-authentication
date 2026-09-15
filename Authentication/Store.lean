@@ -117,9 +117,12 @@ structure AuthStore (m : Type → Type) where
   commitFederationState : (tenant : TenantId) → (expected next : FederationState tenant) → m Bool
   createSession : (tenant : TenantId) → Session tenant → m Unit
   /-- Expiry and revocation are enforced here, so correctness does not depend on a sweeper
-  having run (AUTH-15.4.3). A read that follows a write observes it: a just-issued session
-  failing its first validation is indistinguishable from a broken sign-in (AUTH-15.4.6). -/
-  sessionByDigest : (tenant : TenantId) → Timestamp → Digest → m (Option (Session tenant))
+  having run (AUTH-15.4.3), and which of them refused is reported rather than folded into an
+  absent row: a backend answers with `Session.rejection` and does not decide for itself. A read
+  that follows a write observes it: a just-issued session failing its first validation is
+  indistinguishable from a broken sign-in (AUTH-15.4.6). -/
+  sessionByDigest : (tenant : TenantId) → Timestamp → Digest →
+    m (Except SessionRejection (Session tenant))
   sessionsForAccount : (tenant : TenantId) → Timestamp → AccountId tenant → m (List (Session tenant))
   /-- Slides the idle timeout of AUTH-9.4 and records that the session was used. It is given the
   new expiry rather than the timeout, so the ceiling of the absolute lifetime is applied once,

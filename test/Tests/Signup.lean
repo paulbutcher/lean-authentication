@@ -241,10 +241,10 @@ def existingAccountChecks : IO (List (String × Bool)) := do
     | .error _ => pure (.error .invitationNotPending)
 
   let firstAccount ← match sessionOf first with
-    | some credential => identify (tenant := tenant) ports config credential
+    | some credential => Except.toOption <$> identify (tenant := tenant) ports config credential
     | none => pure none
   let secondAccount ← match sessionOf second with
-    | some credential => identify (tenant := tenant) ports config credential
+    | some credential => Except.toOption <$> identify (tenant := tenant) ports config credential
     | none => pure none
   let listed ← invitations (tenant := tenant) ports
 

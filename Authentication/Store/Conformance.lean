@@ -67,6 +67,14 @@ private def sampleSession (tenant : TenantId) (id : String) (account : AccountId
     idleExpiresAt
     absoluteExpiresAt }
 
+/-- Which refusal a session read reported, if it refused. `Session` is comparable and
+`Except` is not, so the assertions below read the error side rather than the whole answer. -/
+private def refusalOf {tenant : TenantId} (result : Except SessionRejection (Session tenant)) :
+    Option SessionRejection :=
+  match result with
+  | .error reason => some reason
+  | .ok _ => none
+
 private def sampleInvitation (tenant : TenantId) (id : String) (address : EmailAddress) :
     Invitation tenant :=
   { id := ⟨id⟩
@@ -179,7 +187,8 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let afterCommit ← store.attemptById alpha live.id
   let crossTenantAttempt ← store.attemptById beta ⟨"attempt-3"⟩
 
-  -- Sessions: found by digest, and gone once expired, revoked, or past their absolute life.
+  -- Sessions: found by digest, and refused with the reason once expired, revoked, or past their
+  -- absolute life.
   let account : AccountId alpha := ⟨"account-1"⟩
   let liveDigest := digestOf [10]
   let idleDigest := digestOf [11]
@@ -384,19 +393,20 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     , { name := "an attempt is invisible from another tenant"
         passed := crossTenantAttempt.isNone }
     , { name := "a live session is found by its digest (AUTH-15.4.6)"
-        passed := (foundLive.map (·.id.value)) == some "session-live" }
-    , { name := "a session past its idle timeout is not returned (AUTH-15.4.3)"
-        passed := foundIdle.isNone }
-    , { name := "a session past its absolute lifetime is not returned"
-        passed := foundStale.isNone }
-    , { name := "a revoked session is not returned"
-        passed := foundRevoked.isNone }
-    , { name := "a session is invisible from another tenant"
-        passed := crossTenantSession.isNone }
+        passed := (foundLive.toOption.map (·.id.value)) == some "session-live" }
+    , { name := "a session past its idle timeout is refused, and says so (AUTH-15.4.3)"
+        passed := refusalOf foundIdle == some .idleExpired }
+    , { name := "a session past its absolute lifetime is refused, and says which"
+        passed := refusalOf foundStale == some .absolutelyExpired }
+    , { name := "a revoked session is refused as revoked and not as expired"
+        passed := refusalOf foundRevoked == some .revoked }
+    , { name := "a session is unknown from another tenant, not merely refused"
+        passed := refusalOf crossTenantSession == some .unknown }
     , { name := "a session past its idle timeout is live again once touched (AUTH-9.4)"
-        passed := beforeTouch.isNone && (afterTouch.map (·.id.value)) == some "session-touch" }
+        passed := refusalOf beforeTouch == some .idleExpired
+          && (afterTouch.toOption.map (·.id.value)) == some "session-touch" }
     , { name := "touching does not reach past the absolute lifetime"
-        passed := touchedStale.isNone }
+        passed := refusalOf touchedStale == some .absolutelyExpired }
     , { name := "an account's live sessions are listed, and only those"
         passed := ownSessions.length == 2 }
     , { name := "revoking an account's sessions revokes all of them (AUTH-9.6)"
@@ -442,7 +452,7 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := (sweptLiveAttempt.map (·.id.value)) == some "attempt-live" }
     , { name := "sweeping removes the sessions nothing can reach, and only those"
         passed := purged.sessions == 2
-          && (sweptLiveSession.map (·.id.value)) == some "session-live" }
+          && (sweptLiveSession.toOption.map (·.id.value)) == some "session-live" }
     , { name := "sweeping leaves the audit log and consent records where they are (AUTH-4.6.6)"
         passed := sweptAudit.length == 1 && sweptConsent.length == 1 }
     , { name := "deleting a tenant removes its accounts (AUTH-4.2.5)"
@@ -450,7 +460,7 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     , { name := "deleting a tenant removes its attempts"
         passed := doomedAttempt.isNone }
     , { name := "deleting a tenant removes its sessions"
-        passed := doomedSession.isNone }
+        passed := refusalOf doomedSession == some .unknown }
     , { name := "deleting a tenant removes its invitations"
         passed := doomedInvitation.isNone }
     , { name := "deleting a tenant removes its audit records"
