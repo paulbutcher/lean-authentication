@@ -28,6 +28,14 @@ require leancrypto from git
   "https://github.com/paulbutcher/leancrypto" @ "v0.4.1"
 
 /-
+The encoding a COSE key and a WebAuthn attestation object arrive in. Deterministic: one encoding
+per value, and a decoder that refuses anything else, so bytes a signature covers cannot be
+re-encoded into different ones. Pure Lean and requires nothing itself.
+-/
+require cbor from git
+  "https://github.com/paulbutcher/lean-cbor" @ "v0.1.0"
+
+/-
 The one dependency needing a system library, `pkg-config` and OpenSSL 3 development headers. It is
 confined to the federation targets (AUTH-6.11), so a consumer taking the magic link flow, either
 SQL backend, or the authorisation server links none of it.
