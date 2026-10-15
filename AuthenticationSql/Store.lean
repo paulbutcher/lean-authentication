@@ -157,6 +157,7 @@ private def auditColumns {tenant : TenantId} : AuditEvent tenant → String × S
       | .addressSuppressed => "address-suppressed"
       | .accountDeactivated => "account-deactivated"
       | .addressNotVerified => "address-not-verified"
+      | .originNotPermitted => "origin-not-permitted"
       | .throttled => "throttled"
       | .malformedAddress => "malformed-address")
   | .sessionRevoked session => ("session-revoked", session.value, "")
@@ -203,6 +204,8 @@ private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
         else if detail == "domain-not-allowed" then .domainNotAllowed
         else if detail == "address-suppressed" then .addressSuppressed
         else if detail == "account-deactivated" then .accountDeactivated
+        else if detail == "address-not-verified" then .addressNotVerified
+        else if detail == "origin-not-permitted" then .originNotPermitted
         else if detail == "throttled" then .throttled
         else .malformedAddress))
   | "session-revoked" => some (.sessionRevoked ⟨subject⟩)
