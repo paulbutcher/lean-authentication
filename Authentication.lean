@@ -15,6 +15,7 @@ public import Authentication.Error
 public import Authentication.Federation
 public import Authentication.Invitation
 public import Authentication.Origin
+public import Authentication.Passkey
 public import Authentication.Pepper
 public import Authentication.Pkce
 public import Authentication.Policy

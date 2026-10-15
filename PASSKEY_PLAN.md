@@ -41,13 +41,19 @@ Not a blocker for the mechanism, so it may land before, after or alongside. Befo
 
 Follow the federation precedent. `Authentication/Federation.lean` holds the state record and the pure decision while `AuthenticationOidc` holds the protocol, and that split is why the SQL store implements federation without linking OpenSSL.
 
-A new `Authentication/Passkey.lean` holds four things. `PasskeyCeremony` mirrors `FederationState`: expiry enforced on read, single use, compare-and-set on commit. `PasskeyRegistration` holds the stored attributes, being the public key, COSE algorithm, sign count, transports, AAGUID, the backup eligible and backup state flags, and a client-supplied label. `CredentialDescriptor.passkey` carries the credential id, with its `kind` and `origin` cases. `Passkey.decide` is the analogue of `Federation.decide`: pure, writes nothing, decides sign-in against a looked-up credential.
+A new `Authentication/Passkey.lean` holds four things. `PasskeyCeremony` mirrors `FederationState`: expiry enforced on read, single use, compare-and-set on commit. `PasskeyRegistration` holds the stored attributes, being the public key, COSE algorithm, sign count, transports, AAGUID, the backup eligible and backup state flags, and a client-supplied label. `PasskeyAssertion` is what an authenticator said once its signature has been checked. `Passkey.decide` is the analogue of `Federation.decide`: pure, writes nothing, decides sign-in against a looked-up credential.
+
+`PasskeyId` belongs here too, and is not indexed by a tenant, for the reason `FederatedIdentity` is not: it names a credential at the authenticator, which knows nothing of tenants.
+
+The user handle is the account's own identifier rather than a second value stored beside it. `AccountId` is already opaque, random per account and never the address, which is everything a handle has to be; and since a handle cannot be changed once an authenticator holds it, a separate one would be a value obliged to agree with the account forever.
 
 One difference from `FederationState` needs saying in its doc comment, because it reads as an inconsistency otherwise. That record holds its verifier and nonce in clear because both must be given back to the provider. A passkey challenge is only ever compared, since the browser echoes it in `clientDataJSON`, so it is held as a `Digest` like every other credential here. The ceremony record is strictly more conservative than the federation one.
 
 The cookie mirrors `Attempt.cookieValue`: the ceremony id plus a binding nonce, so that holding the id is not enough to be taken for the browser that started the ceremony.
 
 ## Phase 2: store, schema, conformance
+
+`CredentialDescriptor.passkey` lands here rather than in Phase 1, with its `kind` and `origin` cases. It cannot be added before the store, because the SQL table fans each descriptor variant out to its own columns and adding a variant stops five of those mappings compiling. A variant with nowhere to put its identifier is worse than no variant at all.
 
 `AuthStore` gains operations to create, read and compare-and-set a ceremony, to find a credential by passkey id, to read and update the registration attributes, and a purge case.
 

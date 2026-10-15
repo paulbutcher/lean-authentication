@@ -44,6 +44,13 @@ structure FederatedIdentity where
   subject : String
   deriving DecidableEq, Repr, Inhabited
 
+/-- What an authenticator calls the credential it generated, base64url as it travels. Not indexed
+by a tenant, as `FederatedIdentity` is not: it names a credential at the authenticator, which
+knows nothing of tenants, and the lookup that uses it is tenant-scoped by its own arguments. -/
+structure PasskeyId where
+  value : String
+  deriving DecidableEq, Repr, Inhabited
+
 /-- What one kind is identified by. Each variant carries its own key, which is what keeps the
 set open: a passkey arrives as another variant holding whatever identifies a passkey, and no
 variant already here changes shape (AUTH-4.4.2). -/
