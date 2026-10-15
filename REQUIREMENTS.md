@@ -25,7 +25,6 @@ Requirement keywords: **MUST**, **SHOULD**, **MAY**. Requirements are numbered s
 - Self-service account recovery. Someone who loses access to their mailbox is recovered by administrator action in the host application. See §18.1.
 - Inbound email processing. See §11.
 - SAML and SCIM. See §18.4; the model must not preclude them later.
-- Passkeys / WebAuthn. See §18.3; the credential model must not preclude them later.
 - SMS or any telephony.
 
 ---
@@ -40,6 +39,7 @@ Requirement keywords: **MUST**, **SHOULD**, **MAY**. Requirements are numbered s
   - `lean-jose` for JWS, JWK, JWKS and JWT, whose `Policy` holds the algorithm allowlist so that a token never selects the means of its own verification (AUTH-6.5).
   - `jose-libcrypto` for ES256 and EdDSA, verifying and signing, and for reading a PKCS#8 private key, which is what AUTH-6.9's Apple client secret is minted from.
   - `lean-libcrypto` for the OpenSSL 3 binding under both of those, and for the AEAD of AUTH-15.7.3.1. It is the only dependency here needing a system library and `pkg-config`, and AUTH-6.11 confines it.
+  - `cbor` for the attestation object and the COSE key of §22, which are the only CBOR anything here reads. Deterministic by construction, so that bytes a signature covers cannot be re-encoded into different ones.
   - `leanpostgres` for the Postgres storage backend. Not `leanmigrate`: the migrations this library ships are SQL files the client applies, so nothing here depends on a migration tool (AUTH-15.7.1).
   - A SQLite driver, for both the SQLite backend and the test backend (AUTH-16.5), which makes it a dependency of `lake test` and not only of one optional target. Confirm what exists in the ecosystem before depending on it; if nothing suitable does, stop and ask rather than writing one here.
   - `lean-telemetry` for tracing and metrics.
@@ -533,7 +533,7 @@ Unresolved unless the entry says otherwise. Each needs an answer before the affe
 
 - **18.2 Per-tenant sending domains.** Deferred, and AUTH-10.2 keeps the retrofit cheap. The sign-in half is answered: tenants sign in at one shared origin and AUTH-4.3.2 stands, because AUTH-6.2 carries the tenant in `state` and so one registered redirect URI serves every tenant however many there are. What is still undecided is sending, where a tenant's own domain is a question about deliverability and reputation rather than about routing. Should signing in at a per-tenant hostname ever be asked for, the OAuth callback needs a shared origin plus a cross-origin handoff credential, which is a real piece of machinery worth knowing about before it is needed.
 
-- **18.3 Passkeys.** Deferred, but they are the only phishing-resistant option and the likely next addition. Confirm that AUTH-4.4.2 is enough forward provision, or specify more.
+- **18.3 Passkeys.** Answered, in §22. AUTH-4.4.2 was not enough forward provision, and the shortfall was one level below where it was written: the credential type is an open set as promised, and the SQL table fans each variant out to its own columns, so a new kind needs a migration however open the model is. What that cost was a migration rather than a rewrite, which is the smaller half of what the requirement was guarding against.
 
 - **18.4 Enterprise SSO.** SAML and SCIM are out of scope but are what B2B buyers ask for. Tenant-scoped accounts make a per-tenant identity provider a natural fit later; confirm nothing else is needed now.
 
@@ -802,3 +802,49 @@ Each such copy restates invariants that belong here. The key length and its enco
 
 - **AUTH-21.6.1** The README MUST carry the workflow end to end, from minting a key to setting what the tool printed. The text form of AUTH-15.7.3.2 is unusable without it, and a client that cannot follow it will hold its provider secrets in clear instead.
 - **AUTH-21.6.2** Every decision MUST sit in a function the suite can call, leaving `main` to dispatch and nothing else. The binding, the parsing and the refusals are already testable in process, and none of them needs a shell to exercise (AUTH-16.5).
+
+---
+
+## 22. Passkeys (WebAuthn)
+
+Answered from §18.3 and built. This section records what was decided and why, since several of the decisions cannot be revisited once an authenticator holds a credential.
+
+### 22.1 Targets
+
+- **AUTH-22.1** The protocol and its routes MUST live in targets of their own, `AuthenticationPasskey` and `AuthenticationPasskeyHttp`, for the reason AUTH-6.11 gives for the federated ones: verifying a signature reaches OpenSSL, and `AuthenticationHttp` is what a client taking only the magic link flow mounts.
+- **AUTH-22.2** CBOR MUST come from a package of its own rather than a module here. The attestation object and the COSE key are CBOR, nothing else in this library reads any, and a deterministic decoder is useful to anything speaking COSE or CTAP. `cbor` holds it.
+- **AUTH-22.3** The domain model, the ceremony record and the decision over an assertion MUST sit in the core library, as §6's do: the storage backends implement the port against them and must not link OpenSSL to do it.
+
+### 22.2 What is not supported, and why not
+
+- **AUTH-22.4** Only ES256 MUST be verified. Another algorithm is refused by its identifier rather than attempted, because a key loaded under the wrong assumption about its shape verifies or fails for reasons nothing could explain. RS256 and EdDSA are each a small addition when something asks.
+- **AUTH-22.5** No attestation statement MAY be verified. Doing it properly needs the FIDO metadata service, which AUTH-16.5 forbids any committed test from reaching, and the formats that matter carry a certificate chain this library has no business validating. `none` is accepted and every other format is recorded and not acted on.
+- **AUTH-22.6** Only discoverable credentials MUST be registered, and `residentKey` MUST be required at registration. The alternative sends `allowCredentials` for a named address, which is an account enumeration oracle in a library whose §14.2 exists to close them; a discoverable credential means authentication takes no address at all.
+
+### 22.3 The relying party, and the user handle
+
+- **AUTH-22.7 (irreversible)** The relying party identifier MUST be per-tenant configuration and MUST NOT be derived from the base URL. WebAuthn admits the origin's host or any registrable suffix of it; which is wanted decides whether one credential works across subdomains, and every credential already registered is bound to whichever was chosen.
+- **AUTH-22.8** A tenant that has configured none MUST be refused rather than defaulted, as AUTH-15.7.4's `Option` rule requires: an identifier guessed here would be written into authenticators and could not be corrected.
+- **AUTH-22.9 (irreversible)** The user handle MUST be the account's own identifier. It is already opaque, drawn at random per account and never the address, which is what a handle has to be given that it is stored on the authenticator in clear and shown in account pickers. A second identifier would be a value obliged to agree with the account for ever.
+- **AUTH-22.10** An assertion offering a user handle MUST be refused unless it names the account the credential belongs to. One offering none says nothing, which is not a mismatch.
+
+### 22.4 The ceremony
+
+- **AUTH-22.11** A ceremony MUST be a stored record with expiry and single use enforced on read and consumption under compare and set, as AUTH-6.2's state record is. Two requests carrying one challenge produce one sign-in.
+- **AUTH-22.12** The challenge MUST be held as a digest under the pepper, unlike AUTH-6.2's verifier and nonce. It is never given back: the page receives it once and the browser echoes it, so it is only ever compared.
+- **AUTH-22.13** The cookie MUST carry the ceremony identifier and a binding nonce, as AUTH-5.2.5's attempt cookie does, so holding an identifier is not enough to be taken for the browser that began the ceremony. It MAY be `SameSite=Strict`, which the magic link cannot afford and this can: both halves are requests the application's own page makes.
+- **AUTH-22.14** A registration MUST take its account from the caller's session and carry it on the ceremony record, never from the request, which is AUTH-6.7.1 applied here.
+- **AUTH-22.15** The sign counter MUST be recorded and a regression MUST be audited rather than refused. A credential synced between devices reports zero from each, so refusing would turn the ordinary case into a lockout.
+
+### 22.5 Storage
+
+- **AUTH-22.16** This is the answer to §18.3. AUTH-4.4.2 holds for the credential type, where the descriptor really is an open set, and not one level down: the SQL table fans each variant out to its own columns, so a new kind needs a migration whatever the domain model says. The promise is "no rewrite of the type", not "no migration".
+- **AUTH-22.17** The passkey identifier MUST live on the credential's descriptor and nowhere else, uniquely per tenant. The key, the counter, the AAGUID, the transports, the backup flags and the label are attributes and MUST live beside it, not in the descriptor.
+- **AUTH-22.18** The credential and its attributes MUST be written in one operation. A credential row with no attributes holds no public key, so nothing could verify against it and nothing would say why; removing a credential MUST remove its attributes with it.
+
+### 22.6 The routes
+
+- **AUTH-22.19** The routes MUST answer JSON and MUST serve no page. `navigator.credentials` cannot be driven from markup, so a page here would mean shipping a script, and the script belongs to the application that knows what its sign-in looks like. This is the one place §17's rule against JavaScript cannot be met by meeting it.
+- **AUTH-22.20** Every `BufferSource` MUST travel as base64url, `clientDataJSON` included, so that a page encodes everything the same way.
+- **AUTH-22.21** The registration routes MUST read the account from the session cookie and nowhere else, which is their whole forgery defence: `SameSite=Lax` is not sent on a cross-site `POST`. The authentication routes MUST NOT require a session, and MUST NOT be mounted behind a guard that does.
+- **AUTH-22.22** Every refusal MUST answer with one body, with the reason reaching the operator and not the response, as AUTH-14.2.3 requires of the sign-in routes.

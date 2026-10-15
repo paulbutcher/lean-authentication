@@ -24,7 +24,9 @@ Closing it is a decision before it is code. The obvious shape is for the invitat
 
 ## The emailAddress credential has no writer (AUTH-4.4.2)
 
-`Credential.descriptor` has an `emailAddress` variant and nothing creates one. The magic link route identifies an account by its primary address rather than by a credential row, so the variant is forward provision rather than something in use; a passkey would be the first kind that changed that. The federated route does write its own rows, so the set is not empty, only narrower than the type allows.
+`Credential.descriptor` has an `emailAddress` variant and nothing creates one. The magic link route identifies an account by its primary address rather than by a credential row, so the variant is forward provision rather than something in use. The federated and passkey routes both write their own rows, so the set is not empty, only narrower than the type allows.
+
+Passkeys arriving did not change this, which is worth saying because it was expected to. A passkey is found by the handle on its descriptor, and a magic link is still found by the account's address, so the kind that would need an `emailAddress` row is one that proves an address by some means the library does not yet have.
 
 ## No committed test reaches an authenticator (§18.3, AUTH-16.5)
 

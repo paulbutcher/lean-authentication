@@ -2,6 +2,7 @@
 
 - Passwordless authentication for Lean 4 web applications: magic links with a cross-device verification code, per-tenant signup policy, invitations, sessions, bounce handling, and consent records.
 - Federated sign-in with OpenID Connect providers, plus Apple and GitHub.
+- Passkeys: WebAuthn registration and sign-in, discoverable credentials only.
 - An OAuth 2.1 authorisation server.
 
 This library handles authentication only, not roles or permissions or any other form of authorisation.
@@ -29,6 +30,8 @@ Each target is a separate `lean_lib`. Depend only on what you use.
 | `AuthenticationFetch` | Outbound document fetch, with the rules that make one safe |
 | `AuthenticationOidc` | Federated sign-in: OpenID Connect, Apple, and non-OIDC providers (needs OpenSSL) |
 | `AuthenticationOidcHttp` | Ready-made federated sign-in routes |
+| `AuthenticationPasskey` | Passkeys: WebAuthn verification (needs OpenSSL) |
+| `AuthenticationPasskeyHttp` | Ready-made passkey routes, answering JSON |
 
 ## The flow
 
@@ -358,6 +361,55 @@ Three things remain yours:
 - **Apply the migrations.** Federated sign-in adds three, and the library never applies them (see Schema below).
 - **Seal the secrets**, and keep the sealing key somewhere other than the database it protects.
 
+## Passkeys
+
+A passkey is the only phishing-resistant way in this library offers: the browser binds the signature to the origin, so there is no code for anybody to be talked into typing somewhere else. It raises the ceiling on an account's security rather than its floor, though, because an account recoverable by magic link is only as strong as its mailbox. Setting `originPolicy` is what turns that around.
+
+Two targets, because verifying a signature links OpenSSL and the magic link routes must not: `AuthenticationPasskey` speaks WebAuthn, `AuthenticationPasskeyHttp` serves it.
+
+### Wiring
+
+The relying party is configuration and is never derived from the base URL. WebAuthn admits the origin's host or any registrable suffix of it, which of those you want decides whether one credential works across your subdomains, and **every credential already registered is bound to whichever you chose**. A tenant that names none offers no passkeys, and the ceremonies refuse rather than guessing.
+
+```lean
+passkeyRelyingParty := some
+  { id := "example.com"                      -- or "app.example.com", and not changeable after
+    origins := ["https://app.example.com"] }
+```
+
+```lean
+def passkeyRoutes (ports : Service.Ports IO) : Std.Http.Server.StatelessHandler :=
+  PasskeyHttp.handler
+    { ports
+      verifier := Passkey.verifier
+      tenant := fun t => pure (some (config t)) }
+```
+
+| Path | Method |
+| --- | --- |
+| `/t/<tenant>/passkey/register` | `POST`, begins a registration for the session's account |
+| `/t/<tenant>/passkey/register/complete` | `POST`, the authenticator's answer |
+| `/t/<tenant>/passkey/signin` | `POST`, begins a sign-in |
+| `/t/<tenant>/passkey/signin/complete` | `POST`, the assertion |
+
+### The script is yours
+
+These routes answer JSON and serve no page. `navigator.credentials` cannot be driven from markup, so a page here would mean this library shipping JavaScript; what it ships instead is the values a ceremony needs. Every `BufferSource` travels as base64url, `clientDataJSON` included, so your glue encodes everything the same way.
+
+The two registration routes read the account from the session cookie and nowhere else, which is their whole forgery defence: a cross-site `POST` carries no `SameSite=Lax` cookie, so a request provoked from another site arrives signed in as nobody. The two sign-in routes take no session and must not be mounted behind a guard that wants one.
+
+### What is and is not checked
+
+ES256 only; another algorithm is refused by its identifier rather than attempted. Discoverable credentials only, so a sign-in takes no address and there is nothing to enumerate. No attestation statement is verified: `none` is accepted and every other format is recorded and not acted on, because verifying one properly needs the FIDO metadata service.
+
+A signature counter that does not advance is audited and not refused. A passkey synced between devices reports zero from each, so refusing would turn the ordinary case into a lockout.
+
+```lean
+Service.passkeys ports account              -- what the account holder is shown
+Service.renamePasskey ports account id label
+Service.unlinkIdentity ports config account id  -- removal, refusing the last way in
+```
+
 ## Authorisation server
 
 `AuthenticationOAuth` is the other direction from signing in with somebody else's provider: it is the provider that somebody else's client gets tokens from. It implements the MCP authorization specification of 2026-07-28 and the OAuth 2.1 subset that one selects, which is `authorization_code` with PKCE `S256`, refresh tokens rotated on every use, and public clients only.
@@ -498,11 +550,12 @@ The `From` domain needs all of these before mail is delivered rather than filed:
 - **Provider callbacks are verified inside the endpoint**, before the payload is read. The SNS certificate is fetched only from a recognised host, decided before the fetch, and the topic is checked.
 - **`returnTo` is validated** against the tenant's allowlist before any redirect. It travels as a URI reference in its encoded form: a caller with a target whose own query holds encoded values encodes the whole reference once for the form field, and what reaches the browser is that reference, escaped only where a header value could not otherwise hold it.
 - **The audit log and the consent history are append only.** The port offers no update or delete.
+- **A passkey signs in the account its own credential belongs to**, and only where the user handle the authenticator offered names that account or is absent. A theorem, and the biconditional form of it: nothing reaches a sign-in that is not one of those two cases.
 - **An authorization code is redeemed at most once**, a refresh token rotated at most once, and either presented twice revokes everything its grant issued. Both are theorems about the state and compare-and-set in the store.
 - **A token's audience is the `resource` its request named**, and its scopes are a subset of what was consented to. Both are theorems, and verification refuses a token presented anywhere else.
 - **A redirect URI is compared as a string**, with the port ignored for loopback URIs and for nothing else. That the exception admits no other host is a theorem.
 
-`REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls short of it. Inbound email, passkeys and SAML are not implemented, the authorisation server issues no ID tokens, and no committed test reaches a provider or an external service.
+`REQUIREMENTS.md` is the specification; `KNOWN_ISSUES.md` records where the implementation falls short of it. Inbound email and SAML are not implemented, the authorisation server issues no ID tokens, and no committed test reaches a provider or an external service.
 
 ## Building
 

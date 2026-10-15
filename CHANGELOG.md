@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+- Passkeys: WebAuthn registration and sign-in over discoverable credentials, in `AuthenticationPasskey` and `AuthenticationPasskeyHttp`, answering §18.3 (§22).
+- `TenantConfig.originPolicy` says which kinds of credential may originate a session, so a tenant enforcing SSO can stop the magic link being a way around it (AUTH-9.9).
+- `Service.unlinkIdentity` takes the tenant config, and counts the magic link as a way in only where the origin policy admits it (AUTH-6.8).
+- Audit records naming `address-not-verified` read back as themselves rather than as a malformed address.
+
 ## [0.16.5] - 2026-09-15
 
 - `auth-seal`, an executable that mints a sealing key, seals a provider secret under a `SecretRef`, and says whether a configured value still opens, so that a deployment no longer writes that tool for itself (§21); `SecretField.parse` reads the field names back.
