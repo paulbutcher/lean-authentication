@@ -26,6 +26,16 @@ Closing it is a decision before it is code. The obvious shape is for the invitat
 
 `Credential.descriptor` has an `emailAddress` variant and nothing creates one. The magic link route identifies an account by its primary address rather than by a credential row, so the variant is forward provision rather than something in use; a passkey would be the first kind that changed that. The federated route does write its own rows, so the set is not empty, only narrower than the type allows.
 
+## No committed test reaches an authenticator (§18.3, AUTH-16.5)
+
+The passkey verification is exercised against two fixtures, and between them they leave one thing open.
+
+`test/Tests/Fixtures/PyWebauthn.lean` is an attestation object captured from a real authenticator, redistributed from py_webauthn. It settles the part most likely to be wrong by an off-by-one: that the relying party hash, the flags, the counter, the AAGUID, the two-byte credential id length and the COSE key are where this library looks for them. The hash in it is `SHA-256("localhost")`, which is checked rather than assumed, so the offsets are confirmed against bytes a device produced. What it cannot do is verify a signature, because nobody has the private key that made it.
+
+`test/fixtures/passkey-assertion.json` settles the other half. Its `authenticatorData` is laid out by `make-passkey-fixtures.sh` from the specification's offsets and its signature is made by `openssl`, so a verification that succeeds is not this library agreeing with itself. What it cannot do is tell us a real device lays its assertion out that way, since the script was written from the same reading of the specification the parser was.
+
+So the registration path has met a real authenticator and the assertion path has not. Closing it needs a capture of a full ceremony, challenge and origin and signature together, which means driving a virtual authenticator over the DevTools protocol and committing what comes back. The first live sign-in is the test until then, and it is worth watching for.
+
 ## No committed test makes an HTTP request (AUTH-16.5)
 
 `Authentication.Postmark.curlHttp` and `Authentication.Ses.curlHttp` are the only parts of the outbound transports the suite never runs. Everything above it is covered: the payload built, the responses interpreted, and the flow from `begin` through the template into the request. What is not covered is leancurl itself, and so whether the payload leaves this process intact.

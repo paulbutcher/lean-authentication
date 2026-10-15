@@ -13,11 +13,19 @@ package «authentication-test» where
     ⟨`relaxedAutoImplicit, false⟩,
     ⟨`warningAsError, true⟩]
 
+/-- The fixtures the tests embed with `include_str`. Declared as an input so that regenerating one
+rebuilds the module reading it: Lake traces a module by its own content, so without this the old
+bytes stay compiled in and a regenerated fixture is silently not used. -/
+input_dir fixtures where
+  path := "fixtures"
+  text := true
+
 /-- Claiming the whole `Tests` namespace is safe here because nothing depends on this package,
 and it means a test file that nothing imports is still compiled. -/
 @[default_target]
 lean_lib Tests where
   globs := #[`Tests.*]
+  needs := #[fixtures]
 
 @[default_target, test_driver]
 lean_exe tests where

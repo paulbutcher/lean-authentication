@@ -7,12 +7,13 @@
 # The point of signing here rather than in Lean is that nothing in that library can sign. A
 # fixture the verifier's own code produced would prove only that it agrees with itself.
 #
-# Two things will waste an afternoon if forgotten:
+# One thing will waste an afternoon if forgotten: the canonical string ends in a newline, and
+# `$(...)` strips trailing newlines, so it must reach openssl through a file rather than a shell
+# variable.
 #
-#   - The canonical string ends in a newline, and `$(...)` strips trailing newlines, so it must
-#     reach openssl through a file rather than a shell variable.
-#   - Lake does not track `include_str` inputs, so a test reading these will keep its old copy
-#     until something else in that module changes. Touch the test file after regenerating.
+# Regenerating is enough on its own: `test/lakefile.lean` declares this directory as a Lake input,
+# so a module embedding one of these rebuilds when it changes. Touching the Lean file would not
+# have worked anyway, because Lake traces content rather than modification times.
 #
 set -euo pipefail
 out="$1"

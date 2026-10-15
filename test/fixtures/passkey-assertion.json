@@ -1,0 +1,9 @@
+{
+  "relyingPartyId": "passkey.example.test",
+  "origin": "https://passkey.example.test",
+  "challenge": "dGVzdC1jaGFsbGVuZ2UtdmFsdWU",
+  "authenticatorData": "97OLjJtHFNe1fMsf3-RmNcJGvo71HAeI_uBwyCwK2IsBAAAAAQ",
+  "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiZEdWemRDMWphR0ZzYkdWdVoyVXRkbUZzZFdVIiwib3JpZ2luIjoiaHR0cHM6Ly9wYXNza2V5LmV4YW1wbGUudGVzdCIsImNyb3NzT3JpZ2luIjpmYWxzZX0",
+  "signature": "MEUCIFJOR_gT66VpGHKE90hBCZli6_cPg6It6c6Hoyssx9u2AiEAzagHMOuLTxidykzqrLbDtCOSm4KbDMYfTNpqsU0iW6A",
+  "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEFogeGsSCqp00SLlDAN1IHWcXmU5rMPdyjApvAKsx55YGODDdJngo4_oCJyjyR_n-j1RYub5cBqQQn7cz1l9UpA"
+}
