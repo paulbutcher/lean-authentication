@@ -80,11 +80,26 @@ lean_lib Authentication where
 @[default_target]
 lean_lib AuthenticationSql
 
-@[default_target]
-lean_lib AuthenticationSqlite
+/-
+The schema each backend embeds with `include_str`. Declared as inputs so that editing a migration
+rebuilds the module that embeds it: Lake traces a module by its own content, so without this the
+old SQL stays compiled in and a changed migration is silently not applied.
+-/
+input_dir sqliteMigrations where
+  path := "migrations/sqlite"
+  text := true
+
+input_dir postgresMigrations where
+  path := "migrations/postgres"
+  text := true
 
 @[default_target]
-lean_lib AuthenticationPostgres
+lean_lib AuthenticationSqlite where
+  needs := #[sqliteMigrations]
+
+@[default_target]
+lean_lib AuthenticationPostgres where
+  needs := #[postgresMigrations]
 
 @[default_target]
 lean_lib AuthenticationPostmark

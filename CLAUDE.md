@@ -10,6 +10,13 @@ Guidance for Claude Code, and any other coding agent, working in this repo. Cont
 - Before considering a task complete, run `lake build` and `lake test` from the repo root as the final ground truth.
 - All Lean code must compile without warnings; the build treats warnings as errors.
 
+## Migrations
+
+- A new pair goes in `migrations/{sqlite,postgres}`, is appended to `createSchemaSql` in both backends, and is added to the newest-first list in `test/Tests/Migrations.lean`. Miss the last and nothing ever runs the down file.
+- Every statement in a Postgres up-migration must be idempotent, `ADD COLUMN IF NOT EXISTS` included: the suite applies the schema once per Postgres entry point against a database that persists. SQLite has no such syntax and needs none, because its schema is applied to a fresh in-memory database.
+- A down file must undo column additions as well as dropping what it created, because the test applies the schema again afterwards.
+- Never change a migration that has shipped. A consumer who has applied it will not apply it again, so their schema and the file diverge in silence.
+
 ## Commenting
 
 - Only add a comment which says something the source does not already say. This includes file and function headers: omit them unless they earn their place.
