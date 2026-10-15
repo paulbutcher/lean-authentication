@@ -9,3 +9,4 @@ public import AuthenticationPasskey.Ceremony
 public import AuthenticationPasskey.ClientData
 public import AuthenticationPasskey.Cose
 public import AuthenticationPasskey.Error
+public import AuthenticationPasskey.Service

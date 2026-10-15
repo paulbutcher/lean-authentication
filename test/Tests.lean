@@ -24,6 +24,7 @@ import Tests.Oidc
 import Tests.OidcHttp
 import Tests.Passkey
 import Tests.PasskeyCeremony
+import Tests.PasskeyFlow
 import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres

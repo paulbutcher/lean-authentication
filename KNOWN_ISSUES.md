@@ -6,11 +6,11 @@ Deliberate limitations of the current implementation, with the reasoning behind 
 
 Federated sign-in is exercised against stubs, and the ID tokens in the suite are real ones signed by a real key. Google, Apple and GitHub have all be tested live in [TodoMVC Max](https://github.com/paulbutcher/lean-todomvc-max).
 
-## Unlinking refuses only when the address is suppressed (AUTH-6.8)
+## Unlinking counts the magic link as a way in unless two conditions say otherwise (AUTH-6.8)
 
-`Service.unlinkIdentity` counts the account's other credentials and the magic link to its primary address. Every account has a primary address, so the link is a way in unless mail to it has been suppressed, and that is the only condition under which the refusal fires. It is a real condition rather than a contrived one, and there is a test for it, but a deployment expecting to be stopped from unlinking a sole provider identity will not be.
+`Service.unlinkIdentity` counts the account's other credentials and the magic link to its primary address. Every account has a primary address, so the refusal fires only where that link is not available: where the tenant's `originPolicy` does not admit `emailAddress` at all, or where mail to the address has been suppressed. Both are real conditions and both are tested, but a deployment on the defaults, expecting to be stopped from unlinking a sole provider identity or a sole passkey, will not be.
 
-What would widen it is a tenant able to turn the magic link off, which nothing offers today. Until then an account can always be recovered through its address, which is the thing AUTH-6.8 exists to guarantee.
+That is the honest shape of AUTH-6.8 rather than a shortfall against it: on a tenant that admits the magic link, the address really is a way in, and refusing the unlink would be refusing on a hazard that does not exist. What a deployment wanting the stricter rule does is set the origin policy, which is also what makes a passkey the floor of an account's security rather than its ceiling.
 
 ## An invite-only tenant that enforces SSO has no way in (AUTH-8.6)
 

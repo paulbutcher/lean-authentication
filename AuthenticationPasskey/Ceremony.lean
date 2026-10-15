@@ -26,14 +26,6 @@ def fmtKey : Cbor.Key := .ofText "fmt"
 def attStmtKey : Cbor.Key := .ofText "attStmt"
 def authDataKey : Cbor.Key := .ofText "authData"
 
-/-- Where the relying party's identity is checked from. The id is the registrable domain a
-credential is bound to; the origins are what a browser may report having run the ceremony on, and
-they are a list because one tenant may answer on more than one. -/
-structure RelyingParty where
-  id : String
-  origins : List String
-  deriving DecidableEq, Repr, Inhabited
-
 /-- What a registration yields, less the parts only the client knows: a label for the credential
 and the transports the browser reported. -/
 structure RegisteredPasskey where
@@ -94,16 +86,17 @@ private def checkAuthData (data : AuthData) (party : RelyingParty) :
 /--
 A registration, decided in full.
 
-`attestationObject` and `clientDataJson` are what the browser returned, and `challenge` the value
-the ceremony was minted with, encoded as it was sent to the page.
+`attestationObject` and `clientDataJson` are what the browser returned, and `challengeAccepts` is
+the ceremony's own test of the challenge the browser echoed.
 -/
-def verifyRegistration (attestationObject : ByteArray) (clientDataJson challenge : String)
-    (party : RelyingParty) : Except PasskeyError RegisteredPasskey := do
+def verifyRegistration (attestationObject : ByteArray) (clientDataJson : String)
+    (challengeAccepts : String → Bool) (party : RelyingParty) :
+    Except PasskeyError RegisteredPasskey := do
   let (format, authDataBytes) ← attestationAuthData attestationObject
   let data ← AuthData.parse authDataBytes
   let _ ← checkAuthData data party
   let clientData ← ClientData.parse clientDataJson
-  let _ ← clientData.check .registration challenge party.origins
+  let _ ← clientData.check .registration challengeAccepts party.origins
   match data.attested with
   | none => .error .noAttestedCredential
   | some attested => do
@@ -127,37 +120,63 @@ pure function, leaving only the key operation in `IO`. The signing input is `aut
 followed by the hash of the client data, which is what the authenticator signed and what nothing
 may reassemble differently.
 -/
-def checkAssertion (authDataBytes : ByteArray) (clientDataJson challenge : String)
-    (party : RelyingParty) : Except PasskeyError (VerifiedAssertion × ByteArray) := do
+def checkAssertion (authDataBytes : ByteArray) (clientDataJson : String)
+    (challengeAccepts : String → Bool) (party : RelyingParty) :
+    Except PasskeyError (VerifiedAssertion × ByteArray) := do
   let data ← AuthData.parse authDataBytes
   let _ ← checkAuthData data party
   let clientData ← ClientData.parse clientDataJson
-  let _ ← clientData.check .authentication challenge party.origins
+  let _ ← clientData.check .authentication challengeAccepts party.origins
   pure
     ({ signCount := data.signCount
        userVerified := data.flags.userVerified
        backupState := data.flags.backupState },
       authDataBytes ++ Leancrypto.Sha256.hash clientDataJson.toUTF8)
 
+/-- `publicKey` is the `SubjectPublicKeyInfo` stored at registration, and `signature` the DER
+`SEQUENCE` the authenticator produced. A key that will not load is held apart from a signature
+that will not verify: the first is a stored key that is not a key, the second is the refusal this
+whole exercise exists to make. -/
+def verifySignature (publicKey signingInput signature : ByteArray) :
+    IO (Except PasskeyError Unit) := do
+  match ← Libcrypto.Evp.PKey.fromSpki publicKey with
+  | none => pure (.error .keyRejected)
+  | some key =>
+    if ← Libcrypto.Sign.verify (.ecdsa .sha256) key signingInput signature then pure (.ok ())
+    else pure (.error .signatureInvalid)
+
 /--
 An assertion, signature included.
 
-`publicKey` is the `SubjectPublicKeyInfo` stored at registration, and `signature` the DER
-`SEQUENCE` the authenticator produced, which is the encoding OpenSSL reads without conversion.
+A convenience over `checkAssertion` and `verifySignature` for a caller driving one ceremony
+directly rather than through the service.
 -/
-def verifyAssertion (authDataBytes : ByteArray) (clientDataJson challenge : String)
-    (party : RelyingParty) (publicKey signature : ByteArray) :
+def verifyAssertion (authDataBytes : ByteArray) (clientDataJson : String)
+    (challengeAccepts : String → Bool) (party : RelyingParty) (publicKey signature : ByteArray) :
     IO (Except PasskeyError VerifiedAssertion) := do
-  match checkAssertion authDataBytes clientDataJson challenge party with
+  match checkAssertion authDataBytes clientDataJson challengeAccepts party with
   | .error error => pure (.error error)
   | .ok (verified, signingInput) =>
-    match ← Libcrypto.Evp.PKey.fromSpki publicKey with
-    | none => pure (.error .keyRejected)
-    | some key =>
-      if ← Libcrypto.Sign.verify (.ecdsa .sha256) key signingInput signature then
-        pure (.ok verified)
-      else pure (.error .signatureInvalid)
+    match ← verifySignature publicKey signingInput signature with
+    | .error error => pure (.error error)
+    | .ok () => pure (.ok verified)
 
 end Ceremony
+
+/-- The one operation a passkey needs a key for, as a port: the service above it is generic in its
+monad, as the rest of this library's services are, and loading a key is not. A deployment with its
+own provider supplies its own; `Passkey.verifier` is the shipped one. -/
+structure Verifier (m : Type → Type) where
+  verify : (algorithm : CoseAlgorithm) → (publicKey signingInput signature : ByteArray) →
+    m (Except PasskeyError Unit)
+
+/-- ES256 through OpenSSL. The signature goes in as the authenticator produced it, a DER
+`SEQUENCE`, which is the encoding OpenSSL reads; the raw `R‖S` conversion JOSE needs is not
+wanted here. -/
+def verifier : Verifier IO where
+  verify algorithm publicKey signingInput signature :=
+    if algorithm.value != Cose.es256Algorithm then
+      pure (.error (.unsupportedAlgorithm algorithm.value))
+    else Ceremony.verifySignature publicKey signingInput signature
 
 end Authentication.Passkey

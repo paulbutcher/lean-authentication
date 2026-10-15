@@ -17,7 +17,7 @@ def main : IO UInt32 := do
     ++ Tests.Template.checks ++ (← Tests.Signup.checks)
     ++ (← Tests.Signup.invitationChecks) ++ (← Tests.Signup.existingAccountChecks)
     ++ (← Tests.Signup.originChecks)
-    ++ (← Tests.PasskeyCeremony.checks)
+    ++ (← Tests.PasskeyCeremony.checks) ++ (← Tests.PasskeyFlow.checks)
     ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ Tests.Ses.checks ++ (← Tests.RateLimit.checks)
     ++ (← Tests.RateLimit.serviceChecks) ++ (← Tests.RateLimit.floorChecks)
     ++ (← Tests.Session.checks) ++ (← Tests.Session.cookiePathChecks)

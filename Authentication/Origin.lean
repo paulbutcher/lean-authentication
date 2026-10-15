@@ -27,6 +27,11 @@ inductive SessionOrigin (tenant : TenantId) where
   /-- A provider asserted it. `addressVerified` is the provider's own word for whether it has
   checked the address, and is the single fact AUTH-6.7 turns on. -/
   | federated (identity : FederatedIdentity) (addressVerified : Bool)
+  /-- The handle whose signature proved it, as the authenticator gave it back. The account is read
+  from this and never from the address beside it, because an assertion names no address: a
+  discoverable credential is offered in place of one, so the address on the subject is the
+  account's own and decides nothing. -/
+  | passkey (credential : PasskeyId)
   deriving DecidableEq, Repr
 
 /-- Which kind of credential proved the address, which is what `OriginPolicy` is stated over. A
@@ -34,6 +39,7 @@ magic link proves control of the address itself, so it answers with the kind the
 def SessionOrigin.credentialKind {tenant : TenantId} : SessionOrigin tenant → CredentialKind
   | .magicLink _ => .emailAddress
   | .federated _ _ => .federatedIdentity
+  | .passkey _ => .passkey
 
 structure SessionSubject (tenant : TenantId) where
   origin : SessionOrigin tenant

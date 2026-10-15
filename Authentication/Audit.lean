@@ -69,6 +69,11 @@ inductive AuditEvent (tenant : TenantId) where
   subject. -/
   | identityLinked (account : AccountId tenant) (origin : String)
   | identityUnlinked (account : AccountId tenant) (origin : String)
+  /-- A passkey asserted a signature counter no higher than the one it last reported, which is
+  what a cloned authenticator would look like. Recorded and not refused: a credential synced
+  between devices reports zero from each, so refusing would turn the ordinary case into a
+  lockout. The counter is the one presented, because the stored one is in the credential. -/
+  | passkeyCounterRegressed (account : AccountId tenant) (presented : UInt32)
   deriving DecidableEq, Repr
 
 /-- Append-only (AUTH-15.4.5). The actor is whatever the client said it was; the library

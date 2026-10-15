@@ -70,18 +70,16 @@ def parse (text : String) : Except PasskeyError ClientData :=
 /--
 Whether this client data belongs to the ceremony that was begun.
 
-`challenge` is the value the ceremony was minted with, encoded as it was sent to the page, and
-`origins` the origins this tenant answers on. The challenge is compared here rather than digested
-because the caller holds the minted value; the stored digest is what the ceremony record is found
-by, and the two are checked in different places on purpose.
+`challengeAccepts` decides the challenge and `origins` are the origins this tenant answers on. The
+challenge arrives as a predicate rather than as a value because a ceremony record holds only its
+digest: digesting the echoed value needs the pepper, which lives at the edge, so the edge supplies
+the comparison and nothing here can be given the challenge in clear. Taking it as an argument also
+means this cannot return without having asked.
 -/
-def check (data : ClientData) (kind : PasskeyCeremonyKind) (challenge : String)
+def check (data : ClientData) (kind : PasskeyCeremonyKind) (challengeAccepts : String → Bool)
     (origins : List String) : Except PasskeyError Unit := do
   if data.type != clientDataType kind then .error .wrongCeremonyType
-  -- `bytesEqual` and not `==`, which stops at the first differing byte and so reports how long a
-  -- correct prefix a guess had (AUTH-5.3.4 asks the same of every credential comparison).
-  else if !Leancrypto.bytesEqual data.challenge.toUTF8 challenge.toUTF8 then
-    .error .challengeMismatch
+  else if !challengeAccepts data.challenge then .error .challengeMismatch
   else if !origins.contains data.origin then .error .originNotAllowed
   else if data.crossOrigin then .error .crossOrigin
   else .ok ()

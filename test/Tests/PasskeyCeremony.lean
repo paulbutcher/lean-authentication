@@ -55,6 +55,7 @@ private def coseKeyOf (x y : ByteArray) : Cbor.Value :=
 private def flagsUserPresent : UInt8 := 0x01
 
 def checks : IO (List (String × Bool)) := do
+  let accepts := fun (echoed : String) => echoed == challenge
   let key ← Libcrypto.Evp.PKey.generate "EC" #[⟨"group", .utf8 "P-256"⟩]
   let spki ← key.toSpki
   let (x, y) := coordinatesOf spki
@@ -69,21 +70,21 @@ def checks : IO (List (String × Bool)) := do
   let signingInput := authData ++ Leancrypto.Sha256.hash assertionClientData.toUTF8
   let signature ← Libcrypto.Sign.sign (.ecdsa .sha256) key signingInput
 
-  let accepted ← Ceremony.verifyAssertion authData assertionClientData challenge party
+  let accepted ← Ceremony.verifyAssertion authData assertionClientData accepts party
     spki signature
   -- The same assertion against a counter the authenticator did not report, which changes the
   -- signing input and must not verify.
   let tampered ← Ceremony.verifyAssertion (assertionAuthData flagsUserPresent 8)
-    assertionClientData challenge party spki signature
-  let wrongChallenge ← Ceremony.verifyAssertion authData assertionClientData "other" party
+    assertionClientData accepts party spki signature
+  let wrongChallenge ← Ceremony.verifyAssertion authData assertionClientData (· == "other") party
     spki signature
   let wrongOrigin ← Ceremony.verifyAssertion authData
-    (clientDataFor assertionType "https://attacker.test" challenge) challenge party spki signature
+    (clientDataFor assertionType "https://attacker.test" challenge) accepts party spki signature
   let wrongCeremony ← Ceremony.verifyAssertion authData
-    (clientDataFor registrationType "https://example.com" challenge) challenge party spki signature
-  let wrongParty ← Ceremony.verifyAssertion authData assertionClientData challenge
+    (clientDataFor registrationType "https://example.com" challenge) accepts party spki signature
+  let wrongParty ← Ceremony.verifyAssertion authData assertionClientData accepts
     { party with id := "other.test" } spki signature
-  let noGesture ← Ceremony.verifyAssertion (assertionAuthData 0 7) assertionClientData challenge
+  let noGesture ← Ceremony.verifyAssertion (assertionAuthData 0 7) assertionClientData accepts
     party spki signature
 
   let refusedAs (expected : PasskeyError) (result : Except PasskeyError VerifiedAssertion) : Bool :=

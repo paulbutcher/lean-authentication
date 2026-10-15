@@ -301,6 +301,19 @@ private def resolveFederated {m : Type → Type} [Monad m] [RandomBytes m] {tena
         pure created
       | none => pure created
 
+/-- A passkey resolves to whichever account its credential belongs to, and never creates one: an
+assertion carries no address, so there is nothing a signup policy could be evaluated against. The
+credential is read again here rather than trusted from the subject, so the account signed in is
+the one the store says owns it. -/
+private def resolvePasskey {m : Type → Type} [Monad m] (ports : Ports m) (tenant : TenantId)
+    (passkey : PasskeyId) : m (Resolved tenant) := do
+  match ← ports.store.credentialByPasskey tenant passkey with
+  | none => pure (none, none, none)
+  | some found =>
+    match ← ports.store.accountById tenant found.account with
+    | none => pure (none, none, none)
+    | some existing => pure (signInExisting existing)
+
 private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
     (subject : SessionSubject tenant) : m (Issued tenant) := do
@@ -320,6 +333,7 @@ private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
     | .magicLink _ => resolveEmail ports config now subject.address grant
     | .federated identity addressVerified =>
       resolveFederated ports config now subject.address identity addressVerified grant
+    | .passkey passkey => resolvePasskey ports tenant passkey
   match accountId with
   | none =>
     -- The true reason is recorded whatever the person is shown (AUTH-7.7).
@@ -913,28 +927,31 @@ inductive UnlinkRefusal where
 Removes a linked identity, and refuses when it is the last way the account has in (AUTH-6.8).
 
 What counts as a way in is every other credential, and the magic link to the account's primary
-address. The address counts only while mail to it is not suppressed: an account whose mailbox has
-hard-bounced is one `deliver` will refuse to send to (AUTH-12.3), so a link to it is not a way in
-however available the route looks.
+address. The link counts only where the tenant's origin policy admits it at all, and only while
+mail to the address is not suppressed: an account whose mailbox has hard-bounced is one `deliver`
+will refuse to send to (AUTH-12.3), so a link to it is not a way in however available the route
+looks.
 
-That is what makes this refusal reachable rather than decorative. Every account has a primary
-address, so without the suppression test the count could never reach zero and the requirement
-would be satisfied by a check that never fired.
+Either condition alone makes the refusal reachable rather than decorative. Every account has a
+primary address, so a check that assumed the link were always available could never reach zero and
+would satisfy the requirement while never firing.
 -/
 def unlinkIdentity {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
-    (account : AccountId tenant) (credential : CredentialId tenant) :
-    m (Except UnlinkRefusal Unit) := do
+    (config : TenantConfig tenant) (account : AccountId tenant)
+    (credential : CredentialId tenant) : m (Except UnlinkRefusal Unit) := do
   let held ← ports.store.credentialsForAccount tenant account
   match held.find? (·.id == credential) with
   | none => pure (.error .notThisAccount)
   | some removed =>
     let remaining := held.filter (·.id != credential)
-    let mailable ← match ← ports.store.accountById tenant account with
-      | none => pure false
-      | some existing =>
-        match ← ports.store.deliveryRecord tenant existing.identity with
-        | some record => pure !record.suppressed
-        | none => pure true
+    let mailable ←
+      if !config.originPolicy.permits .emailAddress then pure false
+      else match ← ports.store.accountById tenant account with
+        | none => pure false
+        | some existing =>
+          match ← ports.store.deliveryRecord tenant existing.identity with
+          | some record => pure !record.suppressed
+          | none => pure true
     if remaining.isEmpty && !mailable then pure (.error .lastWayIn)
     else do
       let now ← Clock.now
@@ -948,6 +965,25 @@ for credentials rather than sessions). -/
 def linkedIdentities {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
     (account : AccountId tenant) : m (List (Credential tenant)) :=
   ports.store.credentialsForAccount tenant account
+
+/-- The passkeys on an account, as the account holder is shown them: a label they chose, when it
+was registered, and whether it can outlive the device holding it. Removing one is
+`unlinkIdentity`, which counts it among the ways in like any other credential. -/
+def passkeys {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) : m (List (PasskeyRegistration tenant)) :=
+  ports.store.passkeysForAccount tenant account
+
+/-- Renames one of an account's passkeys, and refuses a credential that is not its own. The
+account is checked here rather than trusted, for the reason `unlinkIdentity` checks it: a client
+passing an identifier through from a request would otherwise rename somebody else's. -/
+def renamePasskey {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) (credential : CredentialId tenant) (label : String) :
+    m Bool := do
+  let held ← ports.store.credentialsForAccount tenant account
+  if (held.find? fun c => c.id == credential && c.descriptor.kind == .passkey).isSome then
+    ports.store.setPasskeyLabel tenant credential label
+    pure true
+  else pure false
 
 /-- Every session the account has, which is what AUTH-9.6 requires on the occasions
 `RevocationReason` names, and what "sign out everywhere" is. -/

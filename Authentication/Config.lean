@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 -/
 module
 
+public import Authentication.Passkey
 public import Authentication.Policy
 public import Authentication.Secrets
 public import Authentication.Template
@@ -108,6 +109,19 @@ def forAttempt (base : BaseUrl) (tenant : TenantId) (value : String) (expiresAt 
     secure := base.secureCookies
     httpOnly := true
     sameSite := .lax }
+
+/-- `Strict` rather than `Lax`, which is what a passkey ceremony can afford and the magic link
+cannot: both halves are requests this application's own page makes, so no cookie here has to
+survive arriving from somewhere else. -/
+def forPasskeyCeremony (base : BaseUrl) (tenant : TenantId) (value : String)
+    (expiresAt : Timestamp) : CookieSpec :=
+  { name := "auth_passkey"
+    value
+    path := BaseUrl.tenantPath tenant
+    expiresAt
+    secure := base.secureCookies
+    httpOnly := true
+    sameSite := .strict }
 
 /-- The attributes AUTH-9.2 fixes, fixed here for the same reason `forAttempt` fixes its own: no
 caller can weaken them because no caller supplies them. The path is supplied, because an
@@ -227,6 +241,11 @@ structure TenantConfig (tenant : TenantId) where
   /-- Which means of proving an address may issue a session. The default admits every one, so a
   tenant that has not spoken keeps all the routes it had. -/
   originPolicy : OriginPolicy := .any
+  /-- The relying party passkeys on this tenant are bound to. Absent means the tenant offers no
+  passkeys, and the ceremonies refuse rather than deriving an identifier: one guessed from the
+  base URL would be wrong for a deployment wanting credentials across subdomains, and it cannot
+  be corrected once an authenticator holds it. -/
+  passkeyRelyingParty : Option RelyingParty := none
   attemptLifetime : AttemptLifetime := .standard
   maxCodeEntries : Nat := 5
   emailedCodeEnabled : Bool := false

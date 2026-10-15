@@ -23,6 +23,20 @@ public section
 
 namespace Authentication
 
+/--
+What a passkey is bound to, and the one thing about passkeys that cannot be changed afterwards.
+
+`id` is the relying party identifier a credential is scoped to, and `origins` the origins a
+browser may report having run a ceremony on. The id is configured rather than derived from the
+base URL: WebAuthn admits the origin's host or any registrable suffix of it, which of those is
+wanted decides whether one credential works across subdomains, and every credential already
+registered is bound to whichever was chosen.
+-/
+structure RelyingParty where
+  id : String
+  origins : List String
+  deriving DecidableEq, Repr, Inhabited
+
 /-- Which ceremony a record was minted for. The two are not interchangeable: a challenge issued
 to register must not complete an authentication, or a credential enrolled against one account
 could be offered as proof of another. -/

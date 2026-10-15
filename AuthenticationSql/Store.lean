@@ -182,6 +182,8 @@ private def auditColumns {tenant : TenantId} : AuditEvent tenant → String × S
   | .consentWithdrawn account subject => ("consent-withdrawn", account.value, subject.name)
   | .identityLinked account origin => ("identity-linked", account.value, origin)
   | .identityUnlinked account origin => ("identity-unlinked", account.value, origin)
+  | .passkeyCounterRegressed account presented =>
+    ("passkey-counter-regressed", account.value, toString presented.toNat)
 
 private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
     Option (AuditEvent tenant) :=
@@ -227,6 +229,8 @@ private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
   | "consent-withdrawn" => some (.consentWithdrawn ⟨subject⟩ ⟨detail⟩)
   | "identity-linked" => some (.identityLinked ⟨subject⟩ detail)
   | "identity-unlinked" => some (.identityUnlinked ⟨subject⟩ detail)
+  | "passkey-counter-regressed" =>
+    some (.passkeyCounterRegressed ⟨subject⟩ (UInt32.ofNat (detail.toNat?.getD 0)))
   | _ => none
 
 /-! ## Running statements -/
@@ -902,6 +906,12 @@ private def setPasskeySignCount [Monad m] (c : Ctx m) (tenant : TenantId)
     sql!"UPDATE {passkeys} SET sign_count = {(count.toNat : Int)}
          WHERE tenant = {tenant.value} AND credential_id = {credential.value}"
 
+private def setPasskeyLabel [Monad m] (c : Ctx m) (tenant : TenantId)
+    (credential : CredentialId tenant) (label : String) : m Unit :=
+  c.run
+    sql!"UPDATE {passkeys} SET label = {label}
+         WHERE tenant = {tenant.value} AND credential_id = {credential.value}"
+
 /-! ## Passkey ceremonies -/
 
 private def registrationCeremony : String := "registration"
@@ -1083,6 +1093,7 @@ def sqlAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : AuthSt
     passkeyRegistration := passkeyRegistration c
     passkeysForAccount := passkeysForAccount c
     setPasskeySignCount := setPasskeySignCount c
+    setPasskeyLabel := setPasskeyLabel c
     createPasskeyCeremony := createPasskeyCeremony c
     passkeyCeremonyById := passkeyCeremonyById c
     commitPasskeyCeremony := commitPasskeyCeremony c

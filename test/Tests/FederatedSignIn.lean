@@ -153,7 +153,7 @@ def unlinkChecks : IO (List (String × Bool)) := do
   let _ ← issueFor strangerPorts config (subjectFor tenant "elsewhere@example.com" google true)
 
   -- Two credentials and a mailable address: removing one leaves two ways in.
-  let first ← unlinkIdentity ports account ((held[0]?.map (·.id)).getD ⟨""⟩)
+  let first ← unlinkIdentity ports config account ((held[0]?.map (·.id)).getD ⟨""⟩)
   let afterFirst ← linkedIdentities ports account
 
   -- One credential left, and the address still works, so it still goes.
@@ -162,11 +162,11 @@ def unlinkChecks : IO (List (String × Bool)) := do
   -- Now suppress the address and try to remove the last one.
   let identity := (address "person@example.com").normalise
   let _ ← ports.store.suppressAddress tenant identity ⟨1700000000⟩ "bounced"
-  let last ← unlinkIdentity ports account ((afterFirst[0]?.map (·.id)).getD ⟨""⟩)
+  let last ← unlinkIdentity ports config account ((afterFirst[0]?.map (·.id)).getD ⟨""⟩)
   let afterLast ← linkedIdentities ports account
 
   -- A credential identifier that is not this account's is refused rather than acted on.
-  let foreign ← unlinkIdentity ports account ⟨"not-a-credential"⟩
+  let foreign ← unlinkIdentity ports config account ⟨"not-a-credential"⟩
   let unlinkEntries ← ports.store.auditEntries tenant
 
   pure

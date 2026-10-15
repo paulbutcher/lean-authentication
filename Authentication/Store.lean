@@ -130,6 +130,9 @@ structure AuthStore (m : Type → Type) where
   advance is a signal to record rather than a race to lose, and the decision about it is
   `Passkey.regressed`, which the caller has already taken. -/
   setPasskeySignCount : (tenant : TenantId) → CredentialId tenant → UInt32 → m Unit
+  /-- Renames one. The label is the account holder's own text and is stored verbatim; which
+  credential it belongs to is checked above this, where the account is known. -/
+  setPasskeyLabel : (tenant : TenantId) → CredentialId tenant → String → m Unit
   createPasskeyCeremony : (tenant : TenantId) → PasskeyCeremony tenant → m Unit
   /-- The ceremony the cookie names, or `none` once it has expired or been spent. Expiry and
   single use are enforced on read, as they are for a federation state (AUTH-15.4.3). -/
