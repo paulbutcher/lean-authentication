@@ -71,7 +71,7 @@ It parses `authenticatorData`, which is fixed-layout binary, checks `clientDataJ
 
 The CBOR half is smaller than it looks, because `lean-cbor` already walks an attestation object down to its credential public key in its own suite. What is owed here is the fixed binary layout around it, the three `clientDataJSON` comparisons, the conversion of a COSE key into one the backend can verify with, and the verification itself.
 
-Verification needs no new dependency. `Leancrypto.Der.PublicKey.ecPublicKeyInfo` builds the `SubjectPublicKeyInfo` from a curve OID and a point, `Evp.PKey.fromSpki` and the `JoseLibcrypto` backend prepare and verify it, and `Jose.Ecdsa.ofDer` converts WebAuthn's DER signature into the raw form that backend expects. ES256 first; RS256 and EdDSA are each a small addition after it.
+Verification needs no new dependency, and less machinery than it first appears. `Leancrypto.Der.ecPublicKeyInfo` builds the `SubjectPublicKeyInfo` from a curve OID and a point, `Evp.PKey.fromSpki` loads it, and `Libcrypto.Sign.verify` takes the DER `SEQUENCE` an authenticator produces as it stands: going through JOSE and converting the signature to raw `R‖S` is unnecessary, because that conversion exists to meet JOSE's encoding and not OpenSSL's. ES256 first; RS256 and EdDSA are each a small addition after it.
 
 ## Phase 4: service operations
 

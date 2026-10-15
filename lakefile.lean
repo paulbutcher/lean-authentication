@@ -130,6 +130,12 @@ these means linking OpenSSL, and mounting those must not. -/
 @[default_target]
 lean_lib AuthenticationOidcHttp
 
+/-- WebAuthn: the messages an authenticator produces, and the verification of them. Its own target
+for the reason `AuthenticationOidc` is, that checking a signature links OpenSSL and the magic link
+flow must not, and it is the only target that reads CBOR. -/
+@[default_target]
+lean_lib AuthenticationPasskey
+
 /--
 The sealing tool (§21). Its own library rather than modules of `AuthenticationOidc`, so that
 nothing a consumer imports reaches it, and it adds no `require`: it links what that target
