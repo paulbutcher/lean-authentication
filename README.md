@@ -85,7 +85,7 @@ def config (tenant : TenantId) : TenantConfig tenant :=
 | `humanCheck` | `HumanCheck.unchecked`, or your bot-mitigation provider |
 | `peppers` | The current pepper, plus any inside a rotation window |
 
-`TenantConfig` also carries attempt and session lifetimes, the optional emailed code, the `returnTo` allowlist, the session cookie's path, and the email templates, all with defaults. Peppers and provider tokens are never defaulted.
+`TenantConfig` also carries attempt and session lifetimes, the optional emailed code, the `returnTo` allowlist, the session cookie's path, the origin policy below, and the email templates, all with defaults. Peppers and provider tokens are never defaulted.
 
 Both providers need an account and credentials, which a developer running the application locally has not got, and the magic link exists nowhere but inside the message. `EmailTransport.capturing` takes a sink of your own instead of sending, and `EmailTransport.console` is that sink wired to standard output:
 
@@ -132,6 +132,21 @@ Two things remain yours:
 - Bot mitigation is the `HumanCheck` port, whose default admits everyone. Set `humanProofField` to your provider's form field name and give `Ports.humanCheck` an implementation.
 
 Routing it yourself is supported; the response guarantees below then become yours to reproduce.
+
+## Which routes may sign somebody in
+
+An organisation that has moved to its own identity provider needs every sign-in to go through it, because that is where conditional access, device policy and offboarding live. A magic link that still works is a way around all of them: a leaver's directory account is disabled and their mailbox is not, so without this the enforcement is advisory.
+
+`TenantConfig.originPolicy` says which kinds of credential may originate a session, as distinct from which kinds an account may hold. It defaults to `.any`, so a tenant that configures nothing keeps every route it had.
+
+```lean
+-- only a provider signs anybody in; the magic link is refused
+originPolicy := .only [.federatedIdentity]
+```
+
+`.only` admits exactly the kinds it names, so an empty list admits nobody. The policy is checked where the session is issued, which both routes pass through, and again at each entry point so that a route the tenant does not offer mints no attempt and mails no link. Adding a provider to an account that is already signed in is never refused: that issues no session, and a tenant needs it to get providers onto accounts before it stops admitting the magic link.
+
+Tightening the policy does not end sessions already live, as tightening the signup policy does not close accounts that already exist. `Service.revokeAllSessions` is how you end them.
 
 ## Sessions
 

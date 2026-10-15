@@ -12,6 +12,16 @@ Federated sign-in is exercised against stubs, and the ID tokens in the suite are
 
 What would widen it is a tenant able to turn the magic link off, which nothing offers today. Until then an account can always be recovered through its address, which is the thing AUTH-6.8 exists to guarantee.
 
+## An invite-only tenant that enforces SSO has no way in (AUTH-8.6)
+
+Two per-tenant policies interact badly in one combination. Where `originPolicy` admits only a provider and `signupPolicy` is `inviteOnly`, nobody can be onboarded through the shipped routes: an invitation is the only way an account may be created, and the invitation mail links to the accept route, which refuses because accepting would prove the address by the one means the tenant has turned off.
+
+No other combination is affected. Under a domain allowlist or `unrestricted`, an SSO-only tenant needs no invitation at all, because the provider asserts the address and the account is created on the spot.
+
+The refusal itself is clean: the invitation stays pending, no second mail is sent, and `Service.acceptInvitation` answers `originNotPermitted`, which a client can tell apart from one that is spent or expired. What is missing is a route in rather than a tidy failure. AUTH-8.6 says where one would come from, since an invitation is a grant on an address and not on a mechanism, and the federated start takes an `invitation` parameter. The library points nobody at it: the mail links to the accept route, and that route renders the same not-found page for every refusal, which is the enumeration-resistant default everywhere else and here hides the one refusal worth explaining.
+
+Closing it is a decision before it is code. The obvious shape is for the invitation mail to link to the sign-in page carrying the invitation, rather than to the accept route, whenever the tenant does not admit the magic link; that changes a template and a link and leaves the model alone. A client driving its own routes can do it today by calling `Service.acceptInvitation` and reading the refusal.
+
 ## The emailAddress credential has no writer (AUTH-4.4.2)
 
 `Credential.descriptor` has an `emailAddress` variant and nothing creates one. The magic link route identifies an account by its primary address rather than by a credential row, so the variant is forward provision rather than something in use; a passkey would be the first kind that changed that. The federated route does write its own rows, so the set is not empty, only narrower than the type allows.

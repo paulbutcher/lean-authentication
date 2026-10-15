@@ -182,6 +182,31 @@ def checks : IO (List (String × Bool)) := do
 
 
 /--
+The origin policy at the federated start (§7).
+
+A sign-in is refused before the browser is sent anywhere, because a session begun here could not
+be issued at the end of it. A link is not refused, and the asymmetry is the point: a tenant that
+still admits only the magic link has to be able to put providers on accounts before it stops.
+-/
+def originChecks : IO (List (String × Bool)) := do
+  let emailOnly : TenantConfig tenant := { config with originPolicy := .only [.emailAddress] }
+  let db ← openDb
+  let ports := portsOn db
+
+  let signIn ← beginFederated ports emailOnly provider discovery redirectUri none
+  let link ← beginFederated ports emailOnly provider discovery redirectUri none none
+    (some ⟨"account-1"⟩)
+  let permitted ← beginFederated ports config provider discovery redirectUri none
+
+  pure
+    [ ("origin policy: a tenant that does not admit a provider refuses a federated sign-in",
+        refusalOf signIn == some .originNotPermitted)
+    , ("origin policy: a link is not refused, so a provider can be added before the switch",
+        (link.toOption.map fun s => !s.authorizationUrl.isEmpty) == some true)
+    , ("origin policy: the default admits a federated sign-in as before",
+        (refusalOf permitted).isNone) ]
+
+/--
 An invitation completed with a provider instead of email (AUTH-8.6).
 
 The invitation is a grant on an address, not on a mechanism, so the provider asserting that

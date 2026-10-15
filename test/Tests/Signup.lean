@@ -275,7 +275,7 @@ def originChecks : IO (List (String × Bool)) := do
   let refuseConfig := configFor refuseTenant .unrestricted (origin := providerOnly)
   sentRef.set []
   let (refuseBegun, _) ← begin refusePorts refuseConfig person {}
-  let refused ← finish refusePorts refuseConfig refuseBegun 0
+  let refusedMail ← sentRef.get
   let refusedAudit ← refusePorts.store.auditEntries refuseTenant
 
   let admitTenant : TenantId := ⟨"s-origin-admit"⟩
@@ -293,15 +293,18 @@ def originChecks : IO (List (String × Bool)) := do
   sentRef.set []
   let created ← createInvitation invitePorts inviteConfig (address "guest@elsewhere.com") metadata
   let (inviteId, inviteToken) := issuedIds created
+  let mailsAfterCreate := (← sentRef.get).length
   let accepted ← acceptInvitation invitePorts inviteConfig inviteId inviteToken {}
-  let inviteSignIn ← match accepted with
-    | .ok begun => finish invitePorts inviteConfig begun 1
-    | .error _ => pure (.error .invitationNotPending)
+  let mailsAfterAccept := (← sentRef.get).length
   let inviteListed ← invitations (tenant := inviteTenant) invitePorts
 
   pure
-    [ ("origin policy: a tenant admitting only its provider refuses a magic link",
-        (sessionOf refused).isNone && viewsOf refused == [.refused .originNotPermitted]),
+    [ ("origin policy: a tenant admitting only its provider mints no attempt and mails nothing",
+        refusedMail.isEmpty && refuseBegun.views.isEmpty && refuseBegun.session.isNone
+          && !refusedAudit.any fun entry =>
+            match entry.event with
+            | .attemptCreated _ => true
+            | _ => false),
       ("origin policy: naming the address kind admits the magic link that proves one",
         (sessionOf admitted).isSome),
       ("origin policy: the refusal is audited with its true reason (AUTH-7.7)",
@@ -309,8 +312,9 @@ def originChecks : IO (List (String × Bool)) := do
           match entry.event with
           | .signInRejected .originNotPermitted => true
           | _ => false),
-      ("origin policy: a refused acceptance leaves the invitation unspent",
-        (sessionOf inviteSignIn).isNone
+      ("origin policy: accepting is refused without mailing again or spending the invitation",
+        errorOf accepted == some .originNotPermitted
+          && mailsAfterAccept == mailsAfterCreate
           && (inviteListed.find? fun (i, _) => i.id == inviteId).map (·.2) == some .pending) ]
 
 end Tests.Signup

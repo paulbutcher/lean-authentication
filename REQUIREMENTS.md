@@ -246,6 +246,20 @@ AUTH-6.7 is the one to read twice. Linking an external identity on an address th
 - **AUTH-9.6** All sessions for an account MUST be revoked on: primary email change, account deactivation, and any recovery action.
 - **AUTH-9.7** Validating a session MUST return the account id and its tenant, and nothing else. No roles, no flags, no permissions (§13.4).
 - **AUTH-9.8** Post-sign-in redirect targets MUST be validated against a per-tenant allowlist of paths or origins. An unvalidated `returnTo` is an open redirect and a phishing amplifier.
+- **AUTH-9.9** Each tenant is configured with one origin policy, naming which kinds of credential may originate a session, as distinct from which kinds an account may hold:
+
+  ```
+  inductive OriginPolicy
+    | any
+    | only (kinds : List CredentialKind)
+  ```
+
+  - **AUTH-9.9.1** The default MUST be `any`. A default naming every kind would begin refusing each new kind the moment it was added.
+  - **AUTH-9.9.2** `only` admits exactly the kinds it names, so an empty list admits nobody. That MUST be documented rather than special-cased: a tenant that names no kind has said that nothing may sign in.
+  - **AUTH-9.9.3 (security critical)** The policy MUST be enforced where the session is issued, which is the one point every route passes through, and MUST be checked there before an invitation is spent. Enforcing it only at the entry points would leave invitation acceptance as a way around it, and an invitation spent on a sign-in that is then refused cannot be given back.
+  - **AUTH-9.9.4** It MUST also be checked at each entry point, before an attempt is minted or a browser is sent to a provider, so that a route the tenant does not offer costs no mail and no round trip. This is a courtesy; AUTH-9.9.3 is the guarantee.
+  - **AUTH-9.9.5** Adding a credential to an account that is already signed in MUST NOT be constrained by the policy. Such a link issues no session (AUTH-6.7.1), and refusing one would leave a tenant no way to put providers on accounts before it stops admitting the magic link, which is the order a migration has to happen in.
+  - **AUTH-9.9.6** The policy is evaluated where a session is issued and not retroactively, as AUTH-7.6 has it for signup: tightening it MUST NOT end sessions already live. A refusal MUST be recorded in the audit log with its true reason, as AUTH-7.7 requires of a rejected signup.
 
 ---
 

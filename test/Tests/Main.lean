@@ -47,7 +47,7 @@ def main : IO UInt32 := do
     ++ (← Tests.Oidc.refetchChecks) ++ (← Tests.Oidc.discoveryCacheChecks) ++ (← Tests.FederatedSignIn.checks) ++ (← Tests.FederatedSignIn.unlinkChecks)
     ++ (← Tests.FederatedSignIn.linkChecks)
     ++ (← Tests.FederatedFlow.checks) ++ (← Tests.FederatedFlow.invitationChecks) ++ (← Tests.FederatedFlow.limitChecks) ++ (← Tests.FederatedFlow.linkFlowChecks)
-    ++ (← Tests.FederatedFlow.entropyChecks)
+    ++ (← Tests.FederatedFlow.entropyChecks) ++ (← Tests.FederatedFlow.originChecks)
     ++ (← Tests.Apple.checks) ++ (← Tests.Apple.formPostChecks)
     ++ (← Tests.OAuth2Provider.checks) ++ (← Tests.OAuth2Provider.endpointChecks) ++ (← Tests.OAuth2Provider.dispatchChecks)
     ++ (← Tests.OAuth2Provider.tokenEndpointChecks)

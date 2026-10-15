@@ -456,6 +456,13 @@ def begin {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : Tena
   -- Every outcome leaves through the same floor, including the ones that did no work at all.
   ports.responseFloor.normalise do
   let now ← Clock.now
+  -- Checked here as well as where the session is issued, so that a route the tenant does not
+  -- offer mints no attempt and mails no link it would then refuse. It is decided by configuration
+  -- alone, which is why it comes before everything that reads or spends.
+  if !config.originPolicy.permits .emailAddress then
+    ports.store.appendAudit tenant ⟨now, .anonymous, .signInRejected .originNotPermitted⟩
+    let response ← ports.responsePolicy.respond tenant .originNotPermitted
+    return ({}, response)
   -- Ahead of the limiter, and deliberately: a request that fails the challenge spends none of
   -- the address's send budget. The other order would let anyone deny a person their own sign-in
   -- by failing challenges against their address all day (AUTH-14.1.8).
@@ -699,6 +706,11 @@ def acceptInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {te
     (token : CredentialValue) (requester : RequestContext) :
     m (Except AuthError (Outcome tenant)) := do
   let now ← Clock.now
+  -- An entry point like `begin`, and checked for the same reason (AUTH-9.9.4). The invitation is
+  -- left pending, so the person can still accept it by whichever kind the tenant does admit.
+  if !config.originPolicy.permits .emailAddress then
+    ports.store.appendAudit tenant ⟨now, .anonymous, .signInRejected .originNotPermitted⟩
+    return .error .originNotPermitted
   match ← ports.store.invitationById tenant id with
   | none => pure (.error .invitationNotPending)
   | some invitation =>

@@ -164,12 +164,16 @@ deployment whose random source has stopped answering. -/
 inductive StartRefusal where
   | throttled
   | noRandomness
+  /-- The tenant's origin policy does not admit a federated identity, so a session begun here
+  could not be issued. Reached only by a sign-in; a link is not constrained. -/
+  | originNotPermitted
   deriving DecidableEq, Repr, Inhabited
 
 /-- The operator's name for one, for a log record or a span attribute. -/
 def StartRefusal.name : StartRefusal → String
   | .throttled => "throttled"
   | .noRandomness => "no-randomness"
+  | .originNotPermitted => "origin-not-permitted"
 
 private def drawValue {m : Type → Type} [Monad m] [RandomBytes m] (bytes : Nat) :
     m (Option String) := do
@@ -194,6 +198,11 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
     (account : Option (AccountId tenant) := none)
     (requester : RequestContext := {}) : m (Except StartRefusal (FederatedStart tenant)) := do
   let now ← Clock.now
+  -- Only a sign-in is constrained. A link issues no session (AUTH-6.7.1), and refusing one would
+  -- leave a tenant that admits only the magic link no way to put a provider on an account before
+  -- it changes its mind, which is the order a migration has to happen in.
+  if account.isNone && !config.originPolicy.permits .federatedIdentity then
+    return .error .originNotPermitted
   -- Only the scopes that do not need an address can be counted: a sign-in has said nothing about
   -- who it is, and a link has named an account and still no address. Without them this endpoint
   -- turns one inbound request into a stored row and an outbound one, as often as anybody likes
