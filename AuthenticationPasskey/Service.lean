@@ -40,6 +40,9 @@ inductive CeremonyRefusal where
   | unknownCredential
   /-- The message did not verify. -/
   | rejected (reason : PasskeyError)
+  /-- The message verified and `Passkey.decide` refused it anyway, which is the user handle
+  naming an account other than the credential's. -/
+  | decided (reason : PasskeyRefusal)
   | notStored (reason : StoreError)
   /-- The tenant has configured no relying party, so it offers no passkeys. Refused rather than
   defaulted, because an identifier guessed here would be bound into every credential registered
@@ -55,6 +58,7 @@ def CeremonyRefusal.name : CeremonyRefusal → String
   | .notThisAccount => "not-this-account"
   | .unknownCredential => "unknown-credential"
   | .rejected reason => reason.name
+  | .decided reason => reason.name
   | .notStored _ => "not-stored"
   | .noRelyingParty => "no-relying-party"
 
@@ -63,6 +67,9 @@ structure RegistrationOptions where
   challenge : CredentialValue
   /-- What goes on the authenticator: the account's own identifier (`Passkey.userHandle`). -/
   userHandle : String
+  /-- The account's primary address, which WebAuthn requires the options to name and which is
+  shown in the account picker on the person's own device. -/
+  userName : String
   relyingParty : RelyingParty
   /-- The handles already on this account, so an authenticator holding one declines rather than
   registering a second credential for the same person. -/
@@ -130,9 +137,11 @@ def beginRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
     | .error refusal => pure (.error refusal)
     | .ok (challenge, cookie) =>
       let held ← ports.store.credentialsForAccount tenant account
+      let holder ← ports.store.accountById tenant account
       pure (.ok
         { challenge
           userHandle := Passkey.userHandle account
+          userName := holder.map (·.primaryEmail.render) |>.getD ""
           relyingParty := party
           exclude := held.filterMap fun credential =>
             match credential.descriptor with
@@ -239,8 +248,9 @@ and the deactivation check apply here as they do to every other way in.
 -/
 def completeAuthentication {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
     {tenant : TenantId} (ports : Ports m) (verifier : Verifier m) (config : TenantConfig tenant)
-    (cookie : String) (handle : PasskeyId) (authenticatorData : ByteArray)
-    (clientDataJson : String) (signature : ByteArray) (requester : RequestContext := {}) :
+    (cookie : String) (handle : PasskeyId) (userHandle : Option String)
+    (authenticatorData : ByteArray) (clientDataJson : String) (signature : ByteArray)
+    (requester : RequestContext := {}) :
     m (Except CeremonyRefusal (Outcome tenant)) := do
   match partyOf config with
   | .error refusal => pure (.error refusal)
@@ -258,6 +268,11 @@ def completeAuthentication {m : Type → Type} [Monad m] [Clock m] [RandomBytes 
               (challengeAccepts ports ceremony) party with
           | .error reason => pure (.error (.rejected reason))
           | .ok (verified, signingInput) =>
+            match Passkey.decide
+                { passkey := handle, userHandle, signCount := verified.signCount }
+                (some credential) with
+            | .refuse reason => pure (.error (.decided reason))
+            | .signIn _ =>
             match ← verifier.verify stored.algorithm stored.publicKey signingInput signature with
             | .error reason => pure (.error (.rejected reason))
             | .ok () => do

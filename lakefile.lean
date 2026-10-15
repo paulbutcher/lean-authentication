@@ -136,6 +136,13 @@ flow must not, and it is the only target that reads CBOR. -/
 @[default_target]
 lean_lib AuthenticationPasskey
 
+/-- The passkey routes. Separate from `AuthenticationHttp` because mounting these links OpenSSL
+and mounting those must not, which is the reason `AuthenticationOidcHttp` is separate too. They
+answer JSON: `navigator.credentials` is script-only, so the script is the client's and there is no
+page here to render. -/
+@[default_target]
+lean_lib AuthenticationPasskeyHttp
+
 /--
 The sealing tool (§21). Its own library rather than modules of `AuthenticationOidc`, so that
 nothing a consumer imports reaches it, and it adds no `require`: it links what that target

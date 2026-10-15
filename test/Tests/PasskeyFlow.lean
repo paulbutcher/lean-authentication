@@ -131,7 +131,7 @@ def checks : IO (List (String × Bool)) := do
   let signature ← Libcrypto.Sign.sign (.ecdsa .sha256) key
     (authData ++ Leancrypto.Sha256.hash assertClientData.toUTF8)
   let signedIn ← Service.completeAuthentication ports verifier config assertCookie handle
-    authData assertClientData signature
+    (some (Passkey.userHandle account)) authData assertClientData signature
   let identified ← match signedIn.toOption.bind (·.session) with
     | some credential => Except.toOption <$> identify ports config credential
     | none => pure none
@@ -158,10 +158,21 @@ def checks : IO (List (String × Bool)) := do
     let signatureThere ← Libcrypto.Sign.sign (.ecdsa .sha256) key
       (authData ++ Leancrypto.Sha256.hash clientDataThere.toUTF8)
     Service.completeAuthentication otherPorts verifier otherConfig assertCookieThere handle
-      authData clientDataThere signatureThere
+      (some (Passkey.userHandle account)) authData clientDataThere signatureThere
 
   let noRelyingParty ← Service.beginRegistration ports
     { config with passkeyRelyingParty := none } account
+
+  -- A handle naming an account other than the credential's must not sign in, however good the
+  -- signature over it is. Its own ceremony, because the one above is spent.
+  let forHandle ← Service.beginAuthentication ports config
+  let handleCookie := ((forHandle.toOption).map (·.cookie.value)).getD ""
+  let handleChallenge := ((forHandle.toOption).map (·.challenge.encoded)).getD ""
+  let handleClientData := clientDataFor assertionType handleChallenge
+  let handleSignature ← Libcrypto.Sign.sign (.ecdsa .sha256) key
+    (authData ++ Leancrypto.Sha256.hash handleClientData.toUTF8)
+  let wrongHandle ← Service.completeAuthentication ports verifier config handleCookie handle
+    (some "somebody-else") authData handleClientData handleSignature
 
   pure
     [ ("passkey flow: a registration begins with a challenge and a cookie",
@@ -186,6 +197,10 @@ def checks : IO (List (String × Bool)) := do
         | .ok outcome => outcome.session.isNone
             && outcome.views == [.refused .originNotPermitted]
         | .error _ => false),
+      ("passkey flow: a user handle naming another account does not sign in",
+        match wrongHandle with
+        | .error (.decided .userHandleMismatch) => true
+        | _ => false),
       ("passkey flow: a tenant with no relying party offers no passkeys",
         match noRelyingParty with
         | .error .noRelyingParty => true
