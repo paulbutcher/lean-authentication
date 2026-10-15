@@ -304,6 +304,11 @@ private def resolveFederated {m : Type → Type} [Monad m] [RandomBytes m] {tena
 private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
     (subject : SessionSubject tenant) : m (Issued tenant) := do
+  -- Asked before the invitation is spent, because one consumed by a sign-in the policy then
+  -- refused could not be given back.
+  if !config.originPolicy.permits subject.origin.credentialKind then
+    ports.store.appendAudit tenant ⟨now, .anonymous, .signInRejected .originNotPermitted⟩
+    return { refused := some .originNotPermitted }
   -- The invitation is spent whether or not an account had to be created, because AUTH-8.8 says
   -- an invitation for an address that already has an account signs that account in and is
   -- consumed, rather than creating a duplicate.
@@ -325,7 +330,8 @@ private def issueSession {m : Type → Type} [Monad m] [RandomBytes m] {tenant :
           | .signup .notInvited => .notInvited
           | .signup .domainNotAllowed => .domainNotAllowed
           | .accountDeactivated => .accountDeactivated
-          | .addressNotVerified => .addressNotVerified)⟩
+          | .addressNotVerified => .addressNotVerified
+          | .originNotPermitted => .originNotPermitted)⟩
       pure { refused }
     | none => pure {}
   | some accountId =>

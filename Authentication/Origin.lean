@@ -29,6 +29,12 @@ inductive SessionOrigin (tenant : TenantId) where
   | federated (identity : FederatedIdentity) (addressVerified : Bool)
   deriving DecidableEq, Repr
 
+/-- Which kind of credential proved the address, which is what `OriginPolicy` is stated over. A
+magic link proves control of the address itself, so it answers with the kind the address is. -/
+def SessionOrigin.credentialKind {tenant : TenantId} : SessionOrigin tenant → CredentialKind
+  | .magicLink _ => .emailAddress
+  | .federated _ _ => .federatedIdentity
+
 structure SessionSubject (tenant : TenantId) where
   origin : SessionOrigin tenant
   address : EmailAddress

@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 -/
 module
 
+public import Authentication.Account
 public import Authentication.Email
 
 public section
@@ -27,16 +28,36 @@ def SignupRejection.name : SignupRejection → String
   | .domainNotAllowed => "domain-not-allowed"
   | .notInvited => "not-invited"
 
-/-- Why an address that has proven itself was not signed in. Signup policy is one reason and a
-deactivated account is the other; they are held apart because only the first is a decision about
-whether an account may be made, and only the second concerns one that already exists
-(AUTH-7.6, AUTH-9.6). -/
+/--
+Which kinds of credential may originate a session, as distinct from which kinds an account may
+hold. Turning the magic link off here is what stops it being a way around a tenant that has moved
+to a provider; the addresses stay on the accounts and nothing stored changes.
+-/
+inductive OriginPolicy where
+  | any
+  /-- Nothing outside the list may originate a session, so an empty list admits nobody. -/
+  | only (kinds : List CredentialKind)
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Consulted where a session is issued and nowhere else, so tightening the policy refuses the
+next sign-in rather than ending the sessions already live, as signup policy leaves alone the
+accounts that already exist (AUTH-7.6). -/
+def OriginPolicy.permits : OriginPolicy → CredentialKind → Bool
+  | .any, _ => true
+  | .only kinds, kind => kinds.contains kind
+
+/-- Why an address that has proven itself was not signed in. The reasons are kept apart because
+each decides a different question: whether an account may be made, whether one that already
+exists may be used, whether the provider's word on the address is good, and whether this tenant
+admits the means that proved it (AUTH-7.6, AUTH-9.6, AUTH-6.7). -/
 inductive SignInRefusal where
   | signup (reason : SignupRejection)
   | accountDeactivated
   /-- The provider asserted an address it has not verified, so there is nothing to link on and
   nothing to create from (AUTH-6.7). -/
   | addressNotVerified
+  /-- The address was proven, by a means this tenant does not admit. -/
+  | originNotPermitted
   deriving DecidableEq, Repr, Inhabited
 
 /-- The operator's name for one, for a log record or a span attribute. A signup reason keeps the
@@ -45,6 +66,7 @@ def SignInRefusal.name : SignInRefusal → String
   | .signup reason => reason.name
   | .accountDeactivated => "account-deactivated"
   | .addressNotVerified => "address-not-verified"
+  | .originNotPermitted => "origin-not-permitted"
 
 inductive SignupDecision where
   | permitted

@@ -224,6 +224,9 @@ structure TenantConfig (tenant : TenantId) where
   sendingIdentity : SendingIdentity
   signupPolicy : SignupPolicy
   invitationOverridesAllowlist : Bool := true
+  /-- Which means of proving an address may issue a session. The default admits every one, so a
+  tenant that has not spoken keeps all the routes it had. -/
+  originPolicy : OriginPolicy := .any
   attemptLifetime : AttemptLifetime := .standard
   maxCodeEntries : Nat := 5
   emailedCodeEnabled : Bool := false

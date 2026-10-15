@@ -167,4 +167,32 @@ added above reaches allowlists and nothing else.
 theorem unrestrictedAdmitsAnyAddress (address : EmailAddress) (accepted overrides : Bool) :
     SignupPolicy.evaluate .unrestricted address accepted overrides = .permitted := by
   simp [SignupPolicy.evaluate]
+
+/--
+The default origin policy turns nobody away. This is what makes the policy invisible to a tenant
+that has not configured one, and it is worth stating because the alternative, a default listing
+every kind, would start refusing each new kind the moment one was added.
+
+`OriginPolicy.any` is the policy a `TenantConfig` carries when none is given, and `permits`
+answers `true` exactly when a session may be originated by that kind of credential. The equation
+holds for every `kind`, including any added later, because the policy does not inspect the kind at
+all.
+-/
+theorem anyPermitsEveryKind (kind : CredentialKind) : OriginPolicy.any.permits kind = true := rfl
+
+/--
+A restricted policy admits the kinds it names and nothing else. This is the claim the policy
+exists to support: a tenant that has turned the magic link off needs both halves, that no kind
+outside its list can still originate a session, and that the kinds inside it are not turned away
+as collateral.
+
+`OriginPolicy.only kinds` is the restricted policy, and `permits` answers `true` when a session
+may be originated by that kind. The biconditional makes membership the whole of what is admitted,
+so neither direction can fail quietly. The empty list is among the lists this covers, and there
+the right side is false for every kind, which is what makes an empty list admit nobody rather
+than everybody.
+-/
+theorem onlyPermitsExactlyItsKinds (kinds : List CredentialKind) (kind : CredentialKind) :
+    (OriginPolicy.only kinds).permits kind = true ↔ kind ∈ kinds := by
+  simp [OriginPolicy.permits]
 end Tests.Policy

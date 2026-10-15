@@ -5,12 +5,12 @@ Released under Apache 2.0 license as described in the file LICENSE.
 import AuthenticationSqlite
 
 /-!
-Signup policy and invitations, run through the whole flow (§7, §8).
+Signup policy, the origin policy, and invitations, run through the whole flow (§7, §8).
 
 Policy is decided where the account is created, so nothing here can be checked by calling
 `evaluate`; a check has to drive an attempt to completion and see whether an account came out.
 That is also the point: a policy that is right in `evaluate` and never consulted looks identical
-to one that works.
+to one that works. The origin policy is decided in the same call, and is checked the same way.
 -/
 
 namespace Tests.Signup
@@ -50,13 +50,14 @@ private def portsOn (db : SQLite) : Ports IO :=
     peppers }
 
 private def configFor (tenant : TenantId) (policy : SignupPolicy)
-    (invitationOverrides : Bool := true) : TenantConfig tenant :=
+    (invitationOverrides : Bool := true) (origin : OriginPolicy := .any) : TenantConfig tenant :=
   { displayName := "Acme"
     baseUrl := ⟨"https://auth.example.com"⟩
     sendingIdentity :=
       { address := address "sign-in@auth.example.com", displayName := "Acme sign-in" }
     signupPolicy := policy
-    invitationOverridesAllowlist := invitationOverrides }
+    invitationOverridesAllowlist := invitationOverrides
+    originPolicy := origin }
 
 private def parameterFrom (body : String) (name : String) : Option String :=
   let rest := (body.splitOn (name ++ "=")).drop 1
@@ -256,5 +257,60 @@ def existingAccountChecks : IO (List (String × Bool)) := do
         (admittedOf second).isNone),
       ("invitation: the invitation is consumed all the same (AUTH-8.8)",
         (listed.find? fun (i, _) => i.id == invitationId).map (·.2) == some .accepted) ]
+
+/-! ## Origin policy
+
+Which means of proving an address may issue a session. Driven through the flow for the reason the
+signup policy is: a policy that is right in `permits` and never consulted looks identical to one
+that works. The two checks on the kinds are a pair deliberately, because a mapping from origin to
+credential kind that was inverted would satisfy the theorems and refuse the wrong route.
+-/
+
+def originChecks : IO (List (String × Bool)) := do
+  let providerOnly : OriginPolicy := .only [.federatedIdentity]
+  let person := address "person@example.com"
+
+  let refuseTenant : TenantId := ⟨"s-origin-refuse"⟩
+  let refusePorts := portsOn (← Sqlite.openInMemory)
+  let refuseConfig := configFor refuseTenant .unrestricted (origin := providerOnly)
+  sentRef.set []
+  let (refuseBegun, _) ← begin refusePorts refuseConfig person {}
+  let refused ← finish refusePorts refuseConfig refuseBegun 0
+  let refusedAudit ← refusePorts.store.auditEntries refuseTenant
+
+  let admitTenant : TenantId := ⟨"s-origin-admit"⟩
+  let admitPorts := portsOn (← Sqlite.openInMemory)
+  let admitConfig := configFor admitTenant .unrestricted (origin := .only [.emailAddress])
+  sentRef.set []
+  let (admitBegun, _) ← begin admitPorts admitConfig person {}
+  let admitted ← finish admitPorts admitConfig admitBegun 0
+
+  -- An invitation accepted where the magic link is refused has to survive, or the refusal would
+  -- have spent it for nothing and the invited person would have no way back in.
+  let inviteTenant : TenantId := ⟨"s-origin-invite"⟩
+  let invitePorts := portsOn (← Sqlite.openInMemory)
+  let inviteConfig := configFor inviteTenant .inviteOnly (origin := providerOnly)
+  sentRef.set []
+  let created ← createInvitation invitePorts inviteConfig (address "guest@elsewhere.com") metadata
+  let (inviteId, inviteToken) := issuedIds created
+  let accepted ← acceptInvitation invitePorts inviteConfig inviteId inviteToken {}
+  let inviteSignIn ← match accepted with
+    | .ok begun => finish invitePorts inviteConfig begun 1
+    | .error _ => pure (.error .invitationNotPending)
+  let inviteListed ← invitations (tenant := inviteTenant) invitePorts
+
+  pure
+    [ ("origin policy: a tenant admitting only its provider refuses a magic link",
+        (sessionOf refused).isNone && viewsOf refused == [.refused .originNotPermitted]),
+      ("origin policy: naming the address kind admits the magic link that proves one",
+        (sessionOf admitted).isSome),
+      ("origin policy: the refusal is audited with its true reason (AUTH-7.7)",
+        refusedAudit.any fun entry =>
+          match entry.event with
+          | .signInRejected .originNotPermitted => true
+          | _ => false),
+      ("origin policy: a refused acceptance leaves the invitation unspent",
+        (sessionOf inviteSignIn).isNone
+          && (inviteListed.find? fun (i, _) => i.id == inviteId).map (·.2) == some .pending) ]
 
 end Tests.Signup

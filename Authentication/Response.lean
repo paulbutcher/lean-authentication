@@ -31,6 +31,9 @@ inductive SignInOutcome where
   federated route, and present here so that route reports through the same type as the other
   (AUTH-14.2.7). -/
   | addressNotVerified
+  /-- The address was proven by a means the tenant's origin policy does not admit. It describes
+  the tenant rather than the person, so it is among the outcomes usually safe to state openly. -/
+  | originNotPermitted
   | throttled
   | malformedAddress
   deriving DecidableEq, Repr, Inhabited

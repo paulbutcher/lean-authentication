@@ -87,6 +87,7 @@ private def refusalText : SignInRefusal → String
   | .signup .domainNotAllowed => "This organisation does not accept that address's domain."
   | .accountDeactivated => "That account is closed."
   | .addressNotVerified => "That provider has not verified that address."
+  | .originNotPermitted => "This organisation does not accept that way of signing in."
 
 private def oneCodeForm (context : PageContext) (action label id : String) : Node .flow :=
   Html.form
