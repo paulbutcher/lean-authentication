@@ -8,6 +8,7 @@ public import Authentication.Account
 public import Authentication.Attempt
 public import Authentication.Federation
 public import Authentication.Invitation
+public import Authentication.Passkey
 import Authentication.Audit
 import Authentication.Consent
 import Authentication.Suppression
@@ -49,6 +50,7 @@ structure PurgeCounts where
   attempts : Nat := 0
   sessions : Nat := 0
   federationStates : Nat := 0
+  passkeyCeremonies : Nat := 0
   deriving DecidableEq, Repr, Inhabited
 
 /--
@@ -106,6 +108,36 @@ structure AuthStore (m : Type → Type) where
   won. Two concurrent completions of one attempt therefore produce exactly one session
   (AUTH-5.3.5, AUTH-15.4.1). -/
   commitAttempt : (tenant : TenantId) → (expected next : AttemptState tenant) → m Bool
+  /-- The account this passkey id belongs to, if any in this tenant does. Keyed on the id the
+  authenticator gives back at every assertion, which is what a discoverable credential offers in
+  place of an address. The lookup never leaves the tenant, so the same credential presented to
+  another one is not found rather than found elsewhere. -/
+  credentialByPasskey : (tenant : TenantId) → PasskeyId → m (Option (Credential tenant))
+  /-- Writes the credential and its attributes together. One operation rather than two because a
+  credential row without a registration row holds no public key, so nothing could verify against
+  it and nothing would say why; the half-written state must not be reachable. Uniqueness on
+  (tenant, passkey id) is enforced here for the reason `createCredential`'s is (AUTH-15.4.2). -/
+  createPasskey : (tenant : TenantId) → Credential tenant → PasskeyRegistration tenant →
+    m (Except StoreError Unit)
+  /-- The attributes of one credential: the key a signature is checked against, and the counter
+  it was last seen with. -/
+  passkeyRegistration : (tenant : TenantId) → CredentialId tenant →
+    m (Option (PasskeyRegistration tenant))
+  /-- What an account holder is shown about the passkeys on their account. -/
+  passkeysForAccount : (tenant : TenantId) → AccountId tenant →
+    m (List (PasskeyRegistration tenant))
+  /-- Records the counter an assertion reported. Not compare-and-set: a counter that did not
+  advance is a signal to record rather than a race to lose, and the decision about it is
+  `Passkey.regressed`, which the caller has already taken. -/
+  setPasskeySignCount : (tenant : TenantId) → CredentialId tenant → UInt32 → m Unit
+  createPasskeyCeremony : (tenant : TenantId) → PasskeyCeremony tenant → m Unit
+  /-- The ceremony the cookie names, or `none` once it has expired or been spent. Expiry and
+  single use are enforced on read, as they are for a federation state (AUTH-15.4.3). -/
+  passkeyCeremonyById : (tenant : TenantId) → Timestamp → PasskeyCeremonyId tenant →
+    m (Option (PasskeyCeremony tenant))
+  /-- Compare and set, never read then write. Two requests racing with one challenge therefore
+  produce one sign-in, which is the whole of what single use means. -/
+  commitPasskeyCeremony : (tenant : TenantId) → (expected next : PasskeyCeremony tenant) → m Bool
   /-- The record `state` is bound to (AUTH-6.2). -/
   createFederationState : (tenant : TenantId) → FederationState tenant → m Unit
   /-- Looked up by the digest of the `state` the provider sent back, as a session is by the
@@ -170,15 +202,17 @@ structure AuthStore (m : Type → Type) where
   appendAudit : (tenant : TenantId) → AuditEntry tenant → m Unit
   auditEntries : (tenant : TenantId) → m (List (AuditEntry tenant))
   /-- Removes attempts that expired before `before`, sessions that can no longer be used and
-  stopped being usable before it, and federation states that expired or were spent before it.
+  stopped being usable before it, and federation states and passkey ceremonies that expired or
+  were spent before it.
   Everything it removes is already refused on read, so no correctness depends on it having run;
   what it bounds is growth (AUTH-15.4.3).
 
   It sweeps nothing else. The audit log, consent records and delivery history are retention
   questions rather than expiry ones, and the port offers no way to remove one of those. -/
   purgeExpired : (tenant : TenantId) → (before : Timestamp) → m PurgeCounts
-  /-- Removes the tenant's accounts, credentials, sessions, invitations, attempts, federation
-  states, delivery history, consent records and audit records, with no orphans (AUTH-4.2.5). -/
+  /-- Removes the tenant's accounts, credentials, passkeys, sessions, invitations, attempts,
+  federation states, passkey ceremonies, delivery history, consent records and audit records,
+  with no orphans (AUTH-4.2.5). -/
   deleteTenant : (tenant : TenantId) → m Unit
 
 /--

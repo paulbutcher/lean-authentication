@@ -33,13 +33,15 @@ private def consents : TableName := ⟨"consents"⟩
 private def audit : TableName := ⟨"audit"⟩
 private def credentials : TableName := ⟨"credentials"⟩
 private def federationStates : TableName := ⟨"federation_states"⟩
+private def passkeys : TableName := ⟨"passkeys"⟩
+private def passkeyCeremonies : TableName := ⟨"passkey_ceremonies"⟩
 
 /-- The tables these statements read and write, as the bare names `Dialect.table` qualifies. A
 backend's schema has to create all of them and nothing here depends on what it calls them. -/
 def tableNames : List String :=
   [accounts.value, accountEmails.value, attempts.value, sessions.value, invitations.value,
     deliveryRecords.value, consents.value, audit.value, credentials.value,
-    federationStates.value]
+    federationStates.value, passkeys.value, passkeyCeremonies.value]
 
 /-! ## Encoding between domain values and columns -/
 
@@ -698,29 +700,35 @@ private def auditEntries [Monad m] (c : Ctx m) (tenant : TenantId) :
 
 private def federatedKind : String := "federated"
 private def emailKind : String := "email"
+private def passkeyKind : String := "passkey"
 
 private def kindText : CredentialDescriptor → String
   | .federatedIdentity _ => federatedKind
   | .emailAddress _ => emailKind
+  | .passkey _ => passkeyKind
 
 private def issuerOf : CredentialDescriptor → Option String
   | .federatedIdentity identity => some identity.issuer
-  | .emailAddress _ => none
+  | .emailAddress _ | .passkey _ => none
 
 private def subjectOf : CredentialDescriptor → Option String
   | .federatedIdentity identity => some identity.subject
-  | .emailAddress _ => none
+  | .emailAddress _ | .passkey _ => none
 
 private def localOf : CredentialDescriptor → Option String
-  | .federatedIdentity _ => none
+  | .federatedIdentity _ | .passkey _ => none
   | .emailAddress address => some address.localPart
 
 private def domainOf : CredentialDescriptor → Option String
-  | .federatedIdentity _ => none
+  | .federatedIdentity _ | .passkey _ => none
   | .emailAddress address => some (domainText address.domain)
 
+private def passkeyOf : CredentialDescriptor → Option String
+  | .federatedIdentity _ | .emailAddress _ => none
+  | .passkey credential => some credential.value
+
 private def credentialSelect : Statement :=
-  sql!"SELECT id, account_id, kind, issuer, subject, local, domain, created_at
+  sql!"SELECT id, account_id, kind, issuer, subject, local, domain, created_at, passkey_id
        FROM {credentials}"
 
 private def readCredential {tenant : TenantId} (row : SqlRow) : Credential tenant :=
@@ -728,6 +736,7 @@ private def readCredential {tenant : TenantId} (row : SqlRow) : Credential tenan
     account := ⟨row.text 1⟩
     descriptor :=
       if row.text 2 == federatedKind then .federatedIdentity ⟨row.text 3, row.text 4⟩
+      else if row.text 2 == passkeyKind then .passkey ⟨row.text 8⟩
       else .emailAddress ⟨row.text 5, domainOfText (row.text 6)⟩
     createdAt := timeOf (row.int 7) }
 
@@ -744,11 +753,13 @@ private def createCredential [Monad m] (c : Ctx m) (tenant : TenantId)
     (credential : Credential tenant) : m (Except StoreError Unit) := do
   let inserted ← c.affected
     sql!"INSERT INTO {credentials}
-           (tenant, id, account_id, kind, issuer, subject, local, domain, created_at)
+           (tenant, id, account_id, kind, issuer, subject, local, domain, created_at,
+            passkey_id)
          VALUES ({tenant.value}, {credential.id.value}, {credential.account.value},
            {kindText credential.descriptor}, {issuerOf credential.descriptor},
            {subjectOf credential.descriptor}, {localOf credential.descriptor},
-           {domainOf credential.descriptor}, {timeText credential.createdAt})
+           {domainOf credential.descriptor}, {timeText credential.createdAt},
+           {passkeyOf credential.descriptor})
          ON CONFLICT DO NOTHING"
   pure (if inserted == 0 then .error .duplicateCredential else .ok ())
 
@@ -759,9 +770,13 @@ private def credentialsForAccount [Monad m] (c : Ctx m) (tenant : TenantId)
           ORDER BY created_at, id")
   pure (rows.map readCredential).toList
 
+/-- The attributes go with the credential. A passkey row left behind would hold a public key
+belonging to nothing, and the next credential to be given that id would inherit it. -/
 private def deleteCredential [Monad m] (c : Ctx m) (tenant : TenantId)
     (id : CredentialId tenant) : m Unit :=
-  c.run sql!"DELETE FROM {credentials} WHERE tenant = {tenant.value} AND id = {id.value}"
+  c.transaction fun c => do
+    c.run sql!"DELETE FROM {passkeys} WHERE tenant = {tenant.value} AND credential_id = {id.value}"
+    c.run sql!"DELETE FROM {credentials} WHERE tenant = {tenant.value} AND id = {id.value}"
 
 /-- The primary is tried first and the additional addresses of AUTH-4.4.1 second. Uniqueness
 across both is what makes the order immaterial rather than a tie-break. -/
@@ -801,6 +816,151 @@ private def removeVerifiedEmail [Monad m] (c : Ctx m) (tenant : TenantId)
     sql!"DELETE FROM {accountEmails}
          WHERE tenant = {tenant.value} AND account_id = {account.value}
            AND local = {address.localPart} AND domain = {domainText address.domain}"
+
+/-! ## Passkeys -/
+
+private def bytesText (b : ByteArray) : String := Leancrypto.Codec.Base64Url.encodeString b
+
+private def bytesOf (text : String) : ByteArray :=
+  (Leancrypto.Codec.Base64Url.decodeString text).getD ⟨#[]⟩
+
+private def boolText (b : Bool) : Int := if b then 1 else 0
+
+private def transportsText (transports : List String) : String :=
+  String.intercalate "," transports
+
+/-- An empty list renders as the empty string, which splits back to one empty label rather than
+to nothing, so the empties are dropped on the way out. No transport name contains a comma. -/
+private def transportsOf (text : String) : List String :=
+  (text.splitOn ",").filter (· != "")
+
+private def credentialByPasskey [Monad m] (c : Ctx m) (tenant : TenantId) (passkey : PasskeyId) :
+    m (Option (Credential tenant)) := do
+  let row ← c.first (credentialSelect ++
+    sql!" WHERE tenant = {tenant.value} AND kind = {passkeyKind}
+            AND passkey_id = {passkey.value}")
+  pure (row.map readCredential)
+
+private def passkeySelect : Statement :=
+  sql!"SELECT credential_id, public_key, algorithm, sign_count, transports, aaguid,
+         backup_eligible, backup_state, label, created_at
+       FROM {passkeys}"
+
+private def readPasskey {tenant : TenantId} (row : SqlRow) : PasskeyRegistration tenant :=
+  { credential := ⟨row.text 0⟩
+    publicKey := bytesOf (row.text 1)
+    algorithm := ⟨row.int 2⟩
+    signCount := (row.int 3).toNat.toUInt32
+    transports := transportsOf (row.text 4)
+    aaguid := bytesOf (row.text 5)
+    backupEligible := row.int 6 != 0
+    backupState := row.int 7 != 0
+    label := row.text 8
+    createdAt := timeOf (row.int 9) }
+
+/-- Both rows under one transaction, so a credential whose key never arrived is not a state any
+read can reach. The credential goes first, because its uniqueness is what decides whether this is
+a new passkey at all. -/
+private def createPasskey [Monad m] (c : Ctx m) (tenant : TenantId)
+    (credential : Credential tenant) (registration : PasskeyRegistration tenant) :
+    m (Except StoreError Unit) :=
+  c.transaction fun c => do
+    match ← createCredential c tenant credential with
+    | .error e => pure (.error e)
+    | .ok () =>
+      c.run
+        sql!"INSERT INTO {passkeys}
+               (tenant, credential_id, public_key, algorithm, sign_count, transports, aaguid,
+                backup_eligible, backup_state, label, created_at)
+             VALUES ({tenant.value}, {registration.credential.value},
+               {bytesText registration.publicKey}, {registration.algorithm.value},
+               {(registration.signCount.toNat : Int)},
+               {transportsText registration.transports}, {bytesText registration.aaguid},
+               {boolText registration.backupEligible}, {boolText registration.backupState},
+               {registration.label}, {timeText registration.createdAt})"
+      pure (.ok ())
+
+private def passkeyRegistration [Monad m] (c : Ctx m) (tenant : TenantId)
+    (credential : CredentialId tenant) : m (Option (PasskeyRegistration tenant)) := do
+  let row ← c.first (passkeySelect ++
+    sql!" WHERE tenant = {tenant.value} AND credential_id = {credential.value}")
+  pure (row.map readPasskey)
+
+private def passkeysForAccount [Monad m] (c : Ctx m) (tenant : TenantId)
+    (account : AccountId tenant) : m (List (PasskeyRegistration tenant)) := do
+  let rows ← c.rows (passkeySelect ++
+    sql!" WHERE tenant = {tenant.value}
+            AND credential_id IN
+              (SELECT id FROM {credentials}
+               WHERE tenant = {tenant.value} AND account_id = {account.value})
+          ORDER BY created_at, credential_id")
+  pure (rows.map readPasskey).toList
+
+private def setPasskeySignCount [Monad m] (c : Ctx m) (tenant : TenantId)
+    (credential : CredentialId tenant) (count : UInt32) : m Unit :=
+  c.run
+    sql!"UPDATE {passkeys} SET sign_count = {(count.toNat : Int)}
+         WHERE tenant = {tenant.value} AND credential_id = {credential.value}"
+
+/-! ## Passkey ceremonies -/
+
+private def registrationCeremony : String := "registration"
+private def authenticationCeremony : String := "authentication"
+
+private def ceremonyKindText : PasskeyCeremonyKind → String
+  | .registration => registrationCeremony
+  | .authentication => authenticationCeremony
+
+private def ceremonyKindOf (text : String) : PasskeyCeremonyKind :=
+  if text == registrationCeremony then .registration else .authentication
+
+private def passkeyCeremonySelect : Statement :=
+  sql!"SELECT id, kind, challenge_key, challenge_bytes, nonce_key, nonce_bytes, account_id,
+         return_to, created_at, expires_at, consumed_at
+       FROM {passkeyCeremonies}"
+
+private def readPasskeyCeremony {tenant : TenantId} (row : SqlRow) : PasskeyCeremony tenant :=
+  { id := ⟨row.text 0⟩
+    kind := ceremonyKindOf (row.text 1)
+    challenge := digestOf (row.text 2) (row.text 3)
+    bindingNonce := digestOf (row.text 4) (row.text 5)
+    account := (row.text? 6).map (⟨·⟩)
+    returnTo := row.text? 7
+    createdAt := timeOf (row.int 8)
+    expiresAt := timeOf (row.int 9)
+    consumedAt := (row.int? 10).map timeOf }
+
+private def createPasskeyCeremony [Monad m] (c : Ctx m) (tenant : TenantId)
+    (ceremony : PasskeyCeremony tenant) : m Unit :=
+  c.run
+    sql!"INSERT INTO {passkeyCeremonies}
+           (tenant, id, kind, challenge_key, challenge_bytes, nonce_key, nonce_bytes,
+            account_id, return_to, created_at, expires_at, consumed_at)
+         VALUES ({tenant.value}, {ceremony.id.value}, {ceremonyKindText ceremony.kind},
+           {ceremony.challenge.keyId.value}, {digestBytesText ceremony.challenge},
+           {ceremony.bindingNonce.keyId.value}, {digestBytesText ceremony.bindingNonce},
+           {ceremony.account.map (·.value)}, {ceremony.returnTo},
+           {timeText ceremony.createdAt}, {timeText ceremony.expiresAt},
+           {ceremony.consumedAt.map timeText})"
+
+private def passkeyCeremonyById [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
+    (id : PasskeyCeremonyId tenant) : m (Option (PasskeyCeremony tenant)) := do
+  let row ← c.first (passkeyCeremonySelect ++
+    sql!" WHERE tenant = {tenant.value} AND id = {id.value}
+            AND consumed_at IS NULL AND expires_at > {timeText now}")
+  pure (row.map readPasskeyCeremony)
+
+/-- The only transition a ceremony has is unspent to spent, so what `expected` is compared on is
+that it was unspent. Two requests racing with one challenge therefore produce one sign-in and one
+refusal, as they do for a federation state. -/
+private def commitPasskeyCeremony [Monad m] (c : Ctx m) (tenant : TenantId)
+    (expected next : PasskeyCeremony tenant) : m Bool := do
+  let affected ← c.affected
+    sql!"UPDATE {passkeyCeremonies}
+         SET consumed_at = {next.consumedAt.map timeText}
+         WHERE tenant = {tenant.value} AND id = {expected.id.value}
+           AND consumed_at IS NULL"
+  pure (affected == 1)
 
 /-! ## Federation states -/
 
@@ -877,14 +1037,20 @@ private def purgeExpired [Monad m] (c : Ctx m) (tenant : TenantId) (before : Tim
       sql!"DELETE FROM {federationStates}
            WHERE tenant = {tenant.value}
              AND (expires_at < {timeText before} OR consumed_at < {timeText before})"
+    let ceremoniesRemoved ← c.affected
+      sql!"DELETE FROM {passkeyCeremonies}
+           WHERE tenant = {tenant.value}
+             AND (expires_at < {timeText before} OR consumed_at < {timeText before})"
     pure { attempts := attemptsRemoved, sessions := sessionsRemoved,
-           federationStates := statesRemoved }
+           federationStates := statesRemoved, passkeyCeremonies := ceremoniesRemoved }
 
 private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
   c.transaction fun c => do
     c.run sql!"DELETE FROM {accountEmails} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {passkeys} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {credentials} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {federationStates} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {passkeyCeremonies} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {accounts} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {attempts} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {sessions} WHERE tenant = {tenant.value}"
@@ -912,6 +1078,14 @@ def sqlAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : AuthSt
     startAttempt := startAttempt c
     attemptById := attemptById c
     commitAttempt := commitAttempt c
+    credentialByPasskey := credentialByPasskey c
+    createPasskey := createPasskey c
+    passkeyRegistration := passkeyRegistration c
+    passkeysForAccount := passkeysForAccount c
+    setPasskeySignCount := setPasskeySignCount c
+    createPasskeyCeremony := createPasskeyCeremony c
+    passkeyCeremonyById := passkeyCeremonyById c
+    commitPasskeyCeremony := commitPasskeyCeremony c
     createFederationState := createFederationState c
     federationStateByDigest := federationStateByDigest c
     commitFederationState := commitFederationState c

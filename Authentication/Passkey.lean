@@ -98,8 +98,10 @@ than in the descriptor: `CredentialDescriptor.passkey` carries the only field a 
 (AUTH-4.4.2).
 -/
 structure PasskeyRegistration (tenant : TenantId) where
+  /-- The credential these attributes belong to, and the only identifier on the record. The
+  passkey id lives on the credential's descriptor and nowhere else, so there is one place it can
+  be wrong. -/
   credential : CredentialId tenant
-  passkey : PasskeyId
   /-- The key as a `SubjectPublicKeyInfo` rather than as the COSE map it arrived in, so that
   signing in decodes no CBOR at all. -/
   publicKey : ByteArray

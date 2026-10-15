@@ -34,6 +34,7 @@ another column, so adding one is not a schema rewrite (AUTH-4.4.2). -/
 inductive CredentialKind where
   | emailAddress
   | federatedIdentity
+  | passkey
   deriving DecidableEq, Repr, Inhabited
 
 /-- What a provider calls somebody. Issuer and subject and never the address the provider
@@ -57,11 +58,13 @@ variant already here changes shape (AUTH-4.4.2). -/
 inductive CredentialDescriptor where
   | emailAddress (address : NormalisedEmail)
   | federatedIdentity (identity : FederatedIdentity)
+  | passkey (credential : PasskeyId)
   deriving DecidableEq, Repr
 
 def CredentialDescriptor.kind : CredentialDescriptor → CredentialKind
   | .emailAddress _ => .emailAddress
   | .federatedIdentity _ => .federatedIdentity
+  | .passkey _ => .passkey
 
 /-- What the audit log records a credential as, which for a federated identity is the provider
 and not the person: which issuer gained or lost a way into the account is what the log is read
@@ -69,6 +72,10 @@ for, and the subject names somebody at that provider (AUTH-14.1.7). -/
 def CredentialDescriptor.origin : CredentialDescriptor → String
   | .emailAddress _ => "email-address"
   | .federatedIdentity identity => identity.issuer
+  -- No issuer to name, and the credential id names the person rather than what gained access.
+  -- Which model of authenticator it was is the AAGUID, an attribute rather than part of what
+  -- identifies the credential.
+  | .passkey _ => "passkey"
 
 /-- One means by which an account can prove itself. -/
 structure Credential (tenant : TenantId) where

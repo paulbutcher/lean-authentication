@@ -99,6 +99,37 @@ private def sampleCredential (tenant : TenantId) (id : String) (account : Accoun
     descriptor := .federatedIdentity identity
     createdAt := epoch }
 
+private def samplePasskeyCredential (tenant : TenantId) (id : String) (account : AccountId tenant)
+    (passkey : PasskeyId) : Credential tenant :=
+  { id := ⟨id⟩
+    account
+    descriptor := .passkey passkey
+    createdAt := epoch }
+
+private def samplePasskey (tenant : TenantId) (credential : String) (label : String)
+    (signCount : UInt32 := 0) : PasskeyRegistration tenant :=
+  { credential := ⟨credential⟩
+    publicKey := ⟨#[4, 1, 2, 3]⟩
+    algorithm := ⟨-7⟩
+    signCount
+    transports := ["internal", "hybrid"]
+    aaguid := ⟨#[9, 9]⟩
+    backupEligible := true
+    backupState := false
+    label
+    createdAt := epoch }
+
+private def samplePasskeyCeremony (tenant : TenantId) (id : String) (challenge : Digest)
+    (expiresAt : Timestamp) : PasskeyCeremony tenant :=
+  { id := ⟨id⟩
+    kind := .authentication
+    challenge
+    bindingNonce := digestOf [5, 5]
+    account := some ⟨"account-" ++ id⟩
+    returnTo := some "/after"
+    createdAt := epoch
+    expiresAt }
+
 private def sampleState (tenant : TenantId) (id : String) (digest : Digest)
     (expiresAt : Timestamp) : FederationState tenant :=
   { id := ⟨id⟩
@@ -353,6 +384,54 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     | none => pure false
   let afterStateCommit ← store.federationStateByDigest alpha epoch racedDigest
 
+  -- Passkeys: the credential and its attributes are written together, found by the id the
+  -- authenticator gives back, and invisible to another tenant.
+  let passkey : PasskeyId := ⟨"passkey-handle-1"⟩
+  let passkeyWrite ← store.createPasskey alpha
+    (samplePasskeyCredential alpha "credential-passkey" ⟨"account-1"⟩ passkey)
+    (samplePasskey alpha "credential-passkey" "Laptop")
+  let foundPasskey ← store.credentialByPasskey alpha passkey
+  let crossTenantPasskey ← store.credentialByPasskey beta passkey
+  let registration ← store.passkeyRegistration alpha ⟨"credential-passkey"⟩
+  -- The same handle twice in one tenant is one credential (AUTH-15.4.2).
+  let passkeyAgain ← store.createPasskey alpha
+    (samplePasskeyCredential alpha "credential-passkey-2" ⟨"account-1"⟩ passkey)
+    (samplePasskey alpha "credential-passkey-2" "Duplicate")
+  store.setPasskeySignCount alpha ⟨"credential-passkey"⟩ 42
+  let counted ← store.passkeyRegistration alpha ⟨"credential-passkey"⟩
+  let listedPasskeys ← store.passkeysForAccount alpha ⟨"account-1"⟩
+  -- Removing the credential takes its attributes with it, or the next credential given that id
+  -- would inherit a key it never registered.
+  store.deleteCredential alpha ⟨"credential-passkey"⟩
+  let orphanedRegistration ← store.passkeyRegistration alpha ⟨"credential-passkey"⟩
+
+  -- Ceremonies: expiring, single use under compare and set, and scoped to their tenant.
+  let liveChallenge := digestOf [8, 1]
+  let staleChallenge := digestOf [8, 2]
+  let racedChallenge := digestOf [8, 3]
+  store.createPasskeyCeremony alpha
+    (samplePasskeyCeremony alpha "ceremony-live" liveChallenge later)
+  store.createPasskeyCeremony alpha
+    (samplePasskeyCeremony alpha "ceremony-stale" staleChallenge soon)
+  store.createPasskeyCeremony alpha
+    (samplePasskeyCeremony alpha "ceremony-raced" racedChallenge later)
+  let liveCeremony ← store.passkeyCeremonyById alpha epoch ⟨"ceremony-live"⟩
+  let staleCeremony ← store.passkeyCeremonyById alpha later ⟨"ceremony-stale"⟩
+  let crossTenantCeremony ← store.passkeyCeremonyById beta epoch ⟨"ceremony-live"⟩
+  let racedCeremonyA ← store.passkeyCeremonyById alpha epoch ⟨"ceremony-raced"⟩
+  let racedCeremonyB ← store.passkeyCeremonyById alpha epoch ⟨"ceremony-raced"⟩
+  let firstCeremonyCommit ← match racedCeremonyA with
+    | some ceremony => store.commitPasskeyCeremony alpha ceremony (ceremony.consumed epoch)
+    | none => pure false
+  let secondCeremonyCommit ← match racedCeremonyB with
+    | some ceremony => store.commitPasskeyCeremony alpha ceremony (ceremony.consumed epoch)
+    | none => pure false
+  let afterCeremonyCommit ← store.passkeyCeremonyById alpha epoch ⟨"ceremony-raced"⟩
+  -- Sweeping reaches ceremonies, and reports what it took.
+  store.createPasskeyCeremony swept
+    (samplePasskeyCeremony swept "ceremony-swept" (digestOf [8, 4]) epoch)
+  let purgedCeremonies ← store.purgeExpired swept soon
+
   pure
     [ { name := "an account is readable by the identity it was created with"
         passed := (readBack.map (·.id.value)) == some "account-1" }
@@ -509,6 +588,40 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     , { name := "deleting a tenant removes its credentials (AUTH-4.2.5)"
         passed := doomedCredential.isNone }
     , { name := "deleting a tenant removes its state records (AUTH-4.2.5)"
-        passed := doomedState.isNone } ]
+        passed := doomedState.isNone }
+    , { name := "a passkey credential is readable by the id the authenticator gives back"
+        passed := passkeyWrite.isOk
+          && (foundPasskey.map (·.id.value)) == some "credential-passkey" }
+    , { name := "and carries the passkey id back as its descriptor"
+        passed := (foundPasskey.map (·.descriptor)) == some (.passkey passkey) }
+    , { name := "a passkey credential is invisible from another tenant (AUTH-4.2.4)"
+        passed := crossTenantPasskey.isNone }
+    , { name := "the attributes are written with the credential, not after it"
+        passed := (registration.map (·.label)) == some "Laptop"
+          && (registration.map (·.algorithm)) == some ⟨-7⟩
+          && (registration.map (·.transports)) == some ["internal", "hybrid"]
+          && (registration.map (·.backupEligible)) == some true }
+    , { name := "one passkey id is one credential in a tenant (AUTH-15.4.2)"
+        passed := match passkeyAgain with
+          | .error .duplicateCredential => true
+          | _ => false }
+    , { name := "the counter an assertion reported is kept"
+        passed := (counted.map (·.signCount)) == some 42 }
+    , { name := "an account's passkeys are listed"
+        passed := listedPasskeys.map (·.label) == ["Laptop"] }
+    , { name := "removing a credential removes its attributes, leaving no orphan (AUTH-4.2.5)"
+        passed := orphanedRegistration.isNone }
+    , { name := "a ceremony is readable by the id its cookie names"
+        passed := (liveCeremony.bind (·.account)) == some ⟨"account-ceremony-live"⟩ }
+    , { name := "an expired ceremony is refused on read (AUTH-15.4.3)"
+        passed := staleCeremony.isNone }
+    , { name := "a ceremony is invisible from another tenant (AUTH-4.2.4)"
+        passed := crossTenantCeremony.isNone }
+    , { name := "two requests racing with one challenge produce one sign-in"
+        passed := firstCeremonyCommit && !secondCeremonyCommit }
+    , { name := "a spent ceremony is refused on read"
+        passed := afterCeremonyCommit.isNone }
+    , { name := "sweeping removes expired ceremonies and reports how many"
+        passed := purgedCeremonies.passkeyCeremonies == 1 } ]
 
 end Authentication.Store.Conformance
