@@ -40,7 +40,7 @@ theorem refreshedIdleExpiry_within_absolute {tenant : TenantId} (s : Session ten
   by_cases h : s.absoluteExpiresAt ≤ now.advance idleTimeout
   · simp [h]
   · have h' : ¬ (s.absoluteExpiresAt.epochSeconds ≤ (now.advance idleTimeout).epochSeconds) := h
-    simp only [h, if_false]
+    simp only [h, ite_false]
     omega
 
 /--

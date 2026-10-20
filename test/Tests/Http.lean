@@ -388,13 +388,13 @@ theorem parse_withReturnTo {tenant : TenantId} (attempt : AttemptId tenant)
   | some t =>
     by_cases h : t.utf8ByteSize > AttemptCookie.returnToLimit
     · simp only [AttemptCookie.withReturnTo, AttemptCookie.encodeReturnTo, Option.bind_some,
-        if_pos h]
+        ite_eq_left h]
       simpa [Option.filter, Nat.not_le.mpr h] using dropped
     · have hc : decodeString (encodeString t.toByteArray) = some t.toByteArray := codec t
       have hu : String.fromUTF8? t.toByteArray = some t := by
         simp [String.fromUTF8?, String.fromUTF8, t.isValidUTF8]
       simp only [AttemptCookie.withReturnTo, AttemptCookie.encodeReturnTo, Option.bind_some,
-        if_neg h]
+        ite_eq_right h]
       simp [AttemptCookie.parse, Attempt.cookieValue, String.toList_append,
         List.splitOn_append_cons_self_of_not_mem ha,
         List.splitOn_append_cons_self_of_not_mem hn,
