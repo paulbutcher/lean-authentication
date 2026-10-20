@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.17.0] - 2026-10-20
 
 - Passkeys: WebAuthn registration and sign-in over discoverable credentials, in `AuthenticationPasskey` and `AuthenticationPasskeyHttp`, answering §18.3 (§22).
 - `TenantConfig.originPolicy` says which kinds of credential may originate a session, so a tenant enforcing SSO can stop the magic link being a way around it (AUTH-9.9).
