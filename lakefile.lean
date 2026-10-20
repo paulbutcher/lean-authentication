@@ -33,7 +33,7 @@ per value, and a decoder that refuses anything else, so bytes a signature covers
 re-encoded into different ones. Pure Lean and requires nothing itself.
 -/
 require cbor from git
-  "https://github.com/paulbutcher/lean-cbor" @ "v0.1.0"
+  "https://github.com/paulbutcher/lean-cbor" @ "v0.1.1"
 
 /-
 The one dependency needing a system library, `pkg-config` and OpenSSL 3 development headers. It is
