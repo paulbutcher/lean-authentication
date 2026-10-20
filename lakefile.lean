@@ -13,19 +13,19 @@ package authentication where
     ⟨`warningAsError, true⟩]
 
 require json from git
-  "https://github.com/paulbutcher/lean-json" @ "v0.3.0"
+  "https://github.com/paulbutcher/lean-json" @ "v0.3.1"
 
 require leansqlite from git
   "https://github.com/leanprover/leansqlite" @ "v4.33.0"
 
 require leanpostgres from git
-  "https://github.com/paulbutcher/leanpostgres" @ "v0.7.3"
+  "https://github.com/paulbutcher/leanpostgres" @ "v0.8.1"
 
 require leancurl from git
-  "https://github.com/paulbutcher/leancurl" @ "v0.3.1"
+  "https://github.com/paulbutcher/leancurl" @ "v0.3.2"
 
 require leancrypto from git
-  "https://github.com/paulbutcher/leancrypto" @ "v0.4.1"
+  "https://github.com/paulbutcher/leancrypto" @ "v0.4.2"
 
 /-
 The encoding a COSE key and a WebAuthn attestation object arrive in. Deterministic: one encoding
@@ -41,7 +41,7 @@ confined to the federation targets (AUTH-6.11), so a consumer taking the magic l
 SQL backend, or the authorisation server links none of it.
 -/
 require «lean-libcrypto» from git
-  "https://github.com/paulbutcher/lean-libcrypto" @ "v0.2.0"
+  "https://github.com/paulbutcher/lean-libcrypto" @ "v0.2.1"
 
 /-
 JOSE, and the backend that gives it the elliptic curve half. `lean-jose` is pure Lean and holds the
@@ -49,13 +49,13 @@ algorithm allowlist in its `Policy`, so a token never selects the means of its o
 (AUTH-6.5); `jose-libcrypto` supplies ES256 and the private key operations, over the binding below.
 -/
 require jose from git
-  "https://github.com/paulbutcher/lean-jose" @ "v0.2.1"
+  "https://github.com/paulbutcher/lean-jose" @ "v0.2.2"
 
 require «jose-libcrypto» from git
-  "https://github.com/paulbutcher/jose-libcrypto" @ "v0.1.1"
+  "https://github.com/paulbutcher/jose-libcrypto" @ "v0.1.2"
 
 require leanaws from git
-  "https://github.com/paulbutcher/lean-aws" @ "v0.3.1"
+  "https://github.com/paulbutcher/lean-aws" @ "v0.3.2"
 
 /-
 The HTTP integration target's dependencies, and only its (AUTH-2.3). `lean-forms` and `lean-htmx`
@@ -63,13 +63,13 @@ are not among them: `Middleware.params` already decodes a form body, and nothing
 needs a partial page update.
 -/
 require routing from git
-  "https://github.com/paulbutcher/lean-routing" @ "v0.7.2"
+  "https://github.com/paulbutcher/lean-routing" @ "v0.10.1"
 
 require html from git
-  "https://github.com/paulbutcher/lean-html" @ "v0.9.0"
+  "https://github.com/paulbutcher/lean-html" @ "v0.10.1"
 
 require middleware from git
-  "https://github.com/paulbutcher/lean-middleware" @ "v0.13.0"
+  "https://github.com/paulbutcher/lean-middleware" @ "v0.17.1"
 
 /-- The submodules are globbed because `Authentication.Instances` is deliberately not imported by
 the root: importing it is what turns the default `Clock` and `RandomBytes` on. -/
