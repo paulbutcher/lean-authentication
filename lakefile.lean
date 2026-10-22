@@ -63,7 +63,7 @@ are not among them: `Middleware.params` already decodes a form body, and nothing
 needs a partial page update.
 -/
 require routing from git
-  "https://github.com/paulbutcher/lean-routing" @ "v0.10.1"
+  "https://github.com/paulbutcher/lean-routing" @ "v0.11.0"
 
 require html from git
   "https://github.com/paulbutcher/lean-html" @ "v0.11.0"
