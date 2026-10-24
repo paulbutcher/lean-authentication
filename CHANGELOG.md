@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Chore: bump dependencies.
+- The OAuth endpoints' route tables are checked for shadowed routes at compile time.
+
 ## [0.17.1] - 2026-10-20
 
 - Chore: bump dependencies.

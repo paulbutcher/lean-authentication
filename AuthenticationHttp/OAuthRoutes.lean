@@ -382,24 +382,48 @@ structure Routes where
   /-- Mount outside `Middleware.antiForgery`. -/
   client : List (Routing.Route Routing.Result)
 
+private def perTenantRoutes [Clock IO] [RandomBytes IO] (config : Config) : Routes :=
+  { browser :=
+      [ .get PerTenant.patterns.authorize (authorizeGet config),
+        .post PerTenant.patterns.authorize (authorizePost config) ]
+    client :=
+      [ .post PerTenant.patterns.token (tokenEndpoint config),
+        .post PerTenant.patterns.register (registerEndpoint config),
+        .get PerTenant.patterns.metadata (metadataEndpoint config) ] }
+
+private def atOriginRoutes [Clock IO] [RandomBytes IO] (config : Config) (tenant : TenantId) :
+    Routes :=
+  { browser :=
+      [ .get AtOrigin.patterns.authorize (authorizeGet config tenant.value),
+        .post AtOrigin.patterns.authorize (authorizePost config tenant.value) ]
+    client :=
+      [ .post AtOrigin.patterns.token (tokenEndpoint config tenant.value),
+        .post AtOrigin.patterns.register (registerEndpoint config tenant.value),
+        .get AtOrigin.patterns.metadata (metadataEndpoint config tenant.value) ] }
+
 def routes [Clock IO] [RandomBytes IO] (config : Config) : Routes :=
   match config.mountedAt with
-  | .perTenant =>
-    { browser :=
-        [ .get PerTenant.patterns.authorize (authorizeGet config),
-          .post PerTenant.patterns.authorize (authorizePost config) ]
-      client :=
-        [ .post PerTenant.patterns.token (tokenEndpoint config),
-          .post PerTenant.patterns.register (registerEndpoint config),
-          .get PerTenant.patterns.metadata (metadataEndpoint config) ] }
-  | .origin tenant =>
-    { browser :=
-        [ .get AtOrigin.patterns.authorize (authorizeGet config tenant.value),
-          .post AtOrigin.patterns.authorize (authorizePost config tenant.value) ]
-      client :=
-        [ .post AtOrigin.patterns.token (tokenEndpoint config tenant.value),
-          .post AtOrigin.patterns.register (registerEndpoint config tenant.value),
-          .get AtOrigin.patterns.metadata (metadataEndpoint config tenant.value) ] }
+  | .perTenant => perTenantRoutes config
+  | .origin tenant => atOriginRoutes config tenant
+
+-- `routes_unshadowed` runs at each call, where `split` is one mount's table and so reduces to
+-- concrete patterns; on `routes config` it would be stuck on the match.
+private def handlerOf (config : Config) (browser : StatelessHandler → StatelessHandler)
+    (split : Routes)
+    (hBrowser : Routing.Internal.unshadowed (split.browser.map Routing.Route.key) = true := by
+      routes_unshadowed)
+    (hClient : Routing.Internal.unshadowed (split.client.map Routing.Route.key) = true := by
+      routes_unshadowed) :
+    StatelessHandler :=
+  let wrapped := browser (Routing.toHandler split.browser (fun _ => notFoundPage config) hBrowser)
+  Routing.toHandler split.client (h := hClient) fun request =>
+    -- Matched before the wrapper rather than inside it, so that a path neither table answers is
+    -- a 404 rather than whatever the wrapper makes of it: anti-forgery middleware answers an
+    -- unroutable `POST` with a 403, which says the path exists.
+    if (Routing.matchTable split.browser request.line.method
+        request.line.uri.path.toDecodedSegments.toList).isSome then
+      wrapped.onRequest request
+    else notFoundPage config
 
 /--
 Both halves in one handler, for a deployment with no router of its own to mount them in.
@@ -411,15 +435,8 @@ the token derived from the session cookie wants.
 -/
 def handler [Clock IO] [RandomBytes IO] (config : Config)
     (browser : StatelessHandler → StatelessHandler := id) : StatelessHandler :=
-  let split := routes config
-  let wrapped := browser (Routing.toHandler split.browser (fun _ => notFoundPage config))
-  Routing.toHandler split.client fun request =>
-    -- Matched before the wrapper rather than inside it, so that a path neither table answers is
-    -- a 404 rather than whatever the wrapper makes of it: anti-forgery middleware answers an
-    -- unroutable `POST` with a 403, which says the path exists.
-    if (Routing.matchTable split.browser request.line.method
-        request.line.uri.path.toDecodedSegments.toList).isSome then
-      wrapped.onRequest request
-    else notFoundPage config
+  match config.mountedAt with
+  | .perTenant => handlerOf config browser (perTenantRoutes config)
+  | .origin tenant => handlerOf config browser (atOriginRoutes config tenant)
 
 end Authentication.OAuth.Http
