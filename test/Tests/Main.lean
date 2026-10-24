@@ -32,6 +32,7 @@ def main : IO UInt32 := do
     ++ (← Tests.Http.sameDeviceReturnToChecks)
     ++ (← Tests.Http.humanCheckChecks) ++ (← Tests.Http.webhookChecks)
     ++ (← Tests.Http.emailedCodeChecks) ++ (← Tests.Http.rotationChecks)
+    ++ (← Tests.Http.bodyLimitChecks)
     ++ Tests.Http.paramChecks ++ (← Tests.Webhooks.snsChecks)
     ++ (← Tests.Webhooks.postmarkChecks)
     ++ (← Tests.Ses.flowChecks) ++ (← Tests.Postgres.conformanceChecks)

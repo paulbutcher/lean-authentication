@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 import AuthenticationHttp
 import AuthenticationPostmark
 import AuthenticationSqlite
+import RoutingStd
 import Std.Http.Test.Helpers
 import Tests.Base64Url
 
@@ -65,7 +66,7 @@ private def resolver (t : TenantId) : IO (Option (TenantConfig t)) :=
 as an empty response, which fails whatever was being checked rather than the whole run. -/
 private def send (handler : Authentication.Http.Config) (raw : String) : IO String := do
   let captured ← IO.mkRef ""
-  let served : TestHandler := fun request => (Authentication.Http.handler handler).onRequest request
+  let served : TestHandler := fun request => (Authentication.Http.handler (e := .std) handler).onRequest request
   try
     check "http" raw served fun bytes =>
       captured.set ((String.fromUTF8? bytes).getD "")
@@ -603,6 +604,22 @@ def emailedCodeChecks : IO (List (String × Bool)) := do
       ("http: the emailed code signs in without the link being opened (AUTH-5.4.2)",
         statusOf signedIn == "HTTP/1.1 303 See Other"
           && (cookiePair signedIn "auth_session").isSome) ]
+
+/-- A form of exactly `bodyLimit` bytes, and one a byte over. Both are far past any read buffer, so
+the refusal is the limit's and not how the body happened to arrive. -/
+def bodyLimitChecks : IO (List (String × Bool)) := do
+  let db ← Sqlite.openInMemory
+  let http : Authentication.Http.Config := { ports := portsOn db, tenant := resolver }
+  let fields := "email=person%40example.com&pad="
+  let post (size : Nat) := send http
+    (mkPost "/t/acme/signin" (fields ++ String.ofList (List.replicate (size - fields.length) 'x'))
+      "Content-Type: application/x-www-form-urlencoded\x0d\nConnection: close\x0d\n")
+  let atLimit ← post Authentication.Http.bodyLimit
+  let overLimit ← post (Authentication.Http.bodyLimit + 1)
+  pure
+    [ ("http: a form at the body limit is read", statusOf atLimit == "HTTP/1.1 200 OK"),
+      ("http: a form past it is refused unread",
+        statusOf overLimit == "HTTP/1.1 413 Payload Too Large") ]
 
 /-! ## Reading parameters -/
 

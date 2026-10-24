@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import AuthenticationOidcHttp
 import AuthenticationSqlite
+import RoutingStd
 import Std.Http.Test.Helpers
 
 /-!
@@ -123,7 +124,7 @@ private def portsOn (db : SQLite) : Ports IO :=
 
 private def send (config : Config) (raw : String) : IO String := do
   let captured ← IO.mkRef ""
-  let served : TestHandler := fun request => (handler config).onRequest request
+  let served : TestHandler := fun request => (handler (e := .std) config).onRequest request
   try
     check "oidc-http" raw served fun bytes =>
       captured.set ((String.fromUTF8? bytes).getD "")

@@ -104,9 +104,11 @@ Either reports success, with the id a real transport would have returned for the
 
 ## Mounting the routes
 
+The routes run on whichever `routing` engine the application requires: `routing-std` for `Std.Http.Server`, or `routing-leanin` for LeanIn. The examples use `.std`. No route reads more than 1 MiB of a request body; a larger one is answered `413`.
+
 ```lean
 def routes (db : SQLite) (secret : ByteArray) (token : String) :
-    Std.Http.Server.StatelessHandler :=
+    Routing.StatelessHandler .std :=
   Http.handler
     { ports := ports db secret token
       tenant := fun t => pure (some (config t)) }
@@ -324,7 +326,7 @@ A deployment whose secrets live in KMS or Vault supplies its own `Secrets` port 
 
 ```lean
 def federatedRoutes (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) :
-    Std.Http.Server.StatelessHandler :=
+    Routing.StatelessHandler .std :=
   OidcHttp.handler
     { ports
       oidc
@@ -378,7 +380,7 @@ passkeyRelyingParty := some
 ```
 
 ```lean
-def passkeyRoutes (ports : Service.Ports IO) : Std.Http.Server.StatelessHandler :=
+def passkeyRoutes (ports : Service.Ports IO) : Routing.StatelessHandler .std :=
   PasskeyHttp.handler
     { ports
       verifier := Passkey.verifier

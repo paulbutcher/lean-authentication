@@ -8,7 +8,7 @@ public import AuthenticationHttp.Pages
 public import AuthenticationOAuth.Request
 public import Routing
 import Leancrypto.Compare
-import Middleware
+public import Middleware
 
 /-!
 The sign-in routes (AUTH-13.2).
@@ -33,9 +33,10 @@ public section
 namespace Authentication.Http
 
 open Std Http
-open Std.Async
-open Std.Http.Server
+open Routing (Engine ServerEngine)
 open Authentication.Service
+
+variable {e : Engine} [ServerEngine e]
 
 /-! ## Configuration -/
 
@@ -60,17 +61,29 @@ structure Config where
 
 /-! ## Reading the request -/
 
-def formBody (request : Request Body.Stream) : ContextAsync URI.Query := do
+/-- The most of a body any route here reads, which is `Middleware.params`'s default. A form, a
+ceremony's JSON and a provider's delivery event are each far smaller. -/
+def bodyLimit : Nat := 1024 * 1024
+
+/-- The body as text, or the status refusing it. -/
+def bodyText (request : Request e.ReqBody) : e.M (Except Status String) := do
+  return match ← ServerEngine.readText request.body bodyLimit with
+    | .text value => .ok value
+    | .tooLarge => .error .payloadTooLarge
+    | .notUtf8 => .error .badRequest
+
+/-- An empty query where the request declares no form. -/
+def formBody (request : Request e.ReqBody) : e.M (Except Status URI.Query) := do
   let declared :=
     match request.line.headers.get? Header.Name.contentType with
     | some value =>
       value.value.trimAscii.toString.toLower.startsWith "application/x-www-form-urlencoded"
     | none => false
   if declared then
-    pure (Middleware.ContentType.FormUrlEncoded.parse (← request.body.readAll (α := String)))
-  else pure .empty
+    return (← bodyText request).map Middleware.ContentType.FormUrlEncoded.parse
+  else pure (.ok .empty)
 
-private def queryOf (request : Request Body.Stream) : URI.Query := request.line.uri.query
+private def queryOf (request : Request e.ReqBody) : URI.Query := request.line.uri.query
 
 /--
 Every name and value a query or a form body carries, decoded, duplicates and all.
@@ -96,7 +109,7 @@ blank.
 
 /-- The value a named cookie arrived with, or `none`. Shared with the authorisation server's
 routes, which read the session cookie these issue. -/
-def cookieNamed (request : Request Body.Stream) (name : String) : Option String :=
+def cookieNamed (request : Request e.ReqBody) (name : String) : Option String :=
   match request.line.headers.get? Middleware.Header.Name.cookie with
   | none => none
   | some value => (Middleware.parseCookieHeader value.value).lookup name
@@ -108,7 +121,7 @@ else: reading `X-Forwarded-For` here unconditionally would hand the source-addre
 scope (AUTH-14.1.1) to anyone willing to set a header. Its absence is a proxy that did not say,
 which the limiter already treats as a request that still counts against every other scope.
 -/
-def requesterOf (request : Request Body.Stream) : RequestContext :=
+def requesterOf (request : Request e.ReqBody) : RequestContext :=
   { ip := (request.extensions.get Middleware.ForwardedFor).map (·.addr)
     userAgent := (request.line.headers.get? (Header.Name.mk "user-agent")).map (·.value) }
 
@@ -202,8 +215,8 @@ an authentication page is never framed (AUTH-14.1.5, AUTH-14.2.4). `no-store` is
 page showing a verification code has no business in a shared cache or a back button.
 -/
 def finish (status : Status) (body : String) (cookies : List Header.Value)
-    (location : Option String := none) : ContextAsync (Response Body.Any) := do
-  let response ← Response.withStatus status |>.html body
+    (location : Option String := none) : e.M (Response e.RespBody) := do
+  let response ← ServerEngine.html (Response.withStatus status) body
   let headers := response.line.headers
     |>.insert (Header.Name.mk "x-frame-options") (headerValue "DENY")
     |>.insert (Header.Name.mk "x-content-type-options") (headerValue "nosniff")
@@ -214,6 +227,20 @@ def finish (status : Status) (body : String) (cookies : List Header.Value)
     | none => headers
     | some target => headers.insert (Header.Name.mk "location") (locationValue target)
   pure { response with line := { response.line with headers } }
+
+/-- `body` on the request's body, or `finish` with the status refusing it. -/
+def withBody (request : Request e.ReqBody) (body : String → e.M (Response e.RespBody)) :
+    e.M (Response e.RespBody) := do
+  match ← bodyText request with
+  | .error status => finish status "" []
+  | .ok text => body text
+
+/-- `withBody` for a form. -/
+def withForm (request : Request e.ReqBody) (body : URI.Query → e.M (Response e.RespBody)) :
+    e.M (Response e.RespBody) := do
+  match ← formBody request with
+  | .error status => finish status "" []
+  | .ok form => body form
 
 /-! ## The attempt cookie, and the token bound to it -/
 
@@ -288,7 +315,7 @@ private def tokenAccepted (peppers : PepperRing) (nonce : CredentialValue)
 
 /-! ## Handlers -/
 
-private def notFoundPage (config : Config) : ContextAsync (Response Body.Any) :=
+private def notFoundPage (config : Config) : e.M (Response e.RespBody) :=
   finish .notFound config.pages.unknown []
 
 private def signInPath (tenant : TenantId) : String :=
@@ -311,14 +338,14 @@ private def emailedCodeAction {tenant : TenantId} (config : TenantConfig tenant)
 /-- Resolves the tenant, or answers the way an unrouted path would. A tenant the client does not
 recognise must be indistinguishable from one that does not exist. -/
 private def withTenant (config : Config) (raw : String)
-    (body : (t : TenantId) → TenantConfig t → ContextAsync (Response Body.Any)) :
-    ContextAsync (Response Body.Any) := do
+    (body : (t : TenantId) → TenantConfig t → e.M (Response e.RespBody)) :
+    e.M (Response e.RespBody) := do
   let tenant : TenantId := ⟨raw⟩
   match ← (config.tenant tenant : IO _) with
   | none => notFoundPage config
   | some tenantConfig => body tenant tenantConfig
 
-def signInForm (config : Config) (raw : String) : Routing.Result := fun request =>
+def signInForm (config : Config) (raw : String) : Routing.Result e := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     finish .ok
       (config.pages.signIn
@@ -338,9 +365,8 @@ fails the way a code typed against an expired attempt fails. The redirect target
 both for the same reason: a decoy shorter by the length of an encoded target would say which
 was which.
 -/
-def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
-  withTenant config raw fun tenant tenantConfig => do
-    let form ← formBody request
+def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result e := fun request =>
+  withTenant config raw fun tenant tenantConfig => withForm request fun form => do
     let returnTo := (form.get "returnTo").orElse fun _ => (queryOf request).get "returnTo"
     let requester := requesterOf request
     let now ← (Clock.now : IO Timestamp)
@@ -382,7 +408,7 @@ def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : R
 /-- Opening the magic link: a `GET` that issues nothing and consumes nothing (AUTH-5.2.1). The
 code the cross-device page shows comes back on the outcome, already derived from the token the
 link carried, which is why it can be shown again without ever having been stored (AUTH-5.2.2). -/
-def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result e := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let query := queryOf request
     let attempt : AttemptId tenant := ⟨(query.get "attempt").getD ""⟩
@@ -409,7 +435,7 @@ def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Rout
 cookie cleared, and a redirect to a target the tenant allowed (AUTH-9.8). -/
 private def settled (config : Config) (tenant : TenantId) (tenantConfig : TenantConfig tenant)
     (now : Timestamp) (outcome : Outcome tenant) (returnTo : Option String)
-    (context : PageContext) : ContextAsync (Response Body.Any) :=
+    (context : PageContext) : e.M (Response e.RespBody) :=
   match outcome.session with
   | some _ =>
     finish .seeOther ""
@@ -427,9 +453,8 @@ private def settled (config : Config) (tenant : TenantId) (tenantConfig : Tenant
 
 /-- The same-device `POST` (AUTH-5.2.1). The attempt comes from the cookie rather than the form,
 so a request that does not hold the cookie has no attempt to name. -/
-def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
-  withTenant config raw fun tenant tenantConfig => do
-    let form ← formBody request
+def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result e := fun request =>
+  withTenant config raw fun tenant tenantConfig => withForm request fun form => do
     match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
     | none => notFoundPage config
     | some ⟨attempt, nonce, carried⟩ =>
@@ -451,9 +476,8 @@ def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
               returnTo }
 
 /-- The code typed back into the browser the flow began in. -/
-def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
-  withTenant config raw fun tenant tenantConfig => do
-    let form ← formBody request
+def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result e := fun request =>
+  withTenant config raw fun tenant tenantConfig => withForm request fun form => do
     match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
     | none => notFoundPage config
     | some ⟨attempt, nonce, carried⟩ =>
@@ -478,9 +502,8 @@ def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Ro
 /-- The optional code carried in the mail body (AUTH-5.4). It is a separate endpoint from the
 revealed code because they are separate credentials sharing one entry budget: an endpoint that
 tried both would spend two entries on one submission. -/
-def submitEmailedCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
-  withTenant config raw fun tenant tenantConfig => do
-    let form ← formBody request
+def submitEmailedCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result e := fun request =>
+  withTenant config raw fun tenant tenantConfig => withForm request fun form => do
     match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
     | none => notFoundPage config
     | some ⟨attempt, nonce, carried⟩ =>
@@ -504,7 +527,7 @@ def submitEmailedCode [Clock IO] [RandomBytes IO] (config : Config) (raw : Strin
 
 /-- Accepting an invitation begins an attempt for the invited address and runs the whole of §5,
 so a link opened on a phone signs nobody in on that phone (AUTH-8.4). -/
-def acceptInvitation [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+def acceptInvitation [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result e := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let query := queryOf request
     let invitation : InvitationId tenant := ⟨(query.get "invitation").getD ""⟩
@@ -535,12 +558,11 @@ answers `200` on anything it accepted and `403` on anything it did not, which is
 needs to decide whether to retry.
 -/
 def webhook [Clock IO] (config : Config) (rawTenant : String) (name : String) :
-    Routing.Result := fun request =>
+    Routing.Result e := fun request =>
   withTenant config rawTenant fun tenant _ => do
     match config.webhooks.find? (·.name == name) with
     | none => notFoundPage config
-    | some endpoint =>
-      let body ← request.body.readAll (α := String)
+    | some endpoint => withBody request fun body => do
       let header (field : String) : Option String :=
         (Header.Name.ofString? field.toLower).bind fun name =>
           (request.line.headers.get? name).map (·.value)
@@ -566,7 +588,7 @@ route_table SignIn [
 
 /-- The paths are the ones `BaseUrl.url` builds, because the mail has to arrive somewhere these
 routes answer (AUTH-4.3.2). -/
-@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route Routing.Result) :=
+@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route (Routing.Result e)) :=
   [ .get SignIn.patterns.form (signInForm config),
     .post SignIn.patterns.form (beginSignIn config),
     .get SignIn.patterns.link (openLink config),
@@ -578,7 +600,7 @@ routes answer (AUTH-4.3.2). -/
 
 /-- Mount this wherever the application's own router is. Nothing here is a `Middleware`: these
 are routes, and what wraps them is the client's. -/
-def handler [Clock IO] [RandomBytes IO] (config : Config) : StatelessHandler :=
+def handler [Clock IO] [RandomBytes IO] (config : Config) : Routing.StatelessHandler e :=
   Routing.toHandler (routes config) (fun _ => notFoundPage config)
 
 end Authentication.Http

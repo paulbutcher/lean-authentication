@@ -10,7 +10,7 @@ public import AuthenticationOAuth.Metadata
 public import AuthenticationOAuth.Service
 public import Routing
 import Leancrypto.Compare
-import Middleware
+public import Middleware
 
 /-!
 The authorisation server's own endpoints (§20).
@@ -40,8 +40,7 @@ public section
 namespace Authentication.OAuth.Http
 
 open Std.Http
-open Std.Async
-open Std.Http.Server
+open Routing (Engine ServerEngine)
 
 /-! ## Where the endpoints answer -/
 
@@ -100,26 +99,16 @@ structure Config (mountedAt : Mount := .perTenant) where
   it has to be indistinguishable from a path nothing routes. -/
   notFound : String := _root_.Authentication.Http.Pages.standard.unknown
 
-variable {mountedAt : Mount}
+variable {mountedAt : Mount} {e : Engine} [ServerEngine e]
 
 /-! ## Reading the request -/
 
-private def contentTypeIs (request : Request Body.Stream) (media : String) : Bool :=
+private def contentTypeIs (request : Request e.ReqBody) (media : String) : Bool :=
   match request.line.headers.get? Header.Name.contentType with
   | some value => value.value.trimAscii.toString.toLower.startsWith media
   | none => false
 
-/-- The form body, or `none` where the request did not declare one. The token endpoint reads a
-form and the registration endpoint reads JSON, and neither reads the other: a parser accepting
-either would accept a form-encoded registration, which this server has agreed to read no such
-thing of. -/
-private def formParams (request : Request Body.Stream) : ContextAsync (Option Params) := do
-  if contentTypeIs request "application/x-www-form-urlencoded" then
-    let body ← request.body.readAll (α := String)
-    pure (some (Params.ofQuery (Middleware.ContentType.FormUrlEncoded.parse body)))
-  else pure none
-
-private def queryParams (request : Request Body.Stream) : Params :=
+private def queryParams (request : Request e.ReqBody) : Params :=
   Params.ofQuery request.line.uri.query
 
 /-- What a form said under one name, and nothing at all where it said it twice: a duplicated
@@ -129,7 +118,7 @@ private def only (params : Params) (name : String) : Option String :=
 
 /-- The session credential the browser presented, which `authorize` is what decides the meaning
 of. Read from the cookie the sign-in flow issued and from nowhere else. -/
-private def presentedSession (request : Request Body.Stream) : Option CredentialValue :=
+private def presentedSession (request : Request e.ReqBody) : Option CredentialValue :=
   (_root_.Authentication.Http.cookieNamed request "auth_session").map fun value => ⟨value⟩
 
 /-! ## Writing the response -/
@@ -144,8 +133,8 @@ itself, and a consent page names an account. The framing and sniffing headers ar
 reason the sign-in routes carry them, and a consent page is the one page on this server where
 being framed would turn somebody's click into a grant.
 -/
-private def guarded (response : Response Body.Any) (location : Option String) :
-    Response Body.Any :=
+private def guarded (response : Response e.RespBody) (location : Option String) :
+    Response e.RespBody :=
   let headers := response.line.headers
     |>.insert (Header.Name.mk "x-frame-options") (headerValue "DENY")
     |>.insert (Header.Name.mk "x-content-type-options") (headerValue "nosniff")
@@ -159,17 +148,37 @@ private def guarded (response : Response Body.Any) (location : Option String) :
           (String.ofList (_root_.Authentication.Http.escapeLocation target.toUTF8.toList)))
   { response with line := { response.line with headers } }
 
-private def htmlPage (status : Status) (body : String) : ContextAsync (Response Body.Any) := do
-  let response ← Response.withStatus status |>.html body
+private def htmlPage (status : Status) (body : String) : e.M (Response e.RespBody) := do
+  let response ← ServerEngine.html (Response.withStatus status) body
   pure (guarded response none)
 
-private def jsonBody (status : Status) (payload : Json) : ContextAsync (Response Body.Any) := do
-  let response ← Response.withStatus status |>.json payload.compress
+private def jsonBody (status : Status) (payload : Json) : e.M (Response e.RespBody) := do
+  let response ← ServerEngine.bytes
+    (Response.withStatus status |>.header Header.Name.contentType (.mk "application/json"))
+    payload.compress.toUTF8
   pure (guarded response none)
 
-private def redirectTo (status : Status) (target : String) : ContextAsync (Response Body.Any) := do
-  let response ← Response.withStatus status |>.html ""
+private def redirectTo (status : Status) (target : String) : e.M (Response e.RespBody) := do
+  let response ← ServerEngine.html (Response.withStatus status) ""
   pure (guarded response (some target))
+
+/-- `body` on the request's body, or an empty page with the status refusing it. -/
+private def withBody (request : Request e.ReqBody) (body : String → e.M (Response e.RespBody)) :
+    e.M (Response e.RespBody) := do
+  match ← _root_.Authentication.Http.bodyText request with
+  | .error status => htmlPage status ""
+  | .ok text => body text
+
+/-- `body` on the form, or on `none` where the request did not declare one. The token endpoint
+reads a form and the registration endpoint reads JSON, and neither reads the other: a parser
+accepting either would accept a form-encoded registration, which this server has agreed to read no
+such thing of. -/
+private def withFormParams (request : Request e.ReqBody)
+    (body : Option Params → e.M (Response e.RespBody)) : e.M (Response e.RespBody) :=
+  if contentTypeIs request "application/x-www-form-urlencoded" then
+    withBody request fun text =>
+      body (some (Params.ofQuery (Middleware.ContentType.FormUrlEncoded.parse text)))
+  else body none
 
 private def statusOfCode : Nat → Status
   | 401 => .unauthorized
@@ -179,7 +188,7 @@ private def statusOfCode : Nat → Status
   | _ => .badRequest
 
 /-- A rejection the client is entitled to read, as the JSON body of RFC 6749 §5.2. -/
-private def errorBody (error : ErrorResponse) : ContextAsync (Response Body.Any) :=
+private def errorBody (error : ErrorResponse) : e.M (Response e.RespBody) :=
   jsonBody (statusOfCode error.status) error.toJson
 
 /-! ## The token the consent form carries -/
@@ -203,7 +212,7 @@ private inductive Guard where
   carries (AUTH-15.7.2). -/
   | derived (token : String) (alternates : List String)
 
-private def guardOf (config : Config mountedAt) (request : Request Body.Stream)
+private def guardOf (config : Config mountedAt) (request : Request e.ReqBody)
     (session : Option CredentialValue) : Guard :=
   match request.extensions.get Middleware.AntiForgeryToken with
   | some established => .middleware established.value
@@ -224,13 +233,13 @@ private def Guard.accepts : Guard → Option String → Bool
 
 /-! ## Handlers -/
 
-private def notFoundPage (config : Config mountedAt) : ContextAsync (Response Body.Any) :=
+private def notFoundPage (config : Config mountedAt) : e.M (Response e.RespBody) :=
   htmlPage .notFound config.notFound
 
 /-- Resolves both of the tenant's configurations, or answers the way an unrouted path would. -/
 private def withTenant (config : Config mountedAt) (raw : String)
-    (body : (t : TenantId) → TenantConfig t → OAuthConfig t → ContextAsync (Response Body.Any)) :
-    ContextAsync (Response Body.Any) := do
+    (body : (t : TenantId) → TenantConfig t → OAuthConfig t → e.M (Response e.RespBody)) :
+    e.M (Response e.RespBody) := do
   let tenant : TenantId := ⟨raw⟩
   match ← (config.tenant tenant : IO _) with
   | none => notFoundPage config
@@ -249,7 +258,7 @@ private def amended {tenant : TenantId} (config : Config mountedAt)
 
 private def consentPage {tenant : TenantId} (config : Config mountedAt)
     (tenantConfig : TenantConfig tenant) (action : String) (guard : Guard) (prompt : Service.ConsentPrompt tenant) :
-    ContextAsync (Response Body.Any) :=
+    e.M (Response e.RespBody) :=
   htmlPage .ok
     (config.pages.consent
       { tenantName := tenantConfig.displayName
@@ -267,15 +276,15 @@ private def consentPage {tenant : TenantId} (config : Config mountedAt)
 /-- What an outcome becomes. `redirect` is `302` where a `GET` asked and `303` where a `POST` did,
 so that the answer to a form is not a target the browser would post to again. -/
 private def answered {tenant : TenantId} (config : Config mountedAt) (redirect : Status)
-    (target : String) (onConsent : Service.ConsentPrompt tenant → ContextAsync (Response Body.Any)) :
-    Service.Outcome tenant → ContextAsync (Response Body.Any)
+    (target : String) (onConsent : Service.ConsentPrompt tenant → e.M (Response e.RespBody)) :
+    Service.Outcome tenant → e.M (Response e.RespBody)
   | .consent prompt => onConsent prompt
   | .respond destination => redirectTo redirect destination.location
   | .authenticate => redirectTo redirect (config.signIn tenant target)
   | .refuse error => htmlPage .badRequest (config.pages.refusedClient error.description)
 
 def authorizeGet [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw : String) :
-    Routing.Result := fun request =>
+    Routing.Result e := fun request =>
   withTenant config raw fun _ tenantConfig oauthConfig => do
     let target := toString request.line.uri
     let session := presentedSession request
@@ -293,11 +302,11 @@ hidden fields a page carried back; the form body carries the answer alone, which
 the query cannot hold.
 -/
 def authorizePost [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw : String) :
-    Routing.Result := fun request =>
-  withTenant config raw fun _ tenantConfig oauthConfig => do
+    Routing.Result e := fun request =>
+  withTenant config raw fun _ tenantConfig oauthConfig => withFormParams request fun form => do
     let target := toString request.line.uri
     let session := presentedSession request
-    let form := (← formParams request).getD []
+    let form := form.getD []
     let guard := guardOf config request session
     if !guard.accepts (only form config.antiForgeryField) then
       htmlPage .forbidden config.notFound
@@ -319,9 +328,9 @@ def authorizePost [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw :
 /-- The token endpoint. Form encoded, read from the body alone: a token request that took a
 parameter from the query string would be reading one the client did not agree to send there. -/
 def tokenEndpoint [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw : String) :
-    Routing.Result := fun request =>
-  withTenant config raw fun _ _ oauthConfig => do
-    match ← formParams request with
+    Routing.Result e := fun request =>
+  withTenant config raw fun _ _ oauthConfig => withFormParams request fun params? => do
+    match params? with
     | none =>
       errorBody
         { error := .invalidRequest
@@ -334,9 +343,8 @@ def tokenEndpoint [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw :
 /-- Registration, which is JSON (RFC 7591 §3.1). Nothing here reads a form, so a form-encoded
 registration is refused for being unreadable rather than accepted for looking close enough. -/
 def registerEndpoint [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw : String) :
-    Routing.Result := fun request =>
-  withTenant config raw fun tenant _ _ => do
-    let body ← request.body.readAll (α := String)
+    Routing.Result e := fun request =>
+  withTenant config raw fun tenant _ _ => withBody request fun body => do
     match Json.parse body with
     | .error _ =>
       errorBody { error := .invalidClientMetadata, description := "the request body is not JSON" }
@@ -345,7 +353,7 @@ def registerEndpoint [Clock IO] [RandomBytes IO] (config : Config mountedAt) (ra
       | .error error => errorBody error
       | .ok record => jsonBody .created (Registration.response record)
 
-def metadataEndpoint (config : Config mountedAt) (raw : String) : Routing.Result := fun _ =>
+def metadataEndpoint (config : Config mountedAt) (raw : String) : Routing.Result e := fun _ =>
   withTenant config raw fun _ _ oauthConfig =>
     jsonBody .ok (metadataDocument config.ports.documents oauthConfig)
 
@@ -378,14 +386,14 @@ Both lists carry complete paths for the chosen `Mount`. Neither may be mounted u
 prefix: the metadata document advertises where they answer, and RFC 8414 fixes where the document
 itself answers.
 -/
-structure Routes where
+structure Routes (e : Engine) where
   /-- Mount inside `Middleware.session` and `Middleware.antiForgery`, or inside neither; see
   `Config.antiForgeryField`. -/
-  browser : List (Routing.Route Routing.Result)
+  browser : List (Routing.Route (Routing.Result e))
   /-- Mount outside `Middleware.antiForgery`. -/
-  client : List (Routing.Route Routing.Result)
+  client : List (Routing.Route (Routing.Result e))
 
-@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config mountedAt) : Routes :=
+@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config mountedAt) : Routes e :=
   match mountedAt with
   | .perTenant =>
     { browser :=
@@ -406,13 +414,13 @@ structure Routes where
 
 -- `routes_unshadowed` runs at each call, where `split` is one mount's table and so reduces to
 -- concrete patterns; under `handler`'s own `mountedAt` it would be stuck on the match.
-private def handlerOf (config : Config mountedAt) (browser : StatelessHandler → StatelessHandler)
-    (split : Routes)
+private def handlerOf (config : Config mountedAt) (browser : Routing.StatelessHandler e → Routing.StatelessHandler e)
+    (split : Routes e)
     (hBrowser : Routing.Internal.unshadowed (split.browser.map Routing.Route.key) = true := by
       routes_unshadowed)
     (hClient : Routing.Internal.unshadowed (split.client.map Routing.Route.key) = true := by
       routes_unshadowed) :
-    StatelessHandler :=
+    Routing.StatelessHandler e :=
   let wrapped := browser (Routing.toHandler split.browser (fun _ => notFoundPage config) hBrowser)
   Routing.toHandler split.client (h := hClient) fun request =>
     -- Matched before the wrapper rather than inside it, so that a path neither table answers is
@@ -432,7 +440,7 @@ wrapper rather than being wrapped from outside: the same wrapper over both is th
 the token derived from the session cookie wants.
 -/
 def handler [Clock IO] [RandomBytes IO] (config : Config mountedAt)
-    (browser : StatelessHandler → StatelessHandler := id) : StatelessHandler :=
+    (browser : Routing.StatelessHandler e → Routing.StatelessHandler e := id) : Routing.StatelessHandler e :=
   match mountedAt, config with
   | .perTenant, config => handlerOf config browser (routes config)
   | .origin _, config => handlerOf config browser (routes config)

@@ -7,7 +7,7 @@ module
 public import AuthenticationHttp
 public import AuthenticationOidc
 public import Routing
-import Middleware
+public import Middleware
 
 /-!
 The federated sign-in routes (§6).
@@ -23,10 +23,11 @@ public section
 namespace Authentication.OidcHttp
 
 open Std Http
-open Std.Async
-open Std.Http.Server
+open Routing (Engine ServerEngine)
 open Authentication.Http
 open Authentication.Oidc
+
+variable {e : Engine} [ServerEngine e]
 
 /--
 Why a federated sign-in refused, for the operator rather than for the browser.
@@ -89,19 +90,19 @@ def callbackUri {tenant : TenantId} (config : TenantConfig tenant) (provider : P
     String :=
   (config.baseUrl.url tenant ("/federated/" ++ provider.value ++ "/callback")).value
 
-private def notFound (config : Config) : ContextAsync (Response Body.Any) :=
+private def notFound (config : Config) : e.M (Response e.RespBody) :=
   finish .notFound config.notFoundPage []
 
 /-- The one page every refusal renders, and the reason for it where somebody can read it. -/
 private def refusedBecause (config : Config) (tenant : TenantId) (provider : ProviderConfig)
     (reason : Refusal) (cookies : List Header.Value := []) :
-    ContextAsync (Response Body.Any) := do
+    e.M (Response e.RespBody) := do
   _ ← (config.observeRefusal tenant provider.id reason : IO Unit)
   finish .ok config.refusedPage cookies
 
 private def withProvider (config : Config) (rawTenant rawProvider : String)
     (body : (t : TenantId) → TenantConfig t → ProviderConfig →
-      ContextAsync (Response Body.Any)) : ContextAsync (Response Body.Any) := do
+      e.M (Response e.RespBody)) : e.M (Response e.RespBody) := do
   let tenant : TenantId := ⟨rawTenant⟩
   match ← (config.tenant tenant : IO _) with
   | none => notFound config
@@ -116,9 +117,9 @@ private def withProvider (config : Config) (rawTenant rawProvider : String)
 expects rather than being replayed against it. -/
 private def begin [Clock IO] [RandomBytes IO] {tenant : TenantId} (config : Config)
     (tenantConfig : TenantConfig tenant) (provider : ProviderConfig)
-    (request : Request Body.Stream) (returnTo : Option String)
+    (request : Request e.ReqBody) (returnTo : Option String)
     (invitation : Option (InvitationId tenant)) (account : Option (AccountId tenant)) :
-    ContextAsync (Response Body.Any) := do
+    e.M (Response e.RespBody) := do
   match ← (config.oidc.metadata.discover provider : IO _) with
   | .error reason => refusedBecause config tenant provider (.protocol reason)
   | .ok discovery =>
@@ -132,7 +133,7 @@ private def begin [Clock IO] [RandomBytes IO] {tenant : TenantId} (config : Conf
 
 /-- Sends the browser to the provider, to sign in as whoever it answers with (AUTH-6.1). -/
 def start [Clock IO] [RandomBytes IO] (config : Config) (rawTenant rawProvider : String) :
-    Routing.Result := fun request =>
+    Routing.Result e := fun request =>
   withProvider config rawTenant rawProvider fun _tenant tenantConfig provider =>
     begin config tenantConfig provider request (request.line.uri.query.get "returnTo")
       ((request.line.uri.query.get "invitation").map (⟨·⟩)) none
@@ -150,9 +151,8 @@ The account comes from that session and from nothing in the request, which is th
 start that took an account identifier would link whoever asked to whichever account they named.
 -/
 def linkStart [Clock IO] [RandomBytes IO] (config : Config)
-    (rawTenant rawProvider : String) : Routing.Result := fun request =>
-  withProvider config rawTenant rawProvider fun tenant tenantConfig provider => do
-    let form ← formBody request
+    (rawTenant rawProvider : String) : Routing.Result e := fun request =>
+  withProvider config rawTenant rawProvider fun tenant tenantConfig provider => withForm request fun form => do
     match (cookieNamed request "auth_session").map (fun value => (⟨value⟩ : CredentialValue)) with
     | none => refusedBecause config tenant provider .noSessionCookie
     | some credential =>
@@ -170,9 +170,9 @@ tenant, and this route has no way to ask what the client wanted said. What the b
 told, `Config.observeRefusal` is.
 -/
 def complete [Clock IO] [RandomBytes IO] (config : Config)
-    (rawTenant rawProvider : String) (fromBody : Bool) : Routing.Result := fun request =>
-  withProvider config rawTenant rawProvider fun tenant tenantConfig provider => do
-    let query ← if fromBody then formBody request else pure request.line.uri.query
+    (rawTenant rawProvider : String) (fromBody : Bool) : Routing.Result e := fun request =>
+  withProvider config rawTenant rawProvider fun tenant tenantConfig provider =>
+    (if fromBody then withForm request else (· request.line.uri.query)) fun query => do
     let held := cookieNamed request "auth_federation"
     let cleared := clearCookie tenantConfig.baseUrl "auth_federation" (BaseUrl.tenantPath tenant)
     match query.get "code" with
@@ -209,14 +209,14 @@ route_table Federated [
 /-- The callback path is the one `callbackUri` builds, because the provider sends the browser to
 the URI that was registered and nowhere else. That the two agree is worth a test rather than a
 comment. -/
-@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route Routing.Result) :=
+@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route (Routing.Result e)) :=
   [ .get Federated.patterns.start (start config),
     .post Federated.patterns.start (linkStart config),
     .get Federated.patterns.callback (fun t p => complete config t p false),
     .post Federated.patterns.callback (fun t p => complete config t p true) ]
 
 /-- Mount this wherever the application's own router is, as the sign-in routes are mounted. -/
-def handler [Clock IO] [RandomBytes IO] (config : Config) : StatelessHandler :=
+def handler [Clock IO] [RandomBytes IO] (config : Config) : Routing.StatelessHandler e :=
   Routing.toHandler (routes config) (fun _ => notFound config)
 
 end Authentication.OidcHttp
