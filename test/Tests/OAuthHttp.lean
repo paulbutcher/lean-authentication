@@ -361,9 +361,8 @@ def originChecks : IO (List (String × Bool)) := do
   clockRef.set ⟨1700000000⟩
   let db ← Sqlite.openInMemory
   db.exec sqliteSchemaSql
-  let originConfig : OAuth.Http.Config :=
+  let originConfig : OAuth.Http.Config (.origin tenant) :=
     { configOn db with
-      mountedAt := .origin tenant
       oauth := fun t =>
         if h : t = tenant then
           pure (some (h ▸ (OAuthConfig.atOrigin base [⟨"files:read"⟩] : OAuthConfig tenant)))

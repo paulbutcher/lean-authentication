@@ -487,7 +487,7 @@ def oauth : OAuth.Http.Config :=
 | `/t/<tenant>/oauth/register` | `POST`, RFC 7591 JSON |
 | `/.well-known/oauth-authorization-server/t/<tenant>` | `GET` |
 
-`Config.mountedAt` chooses between those paths and the same four at the origin, which is what a deployment serving one tenant wants: RFC 8414 §3 puts the well-known suffix *ahead* of an issuer's path, so an issuer with a path is discovered only at a URL a client constructs, while an issuer with none is discovered at the URL every client tries. `OAuthConfig.standard` pairs with `.perTenant` and `OAuthConfig.atOrigin` with `.origin`; nothing detects a mismatch at run time, because everything works except discovery.
+`OAuth.Http.Config` serves those paths; `OAuth.Http.Config (.origin tenant)` serves the same four at the origin, which is what a deployment serving one tenant wants: RFC 8414 §3 puts the well-known suffix *ahead* of an issuer's path, so an issuer with a path is discovered only at a URL a client constructs, while an issuer with none is discovered at the URL every client tries. `OAuthConfig.standard` pairs with `.perTenant` and `OAuthConfig.atOrigin` with `.origin`; nothing detects a mismatch at run time, because everything works except discovery.
 
 `OAuth.Http.routes` returns the routes in two lists rather than one, and the split is the point:
 

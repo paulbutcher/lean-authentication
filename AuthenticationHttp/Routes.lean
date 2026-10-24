@@ -318,7 +318,7 @@ private def withTenant (config : Config) (raw : String)
   | none => notFoundPage config
   | some tenantConfig => body tenant tenantConfig
 
-private def signInForm (config : Config) (raw : String) : Routing.Result := fun request =>
+def signInForm (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     finish .ok
       (config.pages.signIn
@@ -338,7 +338,7 @@ fails the way a code typed against an expired attempt fails. The redirect target
 both for the same reason: a decoy shorter by the length of an encoded target would say which
 was which.
 -/
-private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let form ← formBody request
     let returnTo := (form.get "returnTo").orElse fun _ => (queryOf request).get "returnTo"
@@ -382,7 +382,7 @@ private def beginSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : Str
 /-- Opening the magic link: a `GET` that issues nothing and consumes nothing (AUTH-5.2.1). The
 code the cross-device page shows comes back on the outcome, already derived from the token the
 link carried, which is why it can be shown again without ever having been stored (AUTH-5.2.2). -/
-private def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+def openLink [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let query := queryOf request
     let attempt : AttemptId tenant := ⟨(query.get "attempt").getD ""⟩
@@ -427,7 +427,7 @@ private def settled (config : Config) (tenant : TenantId) (tenantConfig : Tenant
 
 /-- The same-device `POST` (AUTH-5.2.1). The attempt comes from the cookie rather than the form,
 so a request that does not hold the cookie has no attempt to name. -/
-private def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let form ← formBody request
     match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
@@ -451,7 +451,7 @@ private def confirmSignIn [Clock IO] [RandomBytes IO] (config : Config) (raw : S
               returnTo }
 
 /-- The code typed back into the browser the flow began in. -/
-private def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let form ← formBody request
     match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
@@ -478,7 +478,7 @@ private def submitCode [Clock IO] [RandomBytes IO] (config : Config) (raw : Stri
 /-- The optional code carried in the mail body (AUTH-5.4). It is a separate endpoint from the
 revealed code because they are separate credentials sharing one entry budget: an endpoint that
 tried both would spend two entries on one submission. -/
-private def submitEmailedCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+def submitEmailedCode [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let form ← formBody request
     match (cookieNamed request "auth_attempt").bind (AttemptCookie.parse (tenant := tenant)) with
@@ -504,7 +504,7 @@ private def submitEmailedCode [Clock IO] [RandomBytes IO] (config : Config) (raw
 
 /-- Accepting an invitation begins an attempt for the invited address and runs the whole of §5,
 so a link opened on a phone signs nobody in on that phone (AUTH-8.4). -/
-private def acceptInvitation [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
+def acceptInvitation [Clock IO] [RandomBytes IO] (config : Config) (raw : String) : Routing.Result := fun request =>
   withTenant config raw fun tenant tenantConfig => do
     let query := queryOf request
     let invitation : InvitationId tenant := ⟨(query.get "invitation").getD ""⟩
@@ -534,7 +534,7 @@ The endpoint verifies before it returns anything, so this reads no header and tr
 answers `200` on anything it accepted and `403` on anything it did not, which is what a provider
 needs to decide whether to retry.
 -/
-private def webhook [Clock IO] (config : Config) (rawTenant : String) (name : String) :
+def webhook [Clock IO] (config : Config) (rawTenant : String) (name : String) :
     Routing.Result := fun request =>
   withTenant config rawTenant fun tenant _ => do
     match config.webhooks.find? (·.name == name) with
@@ -566,7 +566,7 @@ route_table SignIn [
 
 /-- The paths are the ones `BaseUrl.url` builds, because the mail has to arrive somewhere these
 routes answer (AUTH-4.3.2). -/
-def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route Routing.Result) :=
+@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route Routing.Result) :=
   [ .get SignIn.patterns.form (signInForm config),
     .post SignIn.patterns.form (beginSignIn config),
     .get SignIn.patterns.link (openLink config),

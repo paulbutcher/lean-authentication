@@ -66,7 +66,9 @@ inductive Mount where
 
 /-! ## Configuration -/
 
-structure Config where
+/-- Indexed by its `Mount` so that `routes` reduces to one mount's table wherever the type names
+it, which is what lets `Routing.toHandler` check a consumer's combined list for shadowing. -/
+structure Config (mountedAt : Mount := .perTenant) where
   ports : OAuth.Service.Ports IO
   /-- The same lookup `Authentication.Http.Config.tenant` takes, and in a deployment serving both
   it is the same value. A tenant it does not recognise is a 404 here too. -/
@@ -75,7 +77,6 @@ structure Config where
   its lifetimes are not derivable from a `TenantConfig`. -/
   oauth : (t : TenantId) → IO (Option (OAuthConfig t))
   pages : OAuthPages := .standard
-  mountedAt : Mount := .perTenant
   /-- What a request naming no `scope` at all is asked about.
 
   OAuth 2.1 §3.2.2.1 leaves a server two answers to such a request, a default set or a refusal.
@@ -98,6 +99,8 @@ structure Config where
   /-- Answered for a tenant neither lookup recognises. A page rather than a bare status, because
   it has to be indistinguishable from a path nothing routes. -/
   notFound : String := _root_.Authentication.Http.Pages.standard.unknown
+
+variable {mountedAt : Mount}
 
 /-! ## Reading the request -/
 
@@ -200,7 +203,7 @@ private inductive Guard where
   carries (AUTH-15.7.2). -/
   | derived (token : String) (alternates : List String)
 
-private def guardOf (config : Config) (request : Request Body.Stream)
+private def guardOf (config : Config mountedAt) (request : Request Body.Stream)
     (session : Option CredentialValue) : Guard :=
   match request.extensions.get Middleware.AntiForgeryToken with
   | some established => .middleware established.value
@@ -221,11 +224,11 @@ private def Guard.accepts : Guard → Option String → Bool
 
 /-! ## Handlers -/
 
-private def notFoundPage (config : Config) : ContextAsync (Response Body.Any) :=
+private def notFoundPage (config : Config mountedAt) : ContextAsync (Response Body.Any) :=
   htmlPage .notFound config.notFound
 
 /-- Resolves both of the tenant's configurations, or answers the way an unrouted path would. -/
-private def withTenant (config : Config) (raw : String)
+private def withTenant (config : Config mountedAt) (raw : String)
     (body : (t : TenantId) → TenantConfig t → OAuthConfig t → ContextAsync (Response Body.Any)) :
     ContextAsync (Response Body.Any) := do
   let tenant : TenantId := ⟨raw⟩
@@ -238,14 +241,14 @@ private def withTenant (config : Config) (raw : String)
 
 /-- Applied wherever a prompt is built, so that what the `POST` reads an answer about is what the
 `GET` displayed. -/
-private def amended {tenant : TenantId} (config : Config)
+private def amended {tenant : TenantId} (config : Config mountedAt)
     (prompt : Service.ConsentPrompt tenant) : Service.ConsentPrompt tenant :=
   match config.defaultScopes with
   | none => prompt
   | some scopes => prompt.withDefaultScopes scopes
 
-private def consentPage {tenant : TenantId} (config : Config) (tenantConfig : TenantConfig tenant)
-    (action : String) (guard : Guard) (prompt : Service.ConsentPrompt tenant) :
+private def consentPage {tenant : TenantId} (config : Config mountedAt)
+    (tenantConfig : TenantConfig tenant) (action : String) (guard : Guard) (prompt : Service.ConsentPrompt tenant) :
     ContextAsync (Response Body.Any) :=
   htmlPage .ok
     (config.pages.consent
@@ -263,15 +266,15 @@ private def consentPage {tenant : TenantId} (config : Config) (tenantConfig : Te
 
 /-- What an outcome becomes. `redirect` is `302` where a `GET` asked and `303` where a `POST` did,
 so that the answer to a form is not a target the browser would post to again. -/
-private def answered {tenant : TenantId} (config : Config) (redirect : Status) (target : String)
-    (onConsent : Service.ConsentPrompt tenant → ContextAsync (Response Body.Any)) :
+private def answered {tenant : TenantId} (config : Config mountedAt) (redirect : Status)
+    (target : String) (onConsent : Service.ConsentPrompt tenant → ContextAsync (Response Body.Any)) :
     Service.Outcome tenant → ContextAsync (Response Body.Any)
   | .consent prompt => onConsent prompt
   | .respond destination => redirectTo redirect destination.location
   | .authenticate => redirectTo redirect (config.signIn tenant target)
   | .refuse error => htmlPage .badRequest (config.pages.refusedClient error.description)
 
-private def authorizeGet [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+def authorizeGet [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw : String) :
     Routing.Result := fun request =>
   withTenant config raw fun _ tenantConfig oauthConfig => do
     let target := toString request.line.uri
@@ -289,7 +292,7 @@ on again, which is what makes the decision one about the request as it arrived r
 hidden fields a page carried back; the form body carries the answer alone, which is the one thing
 the query cannot hold.
 -/
-private def authorizePost [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+def authorizePost [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw : String) :
     Routing.Result := fun request =>
   withTenant config raw fun _ tenantConfig oauthConfig => do
     let target := toString request.line.uri
@@ -315,7 +318,7 @@ private def authorizePost [Clock IO] [RandomBytes IO] (config : Config) (raw : S
 
 /-- The token endpoint. Form encoded, read from the body alone: a token request that took a
 parameter from the query string would be reading one the client did not agree to send there. -/
-private def tokenEndpoint [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+def tokenEndpoint [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw : String) :
     Routing.Result := fun request =>
   withTenant config raw fun _ _ oauthConfig => do
     match ← formParams request with
@@ -330,7 +333,7 @@ private def tokenEndpoint [Clock IO] [RandomBytes IO] (config : Config) (raw : S
 
 /-- Registration, which is JSON (RFC 7591 §3.1). Nothing here reads a form, so a form-encoded
 registration is refused for being unreadable rather than accepted for looking close enough. -/
-private def registerEndpoint [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+def registerEndpoint [Clock IO] [RandomBytes IO] (config : Config mountedAt) (raw : String) :
     Routing.Result := fun request =>
   withTenant config raw fun tenant _ _ => do
     let body ← request.body.readAll (α := String)
@@ -342,7 +345,7 @@ private def registerEndpoint [Clock IO] [RandomBytes IO] (config : Config) (raw 
       | .error error => errorBody error
       | .ok record => jsonBody .created (Registration.response record)
 
-private def metadataEndpoint (config : Config) (raw : String) : Routing.Result := fun _ =>
+def metadataEndpoint (config : Config mountedAt) (raw : String) : Routing.Result := fun _ =>
   withTenant config raw fun _ _ oauthConfig =>
     jsonBody .ok (metadataDocument config.ports.documents oauthConfig)
 
@@ -382,33 +385,28 @@ structure Routes where
   /-- Mount outside `Middleware.antiForgery`. -/
   client : List (Routing.Route Routing.Result)
 
-private def perTenantRoutes [Clock IO] [RandomBytes IO] (config : Config) : Routes :=
-  { browser :=
-      [ .get PerTenant.patterns.authorize (authorizeGet config),
-        .post PerTenant.patterns.authorize (authorizePost config) ]
-    client :=
-      [ .post PerTenant.patterns.token (tokenEndpoint config),
-        .post PerTenant.patterns.register (registerEndpoint config),
-        .get PerTenant.patterns.metadata (metadataEndpoint config) ] }
-
-private def atOriginRoutes [Clock IO] [RandomBytes IO] (config : Config) (tenant : TenantId) :
-    Routes :=
-  { browser :=
-      [ .get AtOrigin.patterns.authorize (authorizeGet config tenant.value),
-        .post AtOrigin.patterns.authorize (authorizePost config tenant.value) ]
-    client :=
-      [ .post AtOrigin.patterns.token (tokenEndpoint config tenant.value),
-        .post AtOrigin.patterns.register (registerEndpoint config tenant.value),
-        .get AtOrigin.patterns.metadata (metadataEndpoint config tenant.value) ] }
-
-def routes [Clock IO] [RandomBytes IO] (config : Config) : Routes :=
-  match config.mountedAt with
-  | .perTenant => perTenantRoutes config
-  | .origin tenant => atOriginRoutes config tenant
+@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config mountedAt) : Routes :=
+  match mountedAt with
+  | .perTenant =>
+    { browser :=
+        [ .get PerTenant.patterns.authorize (authorizeGet config),
+          .post PerTenant.patterns.authorize (authorizePost config) ]
+      client :=
+        [ .post PerTenant.patterns.token (tokenEndpoint config),
+          .post PerTenant.patterns.register (registerEndpoint config),
+          .get PerTenant.patterns.metadata (metadataEndpoint config) ] }
+  | .origin tenant =>
+    { browser :=
+        [ .get AtOrigin.patterns.authorize (authorizeGet config tenant.value),
+          .post AtOrigin.patterns.authorize (authorizePost config tenant.value) ]
+      client :=
+        [ .post AtOrigin.patterns.token (tokenEndpoint config tenant.value),
+          .post AtOrigin.patterns.register (registerEndpoint config tenant.value),
+          .get AtOrigin.patterns.metadata (metadataEndpoint config tenant.value) ] }
 
 -- `routes_unshadowed` runs at each call, where `split` is one mount's table and so reduces to
--- concrete patterns; on `routes config` it would be stuck on the match.
-private def handlerOf (config : Config) (browser : StatelessHandler → StatelessHandler)
+-- concrete patterns; under `handler`'s own `mountedAt` it would be stuck on the match.
+private def handlerOf (config : Config mountedAt) (browser : StatelessHandler → StatelessHandler)
     (split : Routes)
     (hBrowser : Routing.Internal.unshadowed (split.browser.map Routing.Route.key) = true := by
       routes_unshadowed)
@@ -433,10 +431,10 @@ wrapper rather than being wrapped from outside: the same wrapper over both is th
 `Routes` exists to make hard. The default wraps in nothing, which is what a deployment relying on
 the token derived from the session cookie wants.
 -/
-def handler [Clock IO] [RandomBytes IO] (config : Config)
+def handler [Clock IO] [RandomBytes IO] (config : Config mountedAt)
     (browser : StatelessHandler → StatelessHandler := id) : StatelessHandler :=
-  match config.mountedAt with
-  | .perTenant => handlerOf config browser (perTenantRoutes config)
-  | .origin tenant => handlerOf config browser (atOriginRoutes config tenant)
+  match mountedAt, config with
+  | .perTenant, config => handlerOf config browser (routes config)
+  | .origin _, config => handlerOf config browser (routes config)
 
 end Authentication.OAuth.Http

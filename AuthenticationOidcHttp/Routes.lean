@@ -131,7 +131,7 @@ private def begin [Clock IO] [RandomBytes IO] {tenant : TenantId} (config : Conf
       finish .seeOther "" [setCookie now begun.cookie] (some begun.authorizationUrl)
 
 /-- Sends the browser to the provider, to sign in as whoever it answers with (AUTH-6.1). -/
-private def start [Clock IO] [RandomBytes IO] (config : Config) (rawTenant rawProvider : String) :
+def start [Clock IO] [RandomBytes IO] (config : Config) (rawTenant rawProvider : String) :
     Routing.Result := fun request =>
   withProvider config rawTenant rawProvider fun _tenant tenantConfig provider =>
     begin config tenantConfig provider request (request.line.uri.query.get "returnTo")
@@ -149,7 +149,7 @@ sign-in as another, and a link has to be asked for rather than read into a sessi
 The account comes from that session and from nothing in the request, which is the rest of it. A
 start that took an account identifier would link whoever asked to whichever account they named.
 -/
-private def linkStart [Clock IO] [RandomBytes IO] (config : Config)
+def linkStart [Clock IO] [RandomBytes IO] (config : Config)
     (rawTenant rawProvider : String) : Routing.Result := fun request =>
   withProvider config rawTenant rawProvider fun tenant tenantConfig provider => do
     let form ← formBody request
@@ -169,7 +169,7 @@ equalises the other route's: which of the refusals it was describes the person r
 tenant, and this route has no way to ask what the client wanted said. What the browser is not
 told, `Config.observeRefusal` is.
 -/
-private def complete [Clock IO] [RandomBytes IO] (config : Config)
+def complete [Clock IO] [RandomBytes IO] (config : Config)
     (rawTenant rawProvider : String) (fromBody : Bool) : Routing.Result := fun request =>
   withProvider config rawTenant rawProvider fun tenant tenantConfig provider => do
     let query ← if fromBody then formBody request else pure request.line.uri.query
@@ -209,7 +209,7 @@ route_table Federated [
 /-- The callback path is the one `callbackUri` builds, because the provider sends the browser to
 the URI that was registered and nowhere else. That the two agree is worth a test rather than a
 comment. -/
-def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route Routing.Result) :=
+@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) : List (Routing.Route Routing.Result) :=
   [ .get Federated.patterns.start (start config),
     .post Federated.patterns.start (linkStart config),
     .get Federated.patterns.callback (fun t p => complete config t p false),

@@ -153,7 +153,7 @@ A `POST` carrying no body, and its forgery defence is the session cookie's: `Sam
 sent on a cross-site `POST`, so a request provoked from another site arrives signed in as nobody
 and starts nothing (AUTH-6.7.1 gives the same reasoning for a federated link).
 -/
-private def beginRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+def beginRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
     Routing.Result := fun request =>
   withTenant config (fun tenant tenantConfig => do
     match ← signedInAs config tenantConfig request with
@@ -166,7 +166,7 @@ private def beginRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw
         jsonResponse .ok (registrationJson tenantConfig options) [setCookie now options.cookie])
     raw
 
-private def completeRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+def completeRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
     Routing.Result := fun request =>
   withTenant config (fun tenant tenantConfig => do
     match ← signedInAs config tenantConfig request with
@@ -191,7 +191,7 @@ private def completeRegistration [Clock IO] [RandomBytes IO] (config : Config) (
 
 /-- Begins an authentication. No session is needed and none is read: which account this signs in
 is settled by the assertion, not by whoever asks for a challenge. -/
-private def beginAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+def beginAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
     Routing.Result := fun request =>
   withTenant config (fun tenant tenantConfig => do
     match ← (Service.beginAuthentication config.ports tenantConfig
@@ -205,7 +205,7 @@ private def beginAuthentication [Clock IO] [RandomBytes IO] (config : Config) (r
 /-- Completes an authentication and issues the session cookie. `returnTo` comes off the ceremony
 record rather than the request, and is still the client's to validate against the tenant's
 allowlist before it redirects (AUTH-9.8). -/
-private def completeAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+def completeAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
     Routing.Result := fun request =>
   withTenant config (fun tenant tenantConfig => do
     match ← jsonPayload request with
@@ -234,7 +234,7 @@ route_table Passkey [
   signInComplete := "/t/:tenant:String/passkey/signin/complete"
 ]
 
-def routes [Clock IO] [RandomBytes IO] (config : Config) :
+@[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) :
     List (Routing.Route Routing.Result) :=
   [ .post Passkey.patterns.register (beginRegistration config),
     .post Passkey.patterns.registerComplete (completeRegistration config),

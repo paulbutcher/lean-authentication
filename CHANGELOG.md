@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- The route lists are exposed, so a consumer can combine them with its own in one `Routing.toHandler`.
+- `OAuth.Http.Config` is indexed by its `Mount` in place of the `mountedAt` field.
+
 ## [0.18.0] - 2026-10-24
 
 - Chore: bump dependencies.
