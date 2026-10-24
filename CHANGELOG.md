@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.20.0] - 2026-10-24
+
+- The HTTP routes are generic over `routing`'s `Engine`, so they run on `Std.Http.Server` or LeanIn; require `routing-std` or `routing-leanin` and write `Routing.StatelessHandler .std` where `Std.Http.Server.StatelessHandler` was.
+- No route reads more than 1 MiB of a request body, answering `413` past it and `400` for one that is not UTF-8.
+
 ## [0.19.0] - 2026-10-24
 
 - The route lists are exposed, so a consumer can combine them with its own in one `Routing.toHandler`.

@@ -6,6 +6,7 @@ import AuthenticationHttp
 import AuthenticationOAuth
 import AuthenticationSqlite
 import Middleware.Test.Browser
+import RoutingStd
 import Std.Http.Test.Helpers
 
 /-!
@@ -161,7 +162,7 @@ private def configOn (db : SQLite) : OAuth.Http.Config :=
     oauth := oauthResolver }
 
 private def handlerOn (db : SQLite) : TestHandler := fun request =>
-  (OAuth.Http.handler (configOn db)).onRequest request
+  (OAuth.Http.handler (e := .std) (configOn db)).onRequest request
 
 /-- Sends one raw request and returns the raw response. A failure inside the harness comes back
 as an empty response, which fails whatever was being checked rather than the whole run. -/
@@ -367,7 +368,7 @@ def originChecks : IO (List (String × Bool)) := do
         if h : t = tenant then
           pure (some (h ▸ (OAuthConfig.atOrigin base [⟨"files:read"⟩] : OAuthConfig tenant)))
         else pure none }
-  let handler : TestHandler := fun request => (OAuth.Http.handler originConfig).onRequest request
+  let handler : TestHandler := fun request => (OAuth.Http.handler (e := .std) originConfig).onRequest request
   let fetch (path : String) : IO String := do
     let captured ← IO.mkRef ""
     try

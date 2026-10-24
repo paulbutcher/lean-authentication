@@ -5,6 +5,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 import AuthenticationOidcHttp
 import AuthenticationSqlite
 import Authentication.Instances
+import RoutingStd
 
 /-!
 The federated sign-in wiring the README prints.
@@ -65,7 +66,7 @@ private def config (tenant : TenantId) : TenantConfig tenant :=
 
 /-- The mount under "Mounting". -/
 def federatedRoutes (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) :
-    Std.Http.Server.StatelessHandler :=
+    Routing.StatelessHandler .std :=
   OidcHttp.handler
     { ports
       oidc

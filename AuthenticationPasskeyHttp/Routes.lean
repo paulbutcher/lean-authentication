@@ -7,7 +7,7 @@ module
 public import AuthenticationHttp
 public import AuthenticationPasskey
 public import Routing
-import Middleware
+public import Middleware
 
 /-!
 The passkey routes (§18.3).
@@ -26,10 +26,11 @@ public section
 namespace Authentication.PasskeyHttp
 
 open Std Http
-open Std.Async
-open Std.Http.Server
+open Routing (Engine ServerEngine)
 open Authentication.Http
 open Authentication.Passkey
+
+variable {e : Engine} [ServerEngine e]
 
 structure Config where
   ports : Service.Ports IO
@@ -45,7 +46,7 @@ structure Config where
 private def headerValue (text : String) : Header.Value :=
   (Header.Value.ofString? text).getD default
 
-private def guarded (response : Response Body.Any) : Response Body.Any :=
+private def guarded (response : Response e.RespBody) : Response e.RespBody :=
   let headers := response.line.headers
     |>.insert (Header.Name.mk "x-frame-options") (headerValue "DENY")
     |>.insert (Header.Name.mk "x-content-type-options") (headerValue "nosniff")
@@ -54,8 +55,10 @@ private def guarded (response : Response Body.Any) : Response Body.Any :=
   { response with line := { response.line with headers } }
 
 private def jsonResponse (status : Status) (payload : Json)
-    (cookies : List Header.Value := []) : ContextAsync (Response Body.Any) := do
-  let response ← Response.withStatus status |>.json payload.compress
+    (cookies : List Header.Value := []) : e.M (Response e.RespBody) := do
+  let response ← ServerEngine.bytes
+    (Response.withStatus status |>.header Header.Name.contentType (.mk "application/json"))
+    payload.compress.toUTF8
   let headers := cookies.foldl (fun hs value => hs.insert setCookieName value)
     (guarded response).line.headers
   pure { response with line := { response.line with headers } }
@@ -66,11 +69,11 @@ through `observeRefusal` and nowhere else. -/
 private def refusedBody : Json := Json.mkObj [("error", .str "rejected")]
 
 private def refused (config : Config) (tenant : TenantId) (reason : CeremonyRefusal) :
-    ContextAsync (Response Body.Any) := do
+    e.M (Response e.RespBody) := do
   _ ← (config.observeRefusal tenant reason : IO Unit)
   jsonResponse .badRequest refusedBody
 
-private def notFound : ContextAsync (Response Body.Any) :=
+private def notFound : e.M (Response e.RespBody) :=
   jsonResponse .notFound (Json.mkObj [("error", .str "not-found")])
 
 private def stringMember (payload : Json) (name : String) : Option String :=
@@ -91,8 +94,8 @@ private def listMember (payload : Json) (name : String) : List String :=
   | some elements => elements.toList.filterMap (·.getStr?.toOption)
 
 private def withTenant (config : Config)
-    (body : (t : TenantId) → TenantConfig t → ContextAsync (Response Body.Any)) (raw : String) :
-    ContextAsync (Response Body.Any) := do
+    (body : (t : TenantId) → TenantConfig t → e.M (Response e.RespBody)) (raw : String) :
+    e.M (Response e.RespBody) := do
   let tenant : TenantId := ⟨raw⟩
   match ← (config.tenant tenant : IO _) with
   | none => notFound
@@ -101,7 +104,7 @@ private def withTenant (config : Config)
 /-- The account the request is signed in as, or none. Registration is reached only from a live
 session, as a federated link is (AUTH-6.7.1). -/
 private def signedInAs [Clock IO] (config : Config) {tenant : TenantId} (tenantConfig : TenantConfig tenant)
-    (request : Request Body.Stream) : ContextAsync (Option (AccountId tenant)) := do
+    (request : Request e.ReqBody) : e.M (Option (AccountId tenant)) := do
   match (cookieNamed request "auth_session").map (fun value => (⟨value⟩ : CredentialValue)) with
   | none => pure none
   | some credential =>
@@ -109,10 +112,13 @@ private def signedInAs [Clock IO] (config : Config) {tenant : TenantId} (tenantC
     | .error _ => pure none
     | .ok identity => pure (some identity.account)
 
-private def jsonPayload (request : Request Body.Stream) : ContextAsync (Option Json) := do
-  match Json.parse (← request.body.readAll (α := String)) with
-  | .error _ => pure none
-  | .ok payload => pure (some payload)
+/-- `body` on the JSON the request carried, or on `none` where it carried none. A body too large to
+read or not UTF-8 is answered with the status refusing it, and the body every refusal shares. -/
+private def withPayload (request : Request e.ReqBody)
+    (body : Option Json → e.M (Response e.RespBody)) : e.M (Response e.RespBody) := do
+  match ← bodyText request with
+  | .error status => jsonResponse status refusedBody
+  | .ok text => body (Json.parse text).toOption
 
 /-! ## The options a ceremony answers with -/
 
@@ -154,7 +160,7 @@ sent on a cross-site `POST`, so a request provoked from another site arrives sig
 and starts nothing (AUTH-6.7.1 gives the same reasoning for a federated link).
 -/
 def beginRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
-    Routing.Result := fun request =>
+    Routing.Result e := fun request =>
   withTenant config (fun tenant tenantConfig => do
     match ← signedInAs config tenantConfig request with
     | none => refused config tenant .notThisAccount
@@ -167,14 +173,14 @@ def beginRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : Strin
     raw
 
 def completeRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
-    Routing.Result := fun request =>
+    Routing.Result e := fun request =>
   withTenant config (fun tenant tenantConfig => do
     match ← signedInAs config tenantConfig request with
     | none => refused config tenant .notThisAccount
     | some account =>
-      match ← jsonPayload request with
+      withPayload request fun
       | none => refused config tenant .unknownCeremony
-      | some payload =>
+      | some payload => do
         match cookieNamed request "auth_passkey",
             bytesMember payload "attestationObject", textMember payload "clientDataJSON" with
         | some cookie, some attestation, some clientData =>
@@ -192,7 +198,7 @@ def completeRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : St
 /-- Begins an authentication. No session is needed and none is read: which account this signs in
 is settled by the assertion, not by whoever asks for a challenge. -/
 def beginAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
-    Routing.Result := fun request =>
+    Routing.Result e := fun request =>
   withTenant config (fun tenant tenantConfig => do
     match ← (Service.beginAuthentication config.ports tenantConfig
         (request.line.uri.query.get "returnTo") : IO _) with
@@ -206,11 +212,11 @@ def beginAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : Str
 record rather than the request, and is still the client's to validate against the tenant's
 allowlist before it redirects (AUTH-9.8). -/
 def completeAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
-    Routing.Result := fun request =>
-  withTenant config (fun tenant tenantConfig => do
-    match ← jsonPayload request with
+    Routing.Result e := fun request =>
+  withTenant config (fun tenant tenantConfig =>
+    withPayload request fun
     | none => refused config tenant .unknownCeremony
-    | some payload =>
+    | some payload => do
       match cookieNamed request "auth_passkey", stringMember payload "id",
           bytesMember payload "authenticatorData", textMember payload "clientDataJSON",
           bytesMember payload "signature" with
@@ -235,7 +241,7 @@ route_table Passkey [
 ]
 
 @[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) :
-    List (Routing.Route Routing.Result) :=
+    List (Routing.Route (Routing.Result e)) :=
   [ .post Passkey.patterns.register (beginRegistration config),
     .post Passkey.patterns.registerComplete (completeRegistration config),
     .post Passkey.patterns.signIn (beginAuthentication config),
@@ -244,7 +250,7 @@ route_table Passkey [
 /-- Mount this wherever the application's own router is, as the other route sets are mounted. The
 two registration routes need a session; the two authentication routes do not, and must not be put
 behind a guard that requires one. -/
-def handler [Clock IO] [RandomBytes IO] (config : Config) : StatelessHandler :=
+def handler [Clock IO] [RandomBytes IO] (config : Config) : Routing.StatelessHandler e :=
   Routing.toHandler (routes config) (fun _ => notFound)
 
 end Authentication.PasskeyHttp
