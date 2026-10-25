@@ -69,7 +69,7 @@ require html from git
   "https://github.com/paulbutcher/lean-html" @ "v0.11.0"
 
 require middleware from git
-  "https://github.com/paulbutcher/lean-middleware" @ "v0.18.0"
+  "https://github.com/paulbutcher/lean-middleware" @ "v0.19.0"
 
 /-- The submodules are globbed because `Authentication.Instances` is deliberately not imported by
 the root: importing it is what turns the default `Clock` and `RandomBytes` on. -/
