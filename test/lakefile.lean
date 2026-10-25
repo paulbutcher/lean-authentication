@@ -8,7 +8,7 @@ open Lake DSL
 require authentication from ".."
 
 require «routing-std» from git
-  "https://github.com/paulbutcher/lean-routing" @ "v0.15.0" / "std"
+  "https://github.com/paulbutcher/lean-routing" @ "v0.15.1" / "std"
 
 package «authentication-test» where
   leanOptions := #[
