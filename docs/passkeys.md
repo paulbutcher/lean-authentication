@@ -58,18 +58,22 @@ async function addPasskey(tenant, label) {
     transports: created.response.getTransports?.() ?? [] });
 }
 
-async function signInWithPasskey(tenant) {
-  const options = await post(`/t/${tenant}/passkey/signin`);
+async function signInWithPasskey(tenant, returnTo) {
+  const query = returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : "";
+  const options = await post(`/t/${tenant}/passkey/signin${query}`);
   const asserted = await navigator.credentials.get({ publicKey: { ...options,
     challenge: decode(options.challenge) } });
-  const { signedIn } = await post(`/t/${tenant}/passkey/signin/complete`, { id: asserted.id,
+  const answer = await post(`/t/${tenant}/passkey/signin/complete`, { id: asserted.id,
     authenticatorData: encode(asserted.response.authenticatorData),
     clientDataJSON: encode(asserted.response.clientDataJSON),
     signature: encode(asserted.response.signature),
     userHandle: asserted.response.userHandle && encode(asserted.response.userHandle) });
-  return signedIn;
+  if (answer.signedIn) location.assign(answer.returnTo);
+  return answer.signedIn;
 }
 ```
+
+Pass `signInWithPasskey` the `returnTo` your sign-in page was given, which is how the [authorisation server](authorisation-server.md) gets its request back after a sign-in. The completion answers where to land, already checked against `returnToAllowlist` and falling back to `defaultReturnTo`; redirect there, never to the value the page was handed.
 
 Every refusal answers the same body, `{"error": "rejected"}`; `PasskeyHttp.Config.observeRefusal` is where the reason reaches you.
 

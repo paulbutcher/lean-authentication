@@ -258,9 +258,10 @@ def beginAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : Str
       jsonResponse .ok (assertionJson options) [setCookie now options.cookie])
     raw
 
-/-- Completes an authentication and issues the session cookie. `returnTo` comes off the ceremony
-record rather than the request, and is still the client's to validate against the tenant's
-allowlist before it redirects (AUTH-9.8). -/
+/-- Completes an authentication and issues the session cookie, answering where to land. The target
+comes off the ceremony record and is checked against the allowlist here, at completion, because
+the page holds neither and a target allowed when the ceremony began may not be now
+(AUTH-22.23). -/
 def completeAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
     Routing.Result e := fun request =>
   withTenant config (fun tenant tenantConfig =>
@@ -275,11 +276,13 @@ def completeAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : 
             ⟨handle⟩ (stringMember payload "userHandle") authData clientData signature
             (requesterOf request) : IO _) with
         | .error reason => refused config tenant reason
-        | .ok outcome =>
+        | .ok completed =>
           let now ← (Clock.now : IO _)
           jsonResponse .ok
-            (Json.mkObj [("signedIn", .bool outcome.session.isSome)])
-            (outcome.setCookies.map (setCookie now))
+            (Json.mkObj
+              [("signedIn", .bool completed.outcome.session.isSome),
+               ("returnTo", .str (tenantConfig.returnTo completed.returnTo))])
+            (completed.outcome.setCookies.map (setCookie now))
       | _, _, _, _, _ => refused config tenant .unknownCeremony)
     raw
 

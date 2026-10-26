@@ -311,6 +311,12 @@ def completeRecoveryRegistration {m : Type → Type} [Monad m] [Clock m] [Random
     m (Except CeremonyRefusal (PasskeyRegistration tenant)) :=
   finishRegistration ports config none cookie attestationObject clientDataJson label transports
 
+/-- What a completed authentication produced, and where its ceremony asked to land. The target is
+still the tenant's to allow, and `TenantConfig.returnTo` is what allows it (AUTH-9.8). -/
+structure PasskeySignIn (tenant : TenantId) where
+  outcome : Outcome tenant
+  returnTo : Option String
+
 /--
 Completes an authentication and issues a session.
 
@@ -323,7 +329,7 @@ def completeAuthentication {m : Type → Type} [Monad m] [Clock m] [RandomBytes 
     (cookie : String) (handle : PasskeyId) (userHandle : Option String)
     (authenticatorData : ByteArray) (clientDataJson : String) (signature : ByteArray)
     (requester : RequestContext := {}) :
-    m (Except CeremonyRefusal (Outcome tenant)) := do
+    m (Except CeremonyRefusal (PasskeySignIn tenant)) := do
   match partyOf config with
   | .error refusal => pure (.error refusal)
   | .ok party =>
@@ -360,10 +366,11 @@ def completeAuthentication {m : Type → Type} [Monad m] [Clock m] [RandomBytes 
                 match ← ports.store.accountById tenant credential.account with
                 | none => pure (.error .unknownCredential)
                 | some existing =>
-                  pure (.ok (← issueFor ports config
+                  let outcome ← issueFor ports config
                     { origin := .passkey handle
                       address := existing.primaryEmail
-                      requester }))
+                      requester }
+                  pure (.ok { outcome, returnTo := ceremony.returnTo })
 
 end Service
 

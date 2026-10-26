@@ -4,13 +4,12 @@ Released under Apache 2.0 license as described in the file LICENSE.
 -/
 import AuthenticationPasskey
 import AuthenticationSqlite
+import Tests.Fixtures.Authenticator
 
 /-!
 Registering a passkey and signing in with it, driven through the service against SQLite.
 
-The authenticator is stood in for: a key OpenSSL generated, an `authenticatorData` built to the
-layout, and an attestation object encoded with `lean-cbor`. What that cannot establish is that a
-real device agrees about the layout, which is Phase 6's vectors. What it does establish is that
+The authenticator is stood in for by `Tests.Fixtures.Authenticator`. What that establishes is that
 the ceremony holds together: the challenge a begin minted is the one a complete accepts, the
 credential written is the one an assertion finds, and the session comes out of `issueFor` with
 everything that implies.
@@ -18,6 +17,7 @@ everything that implies.
 
 namespace Tests.PasskeyFlow
 open Authentication Authentication.Service Authentication.Passkey
+open Tests.Fixtures.Authenticator (coseKeyOf attestationObjectOf coordinatesOf handle)
 
 initialize clockRef : IO.Ref Timestamp ← IO.mkRef ⟨1700000000⟩
 initialize drawCounter : IO.Ref Nat ← IO.mkRef 0
@@ -56,40 +56,14 @@ private def config : TenantConfig tenant :=
 
 private def account : AccountId tenant := ⟨"account-1"⟩
 
-private def credentialId : ByteArray := ⟨#[9, 8, 7, 6, 5, 4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 6]⟩
+private def clientDataFor : String → String → String :=
+  Tests.Fixtures.Authenticator.clientDataFor "https://example.com"
 
-private def clientDataFor (type challenge : String) : String :=
-  "{\"type\":\"" ++ type ++ "\",\"challenge\":\"" ++ challenge
-    ++ "\",\"origin\":\"https://example.com\",\"crossOrigin\":false}"
+private def registrationAuthData : ByteArray → ByteArray :=
+  Tests.Fixtures.Authenticator.registrationAuthData rpId
 
-private def coseKeyOf (x y : ByteArray) : ByteArray :=
-  ((Cbor.Value.map?
-      [ (Cose.ktyLabel, Cbor.Value.int Cose.ec2KeyType),
-        (Cose.algLabel, Cbor.Value.int Cose.es256Algorithm),
-        (Cose.crvLabel, Cbor.Value.int Cose.p256Curve),
-        (Cose.xLabel, (Cbor.Value.bytes? x).getD .null),
-        (Cose.yLabel, (Cbor.Value.bytes? y).getD .null) ]).getD .null).encode
-
-/-- `0x41` is user presence and attested credential data; the counter is zero, which is what a
-synced passkey reports. -/
-private def registrationAuthData (coseKey : ByteArray) : ByteArray :=
-  ((((Leancrypto.Sha256.hash rpId.toUTF8).push 0x41 ++ ⟨#[0, 0, 0, 0]⟩)
-      ++ ByteArray.mk (Array.replicate 16 0))
-      ++ ⟨#[0, UInt8.ofNat credentialId.size]⟩ ++ credentialId) ++ coseKey
-
-private def attestationObjectOf (authData : ByteArray) : ByteArray :=
-  ((Cbor.Value.map?
-      [ (.ofText "fmt", (Cbor.Value.text? "none").getD .null),
-        (.ofText "attStmt", (Cbor.Value.map? []).getD .null),
-        (.ofText "authData", (Cbor.Value.bytes? authData).getD .null) ]).getD .null).encode
-
-private def assertionAuthData (signCount : UInt32) : ByteArray :=
-  (Leancrypto.Sha256.hash rpId.toUTF8).push 0x01
-    ++ ⟨#[(signCount >>> 24).toUInt8, (signCount >>> 16).toUInt8,
-          (signCount >>> 8).toUInt8, signCount.toUInt8]⟩
-
-private def coordinatesOf (spki : ByteArray) : ByteArray × ByteArray :=
-  (spki.extract (spki.size - 64) (spki.size - 32), spki.extract (spki.size - 32) spki.size)
+private def assertionAuthData : UInt32 → ByteArray :=
+  Tests.Fixtures.Authenticator.assertionAuthData rpId
 
 def checks : IO (List (String × Bool)) := do
   let db ← Sqlite.openInMemory
@@ -121,7 +95,6 @@ def checks : IO (List (String × Bool)) := do
   let afterRename ← passkeys ports account
 
   -- Authentication: begin, sign what the authenticator would sign, complete.
-  let handle : PasskeyId := ⟨Leancrypto.Codec.Base64Url.encodeString credentialId⟩
   let asserting ← Service.beginAuthentication ports config
   let assertOptions := asserting.toOption
   let assertCookie := (assertOptions.map (·.cookie.value)).getD ""
@@ -132,7 +105,7 @@ def checks : IO (List (String × Bool)) := do
     (authData ++ Leancrypto.Sha256.hash assertClientData.toUTF8)
   let signedIn ← Service.completeAuthentication ports verifier config assertCookie handle
     (some (Passkey.userHandle account)) authData assertClientData signature
-  let identified ← match signedIn.toOption.bind (·.session) with
+  let identified ← match signedIn.toOption.bind (·.outcome.session) with
     | some credential => Except.toOption <$> identify ports config credential
     | none => pure none
 
@@ -194,8 +167,8 @@ def checks : IO (List (String × Bool)) := do
         (afterRename[0]?.map (·.signCount)) == some 0),
       ("passkey flow: a tenant admitting only its provider refuses a passkey sign-in",
         match refusedByPolicy with
-        | .ok outcome => outcome.session.isNone
-            && outcome.views == [.refused .originNotPermitted]
+        | .ok completed => completed.outcome.session.isNone
+            && completed.outcome.views == [.refused .originNotPermitted]
         | .error _ => false),
       ("passkey flow: a user handle naming another account does not sign in",
         match wrongHandle with

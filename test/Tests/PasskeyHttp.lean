@@ -6,6 +6,7 @@ import AuthenticationPasskeyHttp
 import AuthenticationSqlite
 import RoutingStd
 import Std.Http.Test.Helpers
+import Tests.Fixtures.Authenticator
 
 /-!
 The passkey routes (§18.3).
@@ -217,5 +218,68 @@ def recoveryChecks : IO (List (String × Bool)) := do
       ("passkey http: a grant in the body does not stand in for a session at register",
         statusOf atRegister == "HTTP/1.1 400 Bad Request"
           && (headerOf atRegister "set-cookie").isNone) ]
+
+/-- What a JSON body says under `name`, as a string. -/
+private def member (response name : String) : String :=
+  (((Lean.Json.parse (bodyOf response)).toOption.bind
+    (·.getObjVal? name |>.toOption)).bind (·.getStr? |>.toOption)).getD ""
+
+private def cookieValue (response : String) : String :=
+  ((((headerOf response "set-cookie").getD "").splitOn ";").head?.getD "").drop
+    "auth_passkey=".length |>.toString
+
+/-- A whole sign-in through the routes, begun under `beganUnder` with `?returnTo=/after` and
+completed under `completedUnder`, answering the completion's response. -/
+private def signInVia (ports : Ports IO) (key : Libcrypto.Evp.PKey)
+    (beganUnder completedUnder : TenantConfig tenant) : IO String := do
+  let configOf (tenantConfig : TenantConfig tenant) : Config :=
+    { ports, verifier, tenant := fun t =>
+        if h : t = tenant then pure (some (h ▸ tenantConfig)) else pure none }
+  let begun ← send (configOf beganUnder)
+    (mkPost "/t/acme/passkey/signin?returnTo=/after" "" jsonHeaders)
+  let clientData := Tests.Fixtures.Authenticator.clientDataFor base.origin
+    assertionType (member begun "challenge")
+  let authData := Tests.Fixtures.Authenticator.assertionAuthData "example.test" 0
+  let signature ← Libcrypto.Sign.sign (.ecdsa .sha256) key
+    (authData ++ Leancrypto.Sha256.hash clientData.toUTF8)
+  let encode := Leancrypto.Codec.Base64Url.encodeString
+  let payload := Lean.Json.mkObj
+    [ ("id", .str Tests.Fixtures.Authenticator.handle.value),
+      ("authenticatorData", .str (encode authData)),
+      ("clientDataJSON", .str (encode clientData.toUTF8)),
+      ("signature", .str (encode signature)) ]
+  send (configOf completedUnder)
+    (mkPost "/t/acme/passkey/signin/complete" payload.compress
+      (jsonHeaders ++ s!"Cookie: auth_passkey={cookieValue begun}\x0d\n"))
+
+/-- Where a completed sign-in says to land, which the page cannot work out for itself: it holds
+neither the allowlist nor the target the ceremony stored (AUTH-22.23). -/
+def returnToChecks : IO (List (String × Bool)) := do
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+  let made ← issueFor ports liveConfig
+    { origin := .magicLink ⟨"attempt-1"⟩
+      address := address "holder@example.test"
+      requester := {} }
+  let account := (made.admitted.map (·.account)).getD ⟨""⟩
+  let (key, attestation) ← Tests.Fixtures.Authenticator.generate "example.test"
+  let registering := (← Service.beginRegistration ports liveConfig account).toOption
+  let _ ← Service.completeRegistration ports liveConfig account
+    ((registering.map (·.cookie.value)).getD "") attestation
+    (Tests.Fixtures.Authenticator.clientDataFor base.origin registrationType
+      ((registering.map (·.challenge.encoded)).getD ""))
+    "Laptop"
+
+  let allowing := { liveConfig with returnToAllowlist := ["/after"], defaultReturnTo := "/home" }
+  let allowed ← signInVia ports key allowing allowing
+  let dropped ← signInVia ports key allowing { allowing with returnToAllowlist := [] }
+
+  pure
+    [ ("passkey http: a sign-in answers the target its ceremony carried, if allowed (AUTH-22.23)",
+        member allowed "returnTo" == "/after"
+          && ((bodyOf allowed).splitOn "\"signedIn\":true").length == 2),
+      ("passkey http: a target the allowlist dropped mid-ceremony becomes the default (AUTH-22.23)",
+        member dropped "returnTo" == "/home"
+          && ((bodyOf dropped).splitOn "\"signedIn\":true").length == 2) ]
 
 end Tests.PasskeyHttp
