@@ -18,7 +18,7 @@ Where `originPolicy` does not admit the magic link, the invitation mail points a
 
 The order is the tenant's own rather than arbitrary, which is what makes picking the first defensible. It is still a choice nobody asked to be made, and a tenant enforcing SSO through two providers, one per acquired company say, will mail half its invitations to the wrong sign-in.
 
-Closing it needs a page offering the choice, and that page is not this library's to serve: AUTH-22.19 and §17 both land on the same line, that the markup around a sign-in belongs to the application that knows what its sign-in looks like. What would close it here is `Service.invitationLink` taking the provider rather than choosing one, so a client sending its own invitation mail names the provider it means. That is a small change and nothing has asked for it.
+Closing it needs a page offering the choice, and that page is not this library's to serve: AUTH-22.19 and the project's rule against JavaScript both land on the same line, that the markup around a sign-in belongs to the application that knows what its sign-in looks like. What would close it here is `Service.invitationLink` taking the provider rather than choosing one, so a client sending its own invitation mail names the provider it means. That is a small change and nothing has asked for it.
 
 ## The emailAddress credential has no writer (AUTH-4.4.2)
 
@@ -140,3 +140,15 @@ Refresh tokens do not have this problem, because rotation on use re-digests them
 The limiter of §15.6 covers beginning a sign-in and submitting a code. Nothing counts authorization requests, token requests, or registrations.
 
 Registration is the one worth naming. It is unauthenticated by design, it writes a row, and AUTH-20.6.7 bounds what accumulates rather than what arrives; a deployment that exposes it without a limiter in front of it has a way to make a server write rows for nothing.
+
+## The shipped routes do not report an account's creation (AUTH-13.6, AUTH-8.7)
+
+`Service.Outcome.admitted` says that an account was created, whether it was the first in its tenant, and what metadata the invitation it accepted carried. A client driving `Service` itself reads it there. None of the shipped route sets passes it on: `Http.Config`, `OidcHttp.Config` and `PasskeyHttp.Config` have no hook for it, so a client mounting them never learns that the account it is now looking at is new, and has no signal for making a tenant's first account its owner.
+
+The invitation metadata can be recovered afterwards, by finding the accepted invitation whose address is the account's, and `docs/invitations.md` shows how. The first-in-tenant signal cannot, because nothing records it. Closing this needs a callback on each route config, defaulting to doing nothing, which is an addition to three public structures.
+
+## A tenant admitting only passkeys takes no new members (AUTH-8.11)
+
+A passkey resolves to an account and never creates one, and `.only [.passkey]` refuses the magic link and every provider, so nothing can create an account. Invitations are refused with `noWayToAccept` for that reason, and the library has no operation that creates an account outside a sign-in.
+
+Existing accounts are unaffected, and a recovery grant still enrols a new passkey onto one. A tenant that needs to grow admits a provider beside passkeys. Provisioning an account by administrator action, followed by a recovery grant to enrol its first passkey, would close it; nothing has asked for that.

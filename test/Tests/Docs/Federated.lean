@@ -2,26 +2,25 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
+import AuthenticationHttp
 import AuthenticationOidcHttp
 import AuthenticationSqlite
 import Authentication.Instances
 import RoutingStd
 
-/-!
-The federated sign-in wiring the README prints.
+/-! The code of `docs/federated-sign-in.md`, checked by `Tests.Docs`. -/
 
-It is here so that it compiles. A worked example that has drifted from the library is worse than
-none, because it is read as the thing that works and a reader who copies it learns that it does
-not. Nothing is run: compiling is the whole of the check.
--/
+namespace Tests.Docs.Federated
 
-namespace Tests.ReadmeWiring
 open Authentication
 
 private def sealedSecret : StoredSecret := .external "vault://acme/google"
 private def sealedKey : StoredSecret := .external "vault://acme/apple"
 
-/-- The wiring under "Federated sign-in / Wiring". -/
+def sealingRing (encoded : String) : Option Oidc.SealingRing :=
+  (Leancrypto.Codec.Base64Url.decodeString encoded).map fun secret =>
+    { current := { keyId := ⟨"sealing-2026-01"⟩, secret } }
+
 def federation (secrets : Oidc.SealingRing) : IO (Oidc.SignInPorts IO) := do
   let http := Fetch.curlHttp
   let resolved := Oidc.clientSecrets (Oidc.secrets secrets)
@@ -30,7 +29,6 @@ def federation (secrets : Oidc.SealingRing) : IO (Oidc.SignInPorts IO) := do
     { metadata := ← Oidc.metadata http
       identities := Oidc.identities http tokens resolved (← Oidc.keys http) }
 
-/-- The three under "Providers". -/
 def providers : List ProviderConfig :=
   [ { id := ⟨"google"⟩
       issuer := "https://accounts.google.com"
@@ -53,25 +51,25 @@ def providers : List ProviderConfig :=
         "https://api.github.com/user/emails"
       scopes := ["read:user", "user:email"] } ]
 
-/-- The one under "Secrets". -/
 def googleCredentials (text : Option String) : Option ProviderCredentials :=
   (text.bind StoredSecret.parse).map .clientSecret
 
-private def config (tenant : TenantId) : TenantConfig tenant :=
+def config (tenant : TenantId) : TenantConfig tenant :=
   { displayName := "Acme"
     baseUrl := ⟨"https://app.example.com"⟩
     sendingIdentity := { address := ⟨"no-reply", ⟨["example", "com"]⟩⟩, displayName := "Acme" }
     signupPolicy := .unrestricted
     providers }
 
-/-- The mount under "Mounting". -/
-def federatedRoutes (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) :
-    Routing.StatelessHandler .std :=
-  OidcHttp.handler
-    { ports
-      oidc
-      tenant := fun t => pure (some (config t))
-      observeRefusal := fun t provider reason =>
-        IO.eprintln s!"federated refused: {t.value} {provider.value} {reason.name}" }
+def app (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) : Routing.StatelessHandler .std :=
+  let tenant := fun t => pure (some (config t))
+  Routing.toHandler
+    (Http.routes { ports, tenant } ++
+      OidcHttp.routes
+        { ports
+          oidc
+          tenant
+          observeRefusal := fun t provider reason =>
+            IO.eprintln s!"federated refused: {t.value} {provider.value} {reason.name}" })
 
-end Tests.ReadmeWiring
+end Tests.Docs.Federated

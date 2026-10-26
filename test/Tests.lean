@@ -8,6 +8,7 @@ import Tests.Base64Url
 import Tests.Consent
 import Tests.EndToEnd
 import Tests.Digest
+import Tests.Docs
 import Tests.Email
 import Tests.Federation
 import Tests.FederatedFlow
@@ -31,7 +32,6 @@ import Tests.Policy
 import Tests.Postmark
 import Tests.Postgres
 import Tests.RateLimit
-import Tests.ReadmeWiring
 import Tests.Response
 import Tests.Seal
 import Tests.Secrets

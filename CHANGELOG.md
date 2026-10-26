@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Documentation lives in `docs/`: the supported use cases, and a guide for each whose code compiles in the suite.
+- The README is a landing page, and the passkey and recovery plans are retired into the requirements.
+
 ## [0.21.0] - 2026-10-26
 
 - Recovery grants: an administrator issues one for an account nobody can sign in to, and it authorises a single passkey registration or provider link without a session, answering §18.1 (AUTH-9.10). Routes at `/t/<tenant>/passkey/recover` and `/t/<tenant>/federated/<provider>/recover`; the library returns the token and never delivers it.

@@ -23,12 +23,22 @@ input_dir fixtures where
   path := "fixtures"
   text := true
 
+/-- The documentation, and the examples its code blocks are checked against, embedded by
+`Tests.Docs` for the reason `fixtures` is declared. -/
+input_dir docs where
+  path := "../docs"
+  text := true
+
+input_dir docExamples where
+  path := "Tests/Docs"
+  text := true
+
 /-- Claiming the whole `Tests` namespace is safe here because nothing depends on this package,
 and it means a test file that nothing imports is still compiled. -/
 @[default_target]
 lean_lib Tests where
   globs := #[`Tests.*]
-  needs := #[fixtures]
+  needs := #[fixtures, docs, docExamples]
 
 @[default_target, test_driver]
 lean_exe tests where

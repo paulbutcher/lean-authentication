@@ -1,24 +1,26 @@
-# lean-auth requirements
+# lean-authentication requirements
 
-Requirements for a reusable Lean 4 library providing passwordless authentication for web applications. Written to be handed to an implementer working in a freshly created package (`lake new lean-auth lib`). The name `lean-auth` is a placeholder; confirm it before publishing.
+The specification of this library: what it guarantees and why. The code cites it by number, and [KNOWN_ISSUES.md](KNOWN_ISSUES.md) records where the implementation falls short of it. How to use the library is in [docs/](docs/README.md).
 
-Requirement keywords: **MUST**, **SHOULD**, **MAY**. Requirements are numbered so that implementation and review can refer to them.
+Requirement keywords: **MUST**, **SHOULD**, **MAY**. A requirement keeps its number for good, so a removed one leaves a gap rather than renumbering those after it.
 
 ---
 
 ## 1. Purpose and scope
 
-`lean-auth` authenticates people for web applications without passwords. It provides:
+The library authenticates people for web applications without passwords. It provides:
 
 - Email-based sign-in using a magic link, with a cross-device verification code.
 - Optional classic email one-time codes.
-- Federated sign-in over OAuth 2.0 and OpenID Connect, with Google, Apple and a non-OIDC provider as the first adapters.
+- Federated sign-in over OAuth 2.0 and OpenID Connect, with Google, Apple and a non-OIDC provider as the adapters exercised.
+- Passkeys (§22), and administrator-led recovery onto a new credential (AUTH-9.10).
 - Per-tenant signup policy: open, domain-restricted, or invitation-only.
 - Session issue, inspection, and revocation.
-- A pluggable outbound email transport, with Postmark and Amazon SES as the first implementations.
-- Pluggable storage, with Postgres and SQLite as the first implementations.
+- A pluggable outbound email transport, with Postmark and Amazon SES as the shipped implementations.
+- Pluggable storage, with Postgres and SQLite as the shipped implementations.
+- An OAuth 2.1 authorisation server (§20).
 
-### 1.1 Non-goals for the first version
+### 1.1 Non-goals
 
 - Passwords, in any form. There is no password field, no reset flow, no hashing of secrets the user chose.
 - Authorisation. The library says who someone is, not what they may do. See §13, which is a requirement rather than a note: the boundary shapes the API.
@@ -31,9 +33,10 @@ Requirement keywords: **MUST**, **SHOULD**, **MAY**. Requirements are numbered s
 
 ## 2. Target environment
 
-- **AUTH-2.1** Toolchain `leanprover/lean4:v4.33.1`, matching the ecosystem libraries below.
+- **AUTH-2.1** The toolchain is whichever `lean-toolchain` names, kept in step with the ecosystem libraries below.
 - **AUTH-2.2** The core library MUST NOT depend on any HTTP server framework, nor on any database driver. Framework and driver bindings live in separate `lean_lib` targets so that the core is usable with either and requires neither.
-- **AUTH-2.3** Expected dependencies, all from `github.com/paulbutcher` unless noted:
+- **AUTH-2.3** Each dependency serves the targets named here and no others, so that a consumer links only what the targets it takes need. All are from `github.com/paulbutcher` unless noted:
+  - `lean-json` for every JSON document read or written.
   - `leancurl` for outbound HTTPS: the Postmark and SES APIs, and the fetch of AUTH-6.13.
   - `leancrypto` for SHA-256, HMAC-SHA256, hex, base64 and base64url, Crockford base32, the byte comparison of AUTH-5.3.4, and, for AUTH-12.1.2, RSASSA-PKCS1-v1_5 verification with the DER reader that gets a public key out of a certificate.
   - `lean-jose` for JWS, JWK, JWKS and JWT, whose `Policy` holds the algorithm allowlist so that a token never selects the means of its own verification (AUTH-6.5).
@@ -41,11 +44,10 @@ Requirement keywords: **MUST**, **SHOULD**, **MAY**. Requirements are numbered s
   - `lean-libcrypto` for the OpenSSL 3 binding under both of those, and for the AEAD of AUTH-15.7.3.1. It is the only dependency here needing a system library and `pkg-config`, and AUTH-6.11 confines it.
   - `cbor` for the attestation object and the COSE key of §22, which are the only CBOR anything here reads. Deterministic by construction, so that bytes a signature covers cannot be re-encoded into different ones.
   - `leanpostgres` for the Postgres storage backend. Not `leanmigrate`: the migrations this library ships are SQL files the client applies, so nothing here depends on a migration tool (AUTH-15.7.1).
-  - A SQLite driver, for both the SQLite backend and the test backend (AUTH-16.5), which makes it a dependency of `lake test` and not only of one optional target. Confirm what exists in the ecosystem before depending on it; if nothing suitable does, stop and ask rather than writing one here.
-  - `lean-telemetry` for tracing and metrics.
-  - `lean-routing`, `lean-html` and `lean-middleware` for the optional HTTP integration target only. `lean-forms` and `lean-htmx` were expected here too and are not used: `Middleware` already decodes a form body, and nothing the sign-in routes do needs a partial page update.
-  - `plausible` (leanprover-community) for property tests.
-- **AUTH-2.4** Any cryptography needed (HMAC-SHA256, SHA-256, base64url, constant-time comparison, and the AWS Signature Version 4 derivation built on the first two) MUST be surveyed against the existing ecosystem before being written here. If it does not exist, stop and ask whether it belongs in a new shared library rather than in `lean-auth`. Do not vendor a copy. The survey was done and found nothing usable, so `leancrypto` was created to hold these and this library depends on it; a further consumer needing the same primitives extends that library rather than reopening the question. §6 asked the same question again and got the same answer: JOSE, ECDSA, and the AEAD of AUTH-15.7.3.1 live in `lean-jose`, `jose-libcrypto` and `lean-libcrypto`, and none of them is reimplemented here.
+  - `leansqlite` (leanprover) for both the SQLite backend and the test backend (AUTH-16.5), which makes it a dependency of `lake test` and not only of one optional target.
+  - `lean-aws` for the SigV4 signing of AUTH-10.14.
+  - `lean-routing`, `lean-html` and `lean-middleware` for the HTTP targets only. `Middleware` already decodes a form body, and nothing the sign-in routes do needs a partial page update, so neither `lean-forms` nor `lean-htmx` is wanted.
+- **AUTH-2.4** Cryptography MUST NOT be written here, nor vendored. HMAC-SHA256, SHA-256, the encodings and constant-time comparison live in `leancrypto`; JOSE, ECDSA and the AEAD of AUTH-15.7.3.1 in `lean-jose`, `jose-libcrypto` and `lean-libcrypto`. A primitive none of them has belongs in one of them, or in a new shared library, and not in this one.
 
 ---
 
@@ -90,9 +92,9 @@ The single most important structural requirement:
 ### 4.3 Tenant identification in URLs
 
 - **AUTH-4.3.1** Every sign-in entry point MUST identify the tenant. A bare "enter your email" page with no tenant context is not implementable, since the same address means different accounts in different tenants.
-- **AUTH-4.3.2** For v1, tenants are distinguished by a path prefix on a single shared origin (`/t/<tenant>/...`). Rationale: OAuth providers require exact-match registered redirect URIs, so a per-tenant hostname would need one registration per tenant, or a shared callback origin plus a cross-origin handoff credential. Neither is worth building before it is needed.
+- **AUTH-4.3.2** Tenants are distinguished by a path prefix on a single shared origin (`/t/<tenant>/...`). Rationale: OAuth providers require exact-match registered redirect URIs, so a per-tenant hostname would need one registration per tenant, or a shared callback origin plus a cross-origin handoff credential. Neither is worth building before it is needed.
 - **AUTH-4.3.3** Session and attempt cookies MUST be scoped to the tenant, so that one browser can hold concurrent sessions in several tenants without collision. With path-based tenancy this is `Path=/t/<tenant>`. Path scoping is not a security boundary, and is not asked to be one here: both tenants run the same application code.
-- **AUTH-4.3.4** Every URL the library emits (magic links, OAuth redirect targets, post-sign-in redirects) MUST be built from a per-tenant base URL held in configuration, never from a global constant. In v1 every tenant's base URL resolves to the same origin. This is what makes per-tenant hostnames a configuration change later rather than a rewrite.
+- **AUTH-4.3.4** Every URL the library emits (magic links, OAuth redirect targets, post-sign-in redirects) MUST be built from a per-tenant base URL held in configuration, never from a global constant. Under AUTH-4.3.2 every tenant's base URL resolves to the same origin. This is what makes per-tenant hostnames a configuration change later rather than a rewrite.
 - **AUTH-4.3.5** A base URL MUST be accepted with or without a trailing slash on its origin, and a trailing slash MUST NOT reach a URL built from it. Every path the library appends begins with a slash, so `https://app.example.com/` would otherwise produce an empty leading path segment matching no route, in a magic link already sent. Platforms publish origins both ways, an AWS Lambda function URL among them, so the wrong form is the one a client is invited to copy. Only trailing slashes are removed: an origin carrying a path prefix keeps it. An origin of nothing but slashes becomes empty, and the URL then lacks a scheme and host rather than looking usable.
 
 ### 4.4 Account structure
@@ -126,7 +128,7 @@ Answering §18.7. Terms acceptance and marketing consent are recorded here; they
 
 ## 5. Email sign-in: the magic link flow
 
-This is the primary flow and the one with the most subtle requirements. Read the whole section before implementing any of it.
+This is the primary flow and the one with the most subtle requirements.
 
 ### 5.1 The shape of the flow
 
@@ -177,7 +179,7 @@ Signing in with somebody else's identity provider. §20 is the other direction, 
 AUTH-6.7 is the one to read twice. Linking an external identity on an address the provider has not marked verified is the classic account takeover, and it is easy to reintroduce from a blank page. The surfaces this path joins rather than duplicates are the `SignInOutcome` of AUTH-14.2.1 and the response policy of §14.2, which AUTH-14.2.7 requires of it, and AUTH-4.4.2 keeps `Credential` open so that a linked identity is a row rather than a schema change.
 
 - **AUTH-6.1** The Authorization Code flow with PKCE (`S256`) MUST be used, including for confidential clients. The implicit and hybrid flows MUST NOT be implemented.
-- **AUTH-6.2** `state` MUST be a random value bound to a server-side record holding the tenant, the return target, and the creation time. It MUST be single use and expire within 10 minutes. Carrying the tenant in `state` is required from the start, even though v1 uses one origin, so that a single registered redirect URI serves every tenant.
+- **AUTH-6.2** `state` MUST be a random value bound to a server-side record holding the tenant, the return target, and the creation time. It MUST be single use and expire within 10 minutes. Carrying the tenant in `state` is what lets a single registered redirect URI serve every tenant.
 - **AUTH-6.3** `nonce` MUST be sent and MUST be checked against the returned ID token.
 - **AUTH-6.4** Provider metadata MUST be obtained from the issuer's discovery document, and JWKS MUST be cached with lookup by `kid`. An unknown `kid` triggers at most one refetch, rate limited so that a malicious token cannot drive unbounded outbound requests.
 - **AUTH-6.5** ID token validation MUST check signature, `iss`, `aud`, `exp`, `iat`, and `nonce`, with clock skew tolerance of at most 60 seconds. Tokens failing any check MUST be rejected with no partial account creation.
@@ -266,8 +268,8 @@ AUTH-6.7 is the one to read twice. Linking an external identity on an address th
 
   - **AUTH-9.10.1** The library MUST NOT deliver the grant. The premise of recovery is that the usual channel is unavailable, so the token is returned to the caller, which hands it over however it established who the person was. A grant mailed to the address that is gone would recover nobody, and one mailed to an address nobody has proven would hand the account to whoever holds it.
   - **AUTH-9.10.2** A grant MUST authorise exactly one credential enrolment and MUST NOT issue a session. The origin policy is therefore not consulted when it is redeemed, for the reason AUTH-9.9.5 already gives: enrolling a credential issues nothing, and the sign-in that follows is checked like any other. This is what makes a grant an application of the model rather than an exception to it.
-  - **AUTH-9.10.3 (security critical)** The account MUST come from the grant record. No operation that redeems one MAY take an account, and the ceremony it begins MUST carry the account rather than read it at completion, which is AUTH-8.3's rule with the grant in place of the invitation: a redemption naming an account would enrol whoever asked onto whichever account they named.
-  - **AUTH-9.10.4** A grant MUST be single use, enforced under compare and set, and MUST be spent when the credential is written rather than when the ceremony begins. Spending at the start would burn a grant on a ceremony the authenticator refused, which is the likely case for somebody who has just lost a device; spending after the write would let two ceremonies completing together each enrol a credential with only one losing the race.
+  - **AUTH-9.10.3 (security critical)** The account MUST come from the grant record. No operation that redeems one MAY take an account, and the ceremony it begins MUST carry both the account and the grant rather than read either at completion, which is AUTH-8.3's rule with the grant in place of the invitation: a redemption naming an account would enrol whoever asked onto whichever account they named, and a completion naming the grant would let somebody holding one valid grant spend another.
+  - **AUTH-9.10.4** A grant MUST be single use, enforced under compare and set, and MUST be spent when the credential is written rather than when the ceremony begins. Spending at the start would burn a grant on a ceremony the authenticator refused, which is the likely case for somebody who has just lost a device; spending after the write would let two ceremonies completing together each enrol a credential with only one losing the race. The cost is that a stolen token races the person to completion rather than being spent in front of them, which the short lifetime of AUTH-9.10.6 bounds.
   - **AUTH-9.10.5** A grant MUST carry what becomes of the credentials the account already holds, and the default MUST be to remove them. The usual reason for recovery is that a device is gone, and a credential on it that keeps working is the hazard the recovery was called for. A caller that knows otherwise says so, and the audit log MUST record the removals as it records any other (AUTH-14.1.7).
   - **AUTH-9.10.6** A grant MUST expire, and far sooner than an invitation: an invitation token grants an account that does not exist yet, a grant stands in for a session on one that does. Expiry MUST be derived when a grant is read rather than depending on a sweep having run, as AUTH-8.9 requires of an invitation's standing.
   - **AUTH-9.10.7** The library MUST expose an account's grants with their standing, and MUST allow a pending one to be withdrawn, so that a grant issued in error or handed to the wrong person can be found and revoked before it is redeemed.
@@ -294,14 +296,14 @@ AUTH-6.7 is the one to read twice. Linking an external identity on an address th
     send : OutboundEmail → m (Except SendError SentMessageId)
   ```
 
-- **AUTH-10.2** `SendingIdentity` MUST be resolved per tenant from the first version, even though every tenant initially resolves to the same operator domain. Storing one row per tenant that points at the shared default turns per-tenant sending domains into a data change later rather than schema and wiring surgery. See §18.2.
+- **AUTH-10.2** `SendingIdentity` MUST be resolved per tenant, even where every tenant resolves to the same operator domain. Storing one row per tenant that points at the shared default turns per-tenant sending domains into a data change later rather than schema and wiring surgery. See §18.2.
 - **AUTH-10.3** `SendError` MUST distinguish permanent failures (address rejected, suppressed) from transient ones (timeout, rate limited, provider 5xx), because the caller's response differs: one is told to the person, the other is retried.
 - **AUTH-10.4** Every message MUST carry an idempotency key derived from the attempt, so that a retry after an ambiguous timeout cannot send two codes for one attempt.
 - **AUTH-10.5** Sending MUST NOT block the HTTP response beyond a short bounded timeout. A slow provider must degrade to "we are sending it" rather than a hung request.
 - **AUTH-10.6** The Postmark adapter uses the transactional message stream with the server token in `X-Postmark-Server-Token`. Nothing Postmark-specific may appear outside the adapter module, and the core library MUST compile without it.
 - **AUTH-10.7** Email bodies MUST be produced from templates that the client can override per tenant, with a plain text part always present. Templates MUST escape all interpolated values in the HTML part.
 - **AUTH-10.8** Deployment documentation MUST state the DNS requirements: SPF, DKIM, and DMARC on the sending domain, and either a real MX or an explicit null MX (RFC 7505) on the sending subdomain, so that receivers do not penalise a `From` domain that cannot receive mail.
-- **AUTH-10.9** An Amazon SES adapter MUST be built in the first version, in its own target, and the core library MUST compile without either it or Postmark. The reasoning is AUTH-15.8.2's applied to this port: an abstraction with one implementation is not an abstraction, and the provider assumptions that have leaked into `OutboundEmail` are not visible until a second transport has to satisfy it.
+- **AUTH-10.9** An Amazon SES adapter MUST ship, in its own target, and the core library MUST compile without either it or Postmark. The reasoning is AUTH-15.8.2's applied to this port: an abstraction with one implementation is not an abstraction, and the provider assumptions that have leaked into `OutboundEmail` are not visible until a second transport has to satisfy it.
 - **AUTH-10.10** Both adapters MUST classify provider failures into the permanent and transient cases of AUTH-10.3 from the provider's own error vocabulary, not from the HTTP status alone. A failure an operator must fix, such as an unverified sending identity or an account still in the SES sandbox, is transient in this sense: it resolves without the person who asked for the link doing anything, and telling them their address was rejected would be false.
 - **AUTH-10.11** The idempotency key of AUTH-10.4 MUST reach the provider by whatever channel that provider echoes back on its delivery and bounce notifications, so that the key preventing a double send is the key identifying the attempt when the bounce arrives (§12). It MUST NOT be dropped by an adapter whose provider has no idempotency header of its own.
 - **AUTH-10.12** SES credentials MUST be supplied by configuration per AUTH-14.1.6, and the design MUST accommodate short-lived credentials carrying a session token, since an IAM role is the normal way to hold them and a long-lived access key is the thing deployment guidance should be able to discourage.
@@ -312,7 +314,7 @@ AUTH-6.7 is the one to read twice. Linking an external identity on an address th
 
 ## 11. Inbound email
 
-Not in the first version. Retained as a section so that later requirement numbers stay stable.
+Not implemented. Retained as a section so that later section numbers stay stable.
 
 Inbound processing was considered and deferred because no use case required it: the sign-in flows are outbound only, and replies to authentication mail are handled by pointing `Reply-To` at a mailbox or helpdesk the client already operates. If it returns, the design constraint worth remembering is that the canonical inbound type must be a **parsed** message rather than raw MIME, because Postmark delivers parsed JSON and offers no full raw MIME retrieval, so a raw-MIME interchange type would make the first adapter impossible.
 
@@ -493,7 +495,7 @@ The port's contract is not its type signature. These are behavioural guarantees 
 ### 15.8 Backends
 
 - **AUTH-15.8.1** Postgres, via `leanpostgres`, is the reference backend and MUST supply the `TransactionalStore` capability.
-- **AUTH-15.8.2** A SQLite backend MUST be built in the first version, not deferred. An abstraction with one implementation is not an abstraction, and any Postgres assumptions that leak into the port will not be visible until a second backend exists, by which point they are load-bearing.
+- **AUTH-15.8.2** A SQLite backend MUST ship beside the Postgres one. An abstraction with one implementation is not an abstraction, and any Postgres assumptions that leak into the port will not be visible until a second backend exists, by which point they are load-bearing.
 - **AUTH-15.8.3** A SQLite deployment inherits constraints that MUST be documented rather than discovered:
   - **Single writer.** Concurrent code submissions serialise, which makes AUTH-5.3.5 trivially safe but requires WAL mode and a busy timeout or ordinary concurrency produces `SQLITE_BUSY`.
   - **Single process.** AUTH-3.4 requires any instance to serve any request in any flow, so a SQLite client is a single-process deployment. A shared filesystem is not a substitute.
@@ -503,7 +505,7 @@ The port's contract is not its type signature. These are behavioural guarantees 
 
 ## 16. Testing
 
-Follow the escalation in the project's `CLAUDE.md`: a proven theorem beats a property test, which beats an example. Never leave `sorry`; the build treats warnings as errors, which is also why the `plausible` tactic is unusable and properties must be written as explicit test runs.
+The escalation from example to property to theorem is the one the project's `CLAUDE.md` sets out.
 
 - **AUTH-16.1** The following MUST be theorems, not tests. They are all finite case analysis or pure total functions over decidable structure, and a counterexample in any of them is a security defect rather than a cosmetic one:
   - Domain allowlist matching respects label boundaries: no domain whose match is a proper suffix without a label boundary is ever accepted (AUTH-7.3.1).
@@ -520,20 +522,14 @@ Follow the escalation in the project's `CLAUDE.md`: a proven theorem beats a pro
 - **AUTH-16.5** The full cross-device flow MUST be exercisable end to end with no network and no database server, using **SQLite in memory** as the test backend. There is no hand-written in-memory fake: the tests run the same statements production runs, which is what makes them evidence about the shipped code rather than about a parallel implementation. The cost, accepted deliberately, is that `lake test` requires the SQLite native dependency.
 - **AUTH-16.6** Fakes MUST exist for the remaining ports: a capturing email transport, a settable clock, and a seeded deterministic random source.
 - **AUTH-16.7** Tests MUST cover, at minimum, these adversarial cases: link opened cross-device does not issue a session; code accepted only with the matching attempt cookie; sixth wrong code abandons the attempt; expired attempt rejects a correct code; concurrent completion yields one session; invitation accept cannot be redirected to another address or tenant; federated identity with unverified email does not link; `returnTo` outside the allowlist is refused; an account in tenant A cannot be reached with a session from tenant B; the same address across many tenants hits the cross-tenant send limit.
-- **AUTH-16.8** `lake build` and `lake test` MUST both pass, with no warnings, before any task is considered complete. Verify individual files with the Lean LSP diagnostics while working.
 
 ---
 
 ## 17. Code standards
 
-Inherit the conventions in the project's `CLAUDE.md`, in particular:
+The code standards are the project's `CLAUDE.md`. One is kept here because AUTH-10.14 rests on it:
 
-- **AUTH-17.1** Every file starts with the copyright statement: `Copyright (c) 2026 Paul Butcher. All rights reserved.` and the Apache 2.0 notice.
-- **AUTH-17.2** Comments explain *why*, never restate the code. No file or function header comments unless they add real value. No references to plans, milestones, or rejected designs.
-- **AUTH-17.3** Never use an emdash. Use a comma or a semicolon.
-- **AUTH-17.4** `partial` is forbidden unless genuinely unavoidable.
 - **AUTH-17.5** If something would be better implemented as a change to a dependency, or is generally useful beyond this library, stop and ask rather than implementing it here.
-- **AUTH-17.6** No git operations of any kind.
 
 ---
 
@@ -541,13 +537,11 @@ Inherit the conventions in the project's `CLAUDE.md`, in particular:
 
 Unresolved unless the entry says otherwise. Each needs an answer before the affected part is built; a recommendation is offered but the decision is not the implementer's to make. Ask, do not assume. An entry that has been answered keeps its number and records what was decided.
 
-- **18.1 Administrator-led recovery.** Answered, in AUTH-9.10. Most of it turned out to be built already: `changePrimaryEmail` points an account at an address nobody has proven and revokes every session in the same call, so on a tenant that admits the magic link the administrator sets the new mailbox and the next link proves it. That is what the question was really asking, and the answer was that mailing an unproven address is exactly what the magic link is for.
-
-  What that leaves, and what the recovery grant is for, is a tenant whose origin policy does not admit the magic link. There the administrator had no operation at all: the policy is per tenant, so the only lever was to admit another kind for everybody, and an invitation does not help because AUTH-8.8 routes it into a sign-in that AUTH-9.9.3 then refuses. A passkey-only tenant is where that bites, so passkeys are what opened it. Recovery through a provider remains the provider's own, as it should be: a directory account is restored in the directory, and the grant only relinks the identity afterwards.
+- **18.1 Administrator-led recovery.** Answered, in AUTH-9.10. On a tenant that admits the magic link `changePrimaryEmail` already answered it: it points the account at an address nobody has proven and revokes every session, and the next link proves the address. The recovery grant is for a tenant that does not admit the magic link. Recovering a directory account remains the provider's own, and the grant only relinks the identity afterwards.
 
 - **18.2 Per-tenant sending domains.** Deferred, and AUTH-10.2 keeps the retrofit cheap. The sign-in half is answered: tenants sign in at one shared origin and AUTH-4.3.2 stands, because AUTH-6.2 carries the tenant in `state` and so one registered redirect URI serves every tenant however many there are. What is still undecided is sending, where a tenant's own domain is a question about deliverability and reputation rather than about routing. Should signing in at a per-tenant hostname ever be asked for, the OAuth callback needs a shared origin plus a cross-origin handoff credential, which is a real piece of machinery worth knowing about before it is needed.
 
-- **18.3 Passkeys.** Answered, in §22. AUTH-4.4.2 was not enough forward provision, and the shortfall was one level below where it was written: the credential type is an open set as promised, and the SQL table fans each variant out to its own columns, so a new kind needs a migration however open the model is. What that cost was a migration rather than a rewrite, which is the smaller half of what the requirement was guarding against.
+- **18.3 Passkeys.** Answered, in §22. AUTH-22.16 records what AUTH-4.4.2's forward provision did and did not buy.
 
 - **18.4 Enterprise SSO.** SAML and SCIM are out of scope but are what B2B buyers ask for. Tenant-scoped accounts make a per-tenant identity provider a natural fit later; confirm nothing else is needed now.
 
@@ -555,7 +549,7 @@ Unresolved unless the entry says otherwise. Each needs an answer before the affe
 
 - **18.6 Impersonation.** A client signing in as one of its accounts for support purposes is a common operational need and a serious security feature. In or out? If in, it needs its own audit trail and a visible indication to the person being impersonated.
 
-- **18.7 Consent capture.** Answered, in §4.6: the library stores consent and does not capture it. The record, the version and the history are what could not be backfilled, and they now exist; the capture is the client's, on somebody it has already authenticated. Asking during sign-in was rejected because a consent control shown only to addresses with no account is a better account enumeration oracle than any channel §14.2 closes. What remains open is only what §18.5 decides: how long the records are kept, and what account deletion does to evidence that permission was given.
+- **18.7 Consent capture.** Answered, in §4.6: the library stores consent and does not capture it. What remains open is only what §18.5 decides: how long the records are kept, and what account deletion does to evidence that permission was given.
 
 - **18.8 Localisation.** Are emails single-language? Locale selection has to be threaded from the request through to template rendering, which is easier to design in than to retrofit.
 
@@ -565,25 +559,9 @@ Unresolved unless the entry says otherwise. Each needs an answer before the affe
 
 - **18.11 Plus-tag stripping and provider addresses.** Whether the option of AUTH-4.5.4 should apply to an address a provider asserted rather than one somebody typed. Apple's private relay is the case that makes it interesting, since the relay address is already a stable alias the person did not choose.
 
-## 19. Suggested delivery order
+## 19. Delivery order
 
-Each stage should build, test, and be reviewable on its own.
-
-1. Domain model, the pure state machine, and the theorems of AUTH-16.1. No IO.
-2. The `AuthStore` port and its conformance suite, with the test backend passing it. The whole cross-device flow exercised with no server.
-3. The shared SQL implementation and its dialect record, with both the Postgres and SQLite backends passing the conformance suite. Build both here; deferring the second defeats the abstraction.
-4. Postmark outbound transport; the email flow working end to end.
-5. Signup policies and invitations, including the metadata payload and the first-in-tenant signal.
-6. The SES transport (AUTH-10.9), with both adapters satisfying one port.
-7. Rate limiting, behind the port of AUTH-15.6 and at the five scopes of AUTH-14.1.1. It is listed as a stage because it was previously assigned to none, and so would have been delivered by nobody.
-8. Session management surface, bounce ingestion, suppression.
-9. Consent records (§4.6), which answer §18.7.
-10. Credential and verified-address storage, the `state` record of AUTH-6.2, and the linking rule of AUTH-6.7 with the theorems of AUTH-16.1 over it.
-11. Per-tenant provider configuration and the secrets port of AUTH-15.7.3.
-12. The fetch target of AUTH-6.11 and the OIDC core: discovery, the JWKS cache of AUTH-6.4, `nonce`, and ID token validation behind its port.
-13. Google end to end, through the response policy of §14.2 that AUTH-14.2.7 requires it to share.
-14. Apple, whose client secret and `form_post` callback are the two things no other provider needs.
-15. A non-OIDC provider, which is what proves the port of AUTH-6.9 did not quietly assume an ID token.
+Retired once delivered. Retained as a heading so that later section numbers stay stable.
 
 ---
 
@@ -695,7 +673,7 @@ Real deployments need both mechanisms. Client ID metadata documents are the newe
 
 ### 20.13 Room for OpenID Connect
 
-Out of the first version, and deliberately not designed out. No ID tokens, no JWKS, no userinfo, no `openid` scope.
+Not implemented, and deliberately not designed out. No ID tokens, no JWKS, no userinfo, no `openid` scope.
 
 - **AUTH-20.13.1** `prompt` and `max_age` MUST be read and acted on now, to the extent the OAuth subset allows. The alternative is discovering at the point of adding OpenID Connect that every caller assumed a session is only ever read.
 - **AUTH-20.13.2** The authorization outcome MUST be able to say that the person has to authenticate again, rather than only that they are or are not signed in.
@@ -732,8 +710,8 @@ Out of *this target* entirely: the consent page, authenticating the person, HTTP
   - Loopback port-agnostic matching admits no host that is not a loopback address.
   - The metadata document always advertises `S256` and always offers `"none"`.
 - **AUTH-20.16.2** Beyond the theorems, the suite MUST cover a full exchange for a metadata document client and for a dynamically registered client, a replayed code, a wrong `code_verifier`, a token presented to the wrong resource, a rotated refresh token, and a loopback redirect on an unregistered port.
-- **AUTH-20.16.4** The listing of AUTH-20.14.5 MUST be covered for the cases the flow will not produce: a grant whose credentials have all lapsed, a grant with no consent entry beside it, and another account's grant. The account scoping is a security property and is stated rather than assumed from the query.
 - **AUTH-20.16.3** The driven checks MUST run against both backends, as AUTH-15.8.2 requires of the core store. They run the statements production runs; there is no hand-written fake.
+- **AUTH-20.16.4** The listing of AUTH-20.14.5 MUST be covered for the cases the flow will not produce: a grant whose credentials have all lapsed, a grant with no consent entry beside it, and another account's grant. The account scoping is a security property and is stated rather than assumed from the query.
 
 ### 20.17 Where this deliberately departs from the specifications
 
@@ -796,7 +774,7 @@ Each such copy restates invariants that belong here. The key length and its enco
 
 ### 21.3 The names belong to the library
 
-- **AUTH-21.3.1** `SecretField` MUST gain a total parse that inverts `SecretField.name`. The names are part of the supported text form, so the reading of them belongs beside the writing rather than in each tool that has to accept one.
+- **AUTH-21.3.1** `SecretField` MUST have a total parse that inverts `SecretField.name`. The names are part of the supported text form, so the reading of them belongs beside the writing rather than in each tool that has to accept one.
 - **AUTH-21.3.2** That round trip MUST be a theorem rather than a handful of examples. The case analysis is finite, and a field that does not survive it seals a secret under a name nothing can ask for again.
 - **AUTH-21.3.3** The tenant and the provider MUST stay opaque strings. Which providers exist is a client's configuration (§6), so a tool that checked them against a list would refuse a provider the library supports.
 
@@ -814,14 +792,14 @@ Each such copy restates invariants that belong here. The key length and its enco
 
 ### 21.6 Documentation and testing
 
-- **AUTH-21.6.1** The README MUST carry the workflow end to end, from minting a key to setting what the tool printed. The text form of AUTH-15.7.3.2 is unusable without it, and a client that cannot follow it will hold its provider secrets in clear instead.
+- **AUTH-21.6.1** The documentation MUST carry the workflow end to end, from minting a key to setting what the tool printed. The text form of AUTH-15.7.3.2 is unusable without it, and a client that cannot follow it will hold its provider secrets in clear instead.
 - **AUTH-21.6.2** Every decision MUST sit in a function the suite can call, leaving `main` to dispatch and nothing else. The binding, the parsing and the refusals are already testable in process, and none of them needs a shell to exercise (AUTH-16.5).
 
 ---
 
 ## 22. Passkeys (WebAuthn)
 
-Answered from §18.3 and built. This section records what was decided and why, since several of the decisions cannot be revisited once an authenticator holds a credential.
+Several of these decisions cannot be revisited once an authenticator holds a credential, which is why each records its reason.
 
 ### 22.1 Targets
 
@@ -858,7 +836,7 @@ Answered from §18.3 and built. This section records what was decided and why, s
 
 ### 22.6 The routes
 
-- **AUTH-22.19** The routes MUST answer JSON and MUST serve no page. `navigator.credentials` cannot be driven from markup, so a page here would mean shipping a script, and the script belongs to the application that knows what its sign-in looks like. This is the one place §17's rule against JavaScript cannot be met by meeting it.
+- **AUTH-22.19** The routes MUST answer JSON and MUST serve no page. `navigator.credentials` cannot be driven from markup, so a page here would mean shipping a script, and the script belongs to the application that knows what its sign-in looks like. This is the one place the project's rule against JavaScript cannot be met by meeting it.
 - **AUTH-22.20** Every `BufferSource` MUST travel as base64url, `clientDataJSON` included, so that a page encodes everything the same way.
 - **AUTH-22.21** The registration routes MUST read the account from the session cookie and nowhere else, which is their whole forgery defence: `SameSite=Lax` is not sent on a cross-site `POST`. The authentication routes MUST NOT require a session, and MUST NOT be mounted behind a guard that does.
 - **AUTH-22.22** Every refusal MUST answer with one body, with the reason reaching the operator and not the response, as AUTH-14.2.3 requires of the sign-in routes.
