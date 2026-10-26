@@ -51,11 +51,15 @@ theorem callbackPathAgrees :
     base.origin ++ Routing.renderPattern Federated.patterns.callback =
       callbackUri (configFor anyTenant) anyProvider := by decide
 
-/-- The start route is the callback's path without its last segment, which is what makes the pair
-readable as one place rather than two. -/
+/-- The two paths that hang off the start route hang off it, rather than sitting near it. The
+callback is where the provider is told to come back to, and the recovery start is the same place
+as the ordinary one with a grant where the session goes; a table that drifted would leave either
+answering nothing. -/
 theorem startPathAgrees :
     Routing.renderPattern Federated.patterns.callback =
-      Routing.renderPattern Federated.patterns.start ++ "/callback" := by decide
+        Routing.renderPattern Federated.patterns.start ++ "/callback"
+      ∧ Routing.renderPattern Federated.patterns.recover =
+        Routing.renderPattern Federated.patterns.start ++ "/recover" := by decide
 
 /--
 The link an invitation mail carries, where the tenant admits no magic link, is the start route.
@@ -210,6 +214,56 @@ def linkRouteChecks : IO (List (String × Bool)) := do
     , ("oidc http: a plain sign-in still starts one, bound to no account",
         statusOf signIn == "HTTP/1.1 303 See Other"
           && signInRecord.isSome && (signInRecord.bind (·.account)).isNone) ]
+
+/-- The recovery start, which is the link start with a grant where the session goes. What is
+route-specific is that no session is read, that a grant nobody issued looks like every other
+refusal, and that the account and the grant reach the state record rather than the request. -/
+def recoveryRouteChecks : IO (List (String × Bool)) := do
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+  let made ← issueFor ports liveConfig
+    { origin := .magicLink ⟨"attempt-1"⟩
+      address := (EmailAddress.parse "holder@example.test").toOption.getD default
+      requester := { ip := none, userAgent := none, approximateLocation := none } }
+  let account := (made.admitted.map (·.account)).getD ⟨""⟩
+  let config : Config := { ports, oidc := oidcPorts, tenant := resolver }
+  let formHeaders :=
+    "Content-Type: application/x-www-form-urlencoded\x0d\nConnection: close\x0d\n"
+
+  let issued ← Service.createRecovery ports liveConfig account
+  let (grant, token) := match issued with
+    | .ok grantIssued => (grantIssued.grant.id, grantIssued.token)
+    | .error _ => (⟨""⟩, ⟨""⟩)
+
+  let recovered ← send config
+    (mkPost "/t/acme/federated/google/recover" s!"grant={grant.value}&token={token.encoded}"
+      formHeaders)
+  let unknownGrant ← send config
+    (mkPost "/t/acme/federated/google/recover" "grant=nope&token=nope" formHeaders)
+  let noGrant ← send config (mkPost "/t/acme/federated/google/recover" "" formHeaders)
+  -- A grant is not a session: presenting it to the link start proves nothing there.
+  let atLinkStart ← send config
+    (mkPost "/t/acme/federated/google" s!"grant={grant.value}&token={token.encoded}" formHeaders)
+
+  let record ← match (headerValue recovered "location").bind (parameter · "state") with
+    | none => pure none
+    | some state =>
+      ports.store.federationStateByDigest tenant ⟨1700000000⟩ (peppers.current.digest ⟨state⟩)
+
+  pure
+    [ ("oidc http: a recovery start with a grant goes to the provider, with no session",
+        statusOf recovered == "HTTP/1.1 303 See Other"
+          && ((headerValue recovered "location").getD "").startsWith
+            discovery.authorizationEndpoint)
+    , ("oidc http: the account and the grant ride on the state record (AUTH-9.10.3)",
+        (record.bind (·.account)) == some account && (record.bind (·.recovery)) == some grant)
+    , ("oidc http: a grant nobody issued and no grant at all look the same (AUTH-14.2.3)",
+        statusOf unknownGrant == statusOf noGrant
+          && (headerValue unknownGrant "location").isNone
+          && (headerValue noGrant "location").isNone)
+    , ("oidc http: a grant presented to the link start is not a session",
+        statusOf atLinkStart == "HTTP/1.1 200 OK"
+          && (headerValue atLinkStart "location").isNone) ]
 
 
 private def address (raw : String) : EmailAddress := (EmailAddress.parse raw).toOption.getD default

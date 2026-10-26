@@ -101,7 +101,9 @@ theorem completionPathsNest :
     Routing.renderPattern Passkey.patterns.registerComplete =
         Routing.renderPattern Passkey.patterns.register ++ "/complete"
       ∧ Routing.renderPattern Passkey.patterns.signInComplete =
-        Routing.renderPattern Passkey.patterns.signIn ++ "/complete" := by decide
+        Routing.renderPattern Passkey.patterns.signIn ++ "/complete"
+      ∧ Routing.renderPattern Passkey.patterns.recoverComplete =
+        Routing.renderPattern Passkey.patterns.recover ++ "/complete" := by decide
 
 /--
 Every passkey route answers under the tenant path the cookies are scoped to.
@@ -113,7 +115,9 @@ theorem routesAreUnderTheTenantPath :
     Routing.renderPattern Passkey.patterns.register =
         BaseUrl.tenantPath anyTenant ++ "/passkey/register"
       ∧ Routing.renderPattern Passkey.patterns.signIn =
-        BaseUrl.tenantPath anyTenant ++ "/passkey/signin" := by decide
+        BaseUrl.tenantPath anyTenant ++ "/passkey/signin"
+      ∧ Routing.renderPattern Passkey.patterns.recover =
+        BaseUrl.tenantPath anyTenant ++ "/passkey/recover" := by decide
 
 def checks : IO (List (String × Bool)) := do
   let db ← Sqlite.openInMemory
@@ -168,5 +172,50 @@ def checks : IO (List (String × Bool)) := do
           && (headerOf noCookie "x-content-type-options") == some "nosniff"),
       ("passkey http: a tenant the resolver does not know is not found",
         statusOf unknownTenant == "HTTP/1.1 404 Not Found") ]
+
+/-- The recovery routes, which are the registration routes with a grant where the session goes.
+AUTH-22.21 holds because they are separate routes: the pair above still reads the account from
+the session and nowhere else, and this pair reads it from the grant and nowhere else. -/
+def recoveryChecks : IO (List (String × Bool)) := do
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+  let made ← issueFor ports liveConfig
+    { origin := .magicLink ⟨"attempt-1"⟩
+      address := address "holder@example.test"
+      requester := {} }
+  let account := (made.admitted.map (·.account)).getD ⟨""⟩
+  let config : Config := { ports, verifier, tenant := resolver }
+
+  let issued ← Service.createRecovery ports liveConfig account
+  let (grant, token) := match issued with
+    | .ok grantIssued => (grantIssued.grant.id, grantIssued.token)
+    | .error _ => (⟨""⟩, ⟨""⟩)
+  let body (g t : String) : String :=
+    "{\"grant\":\"" ++ g ++ "\",\"token\":\"" ++ t ++ "\"}"
+
+  let begun ← send config
+    (mkPost "/t/acme/passkey/recover" (body grant.value token.encoded) jsonHeaders)
+  let unknownGrant ← send config
+    (mkPost "/t/acme/passkey/recover" (body "nope" "nope") jsonHeaders)
+  let noBody ← send config (mkPost "/t/acme/passkey/recover" "" jsonHeaders)
+  -- A grant in the body is not a session, so the ordinary registration route starts nothing.
+  let atRegister ← send config
+    (mkPost "/t/acme/passkey/register" (body grant.value token.encoded) jsonHeaders)
+
+  pure
+    [ ("passkey http: a recovery start needs no session, only the grant (AUTH-9.10.2)",
+        statusOf begun == "HTTP/1.1 200 OK"
+          && ((headerOf begun "set-cookie").getD "").startsWith "auth_passkey="
+          && ((bodyOf begun).splitOn "\"challenge\"").length == 2),
+      ("passkey http: the options name the relying party and still require a resident key",
+        ((bodyOf begun).splitOn "example.test").length ≥ 2
+          && ((bodyOf begun).splitOn "\"residentKey\":\"required\"").length == 2),
+      ("passkey http: a grant nobody issued and no body at all answer alike (AUTH-14.2.3)",
+        statusOf unknownGrant == statusOf noBody
+          && bodyOf unknownGrant == bodyOf noBody
+          && (headerOf unknownGrant "set-cookie").isNone),
+      ("passkey http: a grant in the body does not stand in for a session at register",
+        statusOf atRegister == "HTTP/1.1 400 Bad Request"
+          && (headerOf atRegister "set-cookie").isNone) ]
 
 end Tests.PasskeyHttp

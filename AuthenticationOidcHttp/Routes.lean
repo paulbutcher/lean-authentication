@@ -55,6 +55,8 @@ inductive Refusal where
   | noSessionCookie
   /-- A link start carried a session cookie that named nobody. -/
   | sessionRejected (reason : SessionRejection)
+  /-- A recovery start carried no grant, or one that may no longer be redeemed. -/
+  | recoveryRefused
   deriving Repr
 
 /-- The operator's name for one, for a log record or a span attribute. Each case defers to the
@@ -68,6 +70,7 @@ def Refusal.name : Refusal → String
   | .notStarted reason => reason.name
   | .noSessionCookie => "no-session-cookie"
   | .sessionRejected reason => reason.name
+  | .recoveryRefused => "recovery-refused"
 
 structure Config where
   ports : Service.Ports IO
@@ -118,18 +121,44 @@ expects rather than being replayed against it. -/
 private def begin [Clock IO] [RandomBytes IO] {tenant : TenantId} (config : Config)
     (tenantConfig : TenantConfig tenant) (provider : ProviderConfig)
     (request : Request e.ReqBody) (returnTo : Option String)
-    (invitation : Option (InvitationId tenant)) (account : Option (AccountId tenant)) :
+    (invitation : Option (InvitationId tenant)) (account : Option (AccountId tenant))
+    (recovery : Option (RecoveryGrantId tenant) := none) :
     e.M (Response e.RespBody) := do
   match ← (config.oidc.metadata.discover provider : IO _) with
   | .error reason => refusedBecause config tenant provider (.protocol reason)
   | .ok discovery =>
     match ← (beginFederated config.ports tenantConfig provider
-        discovery (callbackUri tenantConfig provider.id) returnTo invitation account
+        discovery (callbackUri tenantConfig provider.id) returnTo invitation account recovery
         (requester := requesterOf request) : IO _) with
     | .error reason => refusedBecause config tenant provider (.notStarted reason)
     | .ok begun =>
       let now ← (Clock.now : IO _)
       finish .seeOther "" [setCookie now begun.cookie] (some begun.authorizationUrl)
+
+/--
+Begins adding a provider identity to an account under a recovery grant (AUTH-9.10.2).
+
+`linkStart` with the grant standing where the session would, and the same `POST` for a further
+reason: the grant and its token are form fields rather than query parameters, because a recovery
+token stands in for a session on an account that already exists and a query parameter would put
+it in every access log, proxy record and referrer between here and the person holding it.
+
+A refusal is the shared page, as every other refusal on these routes is. That it was the grant
+that failed reaches `observeRefusal` and nothing else.
+-/
+def recoverStart [Clock IO] [RandomBytes IO] (config : Config)
+    (rawTenant rawProvider : String) : Routing.Result e := fun request =>
+  withProvider config rawTenant rawProvider fun tenant tenantConfig provider =>
+    withForm request fun form => do
+    match form.get "grant", form.get "token" with
+    | some grant, some token =>
+      match ← (Service.authoriseRecovery (tenant := tenant) config.ports ⟨grant⟩ ⟨token⟩ :
+          IO _) with
+      | .error _ => refusedBecause config tenant provider .recoveryRefused
+      | .ok authorised =>
+        begin config tenantConfig provider request (form.get "returnTo") none
+          (some authorised.account) (some authorised.grant)
+    | _, _ => refusedBecause config tenant provider .recoveryRefused
 
 /-- Sends the browser to the provider, to sign in as whoever it answers with (AUTH-6.1). -/
 def start [Clock IO] [RandomBytes IO] (config : Config) (rawTenant rawProvider : String) :
@@ -203,7 +232,8 @@ def complete [Clock IO] [RandomBytes IO] (config : Config)
 
 route_table Federated [
   start := "/t/:tenant:String/federated/:provider:String",
-  callback := "/t/:tenant:String/federated/:provider:String/callback"
+  callback := "/t/:tenant:String/federated/:provider:String/callback",
+  recover := "/t/:tenant:String/federated/:provider:String/recover"
 ]
 
 /-- The callback path is the one `callbackUri` builds, because the provider sends the browser to
@@ -213,7 +243,8 @@ comment. -/
   [ .get Federated.patterns.start (start config),
     .post Federated.patterns.start (linkStart config),
     .get Federated.patterns.callback (fun t p => complete config t p false),
-    .post Federated.patterns.callback (fun t p => complete config t p true) ]
+    .post Federated.patterns.callback (fun t p => complete config t p true),
+    .post Federated.patterns.recover (recoverStart config) ]
 
 /-- Mount this wherever the application's own router is, as the sign-in routes are mounted. -/
 def handler [Clock IO] [RandomBytes IO] (config : Config) : Routing.StatelessHandler e :=

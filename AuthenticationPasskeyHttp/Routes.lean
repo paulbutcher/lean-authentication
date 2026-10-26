@@ -195,6 +195,56 @@ def completeRegistration [Clock IO] [RandomBytes IO] (config : Config) (raw : St
         | _, _, _ => refused config tenant .unknownCeremony)
     raw
 
+/--
+Begins a registration authorised by a recovery grant rather than by a session (AUTH-9.10.2).
+
+The grant and its token travel in the body and never in the query. A recovery token stands in
+for a session on an account that already exists, and a query parameter would put it in every
+access log, proxy record and referrer between here and the person holding it.
+
+It is a route of its own rather than a parameter on the one above, which is what keeps
+AUTH-22.21 true as written: those routes take the account from the session and nowhere else,
+and this one takes it from the grant and nowhere else.
+-/
+def beginRecovery [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+    Routing.Result e := fun request =>
+  withTenant config (fun tenant tenantConfig =>
+    withPayload request fun
+    | none => refused config tenant .recoveryRefused
+    | some payload => do
+      match stringMember payload "grant", stringMember payload "token" with
+      | some grant, some token =>
+        match ← (Service.beginRecoveryRegistration config.ports tenantConfig
+            ⟨grant⟩ ⟨token⟩ : IO _) with
+        | .error reason => refused config tenant reason
+        | .ok options =>
+          let now ← (Clock.now : IO _)
+          jsonResponse .ok (registrationJson tenantConfig options) [setCookie now options.cookie]
+      | _, _ => refused config tenant .recoveryRefused)
+    raw
+
+/-- Completes one. There is no account parameter and no session to read one from: the account is
+the grant's, carried on the ceremony record since it began (AUTH-9.10.3). -/
+def completeRecovery [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
+    Routing.Result e := fun request =>
+  withTenant config (fun tenant tenantConfig =>
+    withPayload request fun
+    | none => refused config tenant .unknownCeremony
+    | some payload => do
+      match cookieNamed request "auth_passkey",
+          bytesMember payload "attestationObject", textMember payload "clientDataJSON" with
+      | some cookie, some attestation, some clientData =>
+        match ← (Service.completeRecoveryRegistration config.ports tenantConfig cookie
+            attestation clientData ((stringMember payload "label").getD "")
+            (listMember payload "transports") : IO _) with
+        | .error reason => refused config tenant reason
+        | .ok registration =>
+          jsonResponse .ok (Json.mkObj
+            [("label", .str registration.label),
+             ("backedUp", .bool registration.backupState)])
+      | _, _, _ => refused config tenant .unknownCeremony)
+    raw
+
 /-- Begins an authentication. No session is needed and none is read: which account this signs in
 is settled by the assertion, not by whoever asks for a challenge. -/
 def beginAuthentication [Clock IO] [RandomBytes IO] (config : Config) (raw : String) :
@@ -237,7 +287,9 @@ route_table Passkey [
   register := "/t/:tenant:String/passkey/register",
   registerComplete := "/t/:tenant:String/passkey/register/complete",
   signIn := "/t/:tenant:String/passkey/signin",
-  signInComplete := "/t/:tenant:String/passkey/signin/complete"
+  signInComplete := "/t/:tenant:String/passkey/signin/complete",
+  recover := "/t/:tenant:String/passkey/recover",
+  recoverComplete := "/t/:tenant:String/passkey/recover/complete"
 ]
 
 @[expose] def routes [Clock IO] [RandomBytes IO] (config : Config) :
@@ -245,7 +297,9 @@ route_table Passkey [
   [ .post Passkey.patterns.register (beginRegistration config),
     .post Passkey.patterns.registerComplete (completeRegistration config),
     .post Passkey.patterns.signIn (beginAuthentication config),
-    .post Passkey.patterns.signInComplete (completeAuthentication config) ]
+    .post Passkey.patterns.signInComplete (completeAuthentication config),
+    .post Passkey.patterns.recover (beginRecovery config),
+    .post Passkey.patterns.recoverComplete (completeRecovery config) ]
 
 /-- Mount this wherever the application's own router is, as the other route sets are mounted. The
 two registration routes need a session; the two authentication routes do not, and must not be put
