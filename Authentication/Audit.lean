@@ -74,6 +74,12 @@ inductive AuditEvent (tenant : TenantId) where
   between devices reports zero from each, so refusing would turn the ordinary case into a
   lockout. The counter is the one presented, because the stored one is in the credential. -/
   | passkeyCounterRegressed (account : AccountId tenant) (presented : UInt32)
+  /-- An administrator authorised one credential enrolment on an account nobody could sign in
+  to, and the enrolment that redeemed it. Both ends are recorded because a grant is a way into
+  an account that the account holder did not create, which is the kind of client-initiated
+  action AUTH-14.1.7 requires be written down. -/
+  | recoveryIssued (account : AccountId tenant) (grant : RecoveryGrantId tenant)
+  | recoveryRedeemed (account : AccountId tenant) (grant : RecoveryGrantId tenant)
   deriving DecidableEq, Repr
 
 /-- Append-only (AUTH-15.4.5). The actor is whatever the client said it was; the library

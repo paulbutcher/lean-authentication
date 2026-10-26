@@ -253,6 +253,10 @@ structure TenantConfig (tenant : TenantId) where
   sessionIdleTimeout : Duration := Duration.days 14
   sessionAbsoluteLifetime : Duration := Duration.days 90
   invitationLifetime : Duration := Duration.days 7
+  /-- Far shorter than an invitation's, and deliberately. An invitation token grants an account
+  that does not exist yet; a recovery grant stands in for a session on one that does, with
+  whatever is already in it, and is handed to somebody out of band rather than mailed. -/
+  recoveryGrantLifetime : Duration := Duration.hours 1
   returnToAllowlist : List String := []
   /-- The providers this tenant offers, empty unless configured: a tenant that has not named one
   has no federated sign-in rather than a default somebody else chose (AUTH-4.1.2). -/

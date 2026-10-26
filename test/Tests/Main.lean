@@ -25,6 +25,7 @@ def main : IO UInt32 := do
     ++ (← Tests.Session.insecureOriginChecks)
     ++ (← Tests.Session.lifetimeChecks)
     ++ (← Tests.Session.accountChecks) ++ (← Tests.Session.purgeChecks)
+    ++ (← Tests.Session.recoveryChecks)
     ++ Tests.Session.returnToChecks
     ++ Tests.Suppression.parserChecks ++ (← Tests.Suppression.checks) ++ (← Tests.System.checks)
     ++ (← Tests.Transport.checks)

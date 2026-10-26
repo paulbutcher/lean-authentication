@@ -165,6 +165,9 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let beta : TenantId := ⟨label ++ "-beta"⟩
   let doomed : TenantId := ⟨label ++ "-doomed"⟩
   let swept : TenantId := ⟨label ++ "-swept"⟩
+  -- A tenant of its own for the audit round trip, so the check does not depend on running after
+  -- whichever other tenant's entries were counted.
+  let logged : TenantId := ⟨label ++ "-logged"⟩
   let person := addressOf "person"
   let other := addressOf "other"
 
@@ -174,6 +177,7 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   store.deleteTenant beta
   store.deleteTenant doomed
   store.deleteTenant swept
+  store.deleteTenant logged
 
   -- Accounts, uniqueness, and the first-account signal.
   let created ← store.createAccount alpha (sampleAccount alpha "account-1" person)
@@ -465,6 +469,12 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   store.createRecoveryGrant swept (sampleRecoveryGrant swept "grant-kept" ⟨"account-swept"⟩)
   let purgedGrants ← store.purgeExpired swept soon
   let sweptLiveGrant ← store.recoveryGrantById swept ⟨"grant-kept"⟩
+  -- Both recovery events through the audit columns and back. An event the decoder does not
+  -- know is dropped rather than reported, so a mapping written in one direction only loses the
+  -- entry silently, which is how the last addition to this table went wrong.
+  store.appendAudit logged ⟨soon, .client "admin", .recoveryIssued ⟨"account-1"⟩ ⟨"grant-1"⟩⟩
+  store.appendAudit logged ⟨soon, .client "admin", .recoveryRedeemed ⟨"account-1"⟩ ⟨"grant-1"⟩⟩
+  let loggedAudit ← store.auditEntries logged
 
   pure
     [ { name := "an account is readable by the identity it was created with"
@@ -676,6 +686,11 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     , { name := "sweeping removes expired grants, and only those"
         passed := purgedGrants.recoveryGrants == 1 && sweptLiveGrant.isSome }
     , { name := "deleting a tenant removes its recovery grants"
-        passed := doomedGrant.isNone } ]
+        passed := doomedGrant.isNone }
+    , { name := "both recovery audit events read back as what was written (AUTH-14.1.7)"
+        passed := loggedAudit.map (·.event) ==
+            [.recoveryIssued ⟨"account-1"⟩ ⟨"grant-1"⟩,
+              .recoveryRedeemed ⟨"account-1"⟩ ⟨"grant-1"⟩]
+          && loggedAudit.map (·.actor) == [.client "admin", .client "admin"] } ]
 
 end Authentication.Store.Conformance

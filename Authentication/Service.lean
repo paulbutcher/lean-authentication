@@ -1093,6 +1093,122 @@ def reactivateAccount {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId
     ports.store.appendAudit tenant ⟨now, .anonymous, .accountReactivated account⟩
     pure (.ok ())
 
+/-! ## Recovery
+
+What an administrator does about an account nobody can sign in to, once the client has decided
+out of band who the person is (§18.1, AUTH-9.10). A grant authorises one credential enrolment
+and never a session, which is what keeps it inside the origin policy rather than an exception to
+it: AUTH-9.9.5 already has it that adding a credential issues none, so the sign-in that follows
+is checked like any other.
+
+Nothing here sends anything. The premise of recovery is that the usual channel is gone, so the
+token is returned to the client, which delivers it however it decided the person was who they
+said (AUTH-13.2).
+-/
+
+inductive RecoveryRefusal where
+  /-- No account in this tenant by that identifier. Checked rather than assumed, because a
+  grant on an account that does not exist is a row nothing will ever reach. -/
+  | unknownAccount
+  /-- Revoking what is not a pending grant: never issued, already spent, or already revoked. -/
+  | notPending
+  /-- The entropy source failed, so nothing was written. -/
+  | notDrawn
+  deriving DecidableEq, Repr, Inhabited
+
+/-- What issuing one produced. There is no delivery field, unlike `InvitationIssued`, because
+nothing was sent: the token is the caller's to hand over. -/
+structure RecoveryIssued (tenant : TenantId) where
+  grant : RecoveryGrant tenant
+  token : CredentialValue
+
+inductive RecoveryStanding where
+  | pending
+  | spent
+  | expired
+  | revoked
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Expiry is derived rather than stored, as an invitation's standing is, so a listing says what
+is true now rather than what a sweeper last wrote (AUTH-9.10.6). -/
+def recoveryStanding {tenant : TenantId} (now : Timestamp) (grant : RecoveryGrant tenant) :
+    RecoveryStanding :=
+  match grant.state with
+  | .spent => .spent
+  | .revoked => .revoked
+  | .pending => if grant.expiresAt ≤ now then .expired else .pending
+
+/--
+Issues a grant and signs the account out everywhere.
+
+The revocation is not a precaution bolted on: AUTH-9.6 requires every session to go on any
+recovery action, and issuing the grant is the action. It costs nothing, because somebody who
+has lost the credential they signed in with holds no session worth keeping, and it is what
+finally produces `RevocationReason.recovery`.
+-/
+def createRecovery {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (config : TenantConfig tenant) (account : AccountId tenant)
+    (disposition : RecoveryDisposition := .removeExisting) (createdBy : Actor := .anonymous) :
+    m (Except RecoveryRefusal (RecoveryIssued tenant)) := do
+  let now ← Clock.now
+  match ← ports.store.accountById tenant account with
+  | none => pure (.error .unknownAccount)
+  | some _ =>
+    match ← randomValue 12, ← randomValue 16 with
+    | .error _, _ => pure (.error .notDrawn)
+    | _, .error _ => pure (.error .notDrawn)
+    | .ok generated, .ok token =>
+      let grant : RecoveryGrant tenant :=
+        { id := ⟨generated.encoded⟩
+          account
+          tokenDigest := ports.peppers.current.digest token
+          disposition
+          expiresAt := now.advance config.recoveryGrantLifetime
+          createdBy }
+      ports.store.createRecoveryGrant tenant grant
+      ports.store.revokeSessionsForAccount tenant now account
+      ports.store.appendAudit tenant ⟨now, createdBy, .recoveryIssued account grant.id⟩
+      ports.store.appendAudit tenant
+        ⟨now, createdBy, .accountSessionsRevoked account .recovery⟩
+      pure (.ok { grant, token })
+
+/-- Withdraws one that has not been redeemed, which is what an administrator who issued the
+wrong grant, or handed it to the wrong person, reaches for. -/
+def revokeRecovery {m : Type → Type} [Monad m] {tenant : TenantId} (ports : Ports m)
+    (id : RecoveryGrantId tenant) : m Bool := do
+  match ← ports.store.recoveryGrantById tenant id with
+  | none => pure false
+  | some grant =>
+    if grant.state != .pending then pure false
+    else ports.store.commitRecoveryGrant tenant grant { grant with state := .revoked }
+
+/-- What an administrator is shown about one account's grants, which is how one issued in error
+is found before it is revoked. -/
+def recoveryGrants {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (account : AccountId tenant) : m (List (RecoveryGrant tenant × RecoveryStanding)) := do
+  let now ← Clock.now
+  pure ((← ports.store.recoveryGrantsForAccount tenant account).map fun grant =>
+    (grant, recoveryStanding now grant))
+
+/--
+Says which account a presented grant enrols onto, and spends nothing.
+
+Checking and spending are separate for the reason they are on an invitation, and the reason
+bites harder here: the grant is spent only once a credential exists, so a ceremony begun and
+abandoned does not burn it. The person holding one has just lost what they signed in with.
+
+There is no account parameter and there must not be. A redemption that named one would enrol
+whoever asked onto whichever account they named, which is AUTH-8.3's hazard with the grant in
+place of the invitation (AUTH-9.10.3).
+-/
+def authoriseRecovery {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (id : RecoveryGrantId tenant) (token : CredentialValue) :
+    m (Except AuthError (RecoveryAuthorisation tenant)) := do
+  let now ← Clock.now
+  match ← ports.store.recoveryGrantById tenant id with
+  | none => pure (.error .recoveryNotPending)
+  | some grant => pure (RecoveryGrant.verify now grant (ports.peppers.present token))
+
 /-! ## Consent
 
 Stored, never captured (AUTH-4.6.1). Nothing in this library asks anybody for consent, and the

@@ -207,6 +207,8 @@ private def auditColumns {tenant : TenantId} : AuditEvent tenant → String × S
   | .identityUnlinked account origin => ("identity-unlinked", account.value, origin)
   | .passkeyCounterRegressed account presented =>
     ("passkey-counter-regressed", account.value, toString presented.toNat)
+  | .recoveryIssued account grant => ("recovery-issued", account.value, grant.value)
+  | .recoveryRedeemed account grant => ("recovery-redeemed", account.value, grant.value)
 
 private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
     Option (AuditEvent tenant) :=
@@ -254,6 +256,8 @@ private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
   | "identity-unlinked" => some (.identityUnlinked ⟨subject⟩ detail)
   | "passkey-counter-regressed" =>
     some (.passkeyCounterRegressed ⟨subject⟩ (UInt32.ofNat (detail.toNat?.getD 0)))
+  | "recovery-issued" => some (.recoveryIssued ⟨subject⟩ ⟨detail⟩)
+  | "recovery-redeemed" => some (.recoveryRedeemed ⟨subject⟩ ⟨detail⟩)
   | _ => none
 
 /-! ## Running statements -/

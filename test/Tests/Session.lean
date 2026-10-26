@@ -423,4 +423,85 @@ def purgeChecks : IO (List (String × Bool)) := do
         swept.sessions == 1 && swept.attempts == 1),
       ("purge: and a second sweep finds nothing left to remove", again == {}) ]
 
+/-! ## Recovery grants
+
+Issuing one is the only operation in the library that revokes an account's sessions without the
+account holder asking, so the revocation is driven rather than read off the call: a grant that
+left a session answering would look identical from inside `createRecovery`.
+-/
+
+def recoveryChecks : IO (List (String × Bool)) := do
+  let start : Timestamp := ⟨1700000000⟩
+  clockRef.set start
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+
+  let signedIn ← signIn ports config "person@example.com"
+  let credential := signedIn.session.getD ⟨""⟩
+  let account := accountOf (← identify (tenant := tenant) ports config credential)
+
+  sentRef.set []
+  let issued ← createRecovery ports config account (createdBy := .client "support-42")
+  let afterIssue ← identify (tenant := tenant) ports config credential
+  let mailed ← sentRef.get
+  let audited ← ports.store.auditEntries tenant
+  let listed ← recoveryGrants (tenant := tenant) ports account
+
+  let (grantId, token) := match issued with
+    | .ok made => (made.grant.id, made.token)
+    | .error _ => (⟨""⟩, ⟨""⟩)
+  let authorised ← authoriseRecovery (tenant := tenant) ports grantId token
+  let wrongToken ← authoriseRecovery (tenant := tenant) ports grantId ⟨"not-the-token"⟩
+  let unknownGrant ← authoriseRecovery (tenant := tenant) ports ⟨"no-such-grant"⟩ token
+  -- Checking twice says the same thing both times: nothing above spends it.
+  let authorisedAgain ← authoriseRecovery (tenant := tenant) ports grantId token
+
+  let keeping ← createRecovery ports config account (disposition := .keepExisting)
+  let keepingId := match keeping with
+    | .ok made => made.grant.id
+    | .error _ => ⟨""⟩
+  let withdrawn ← revokeRecovery (tenant := tenant) ports keepingId
+  let withdrawnTwice ← revokeRecovery (tenant := tenant) ports keepingId
+  let afterRevoking ← authoriseRecovery (tenant := tenant) ports keepingId token
+
+  let forNobody ← createRecovery ports config ⟨"no-such-account"⟩
+
+  -- Past the hour, the grant is refused without anything having to sweep it.
+  clockRef.set (start.advance (Duration.hours 2))
+  let expired ← authoriseRecovery (tenant := tenant) ports grantId token
+  let standingNow := (← recoveryGrants (tenant := tenant) ports account).find?
+    fun (grant, _) => grant.id == grantId
+  clockRef.set start
+
+  pure
+    [ ("recovery: issuing a grant signs the account out everywhere (AUTH-9.6)",
+        issued.toOption.isSome && refusalOf afterIssue == some .revoked),
+      ("recovery: the revocation is recorded as a recovery, which nothing else produces",
+        audited.any fun entry =>
+          match entry.event with
+          | .accountSessionsRevoked _ .recovery => true
+          | _ => false),
+      ("recovery: issuing is audited with the actor the client claimed (AUTH-13.7)",
+        audited.any fun entry =>
+          match entry.event, entry.actor with
+          | .recoveryIssued _ _, .client "support-42" => true
+          | _, _ => false),
+      ("recovery: the grant authorises the account it was issued for, and no parameter names one",
+        (authorised.toOption.map (·.account.value)) == some account.value
+          && (authorised.toOption.map (·.disposition)) == some .removeExisting),
+      ("recovery: a wrong token and an unknown grant are both refused",
+        wrongToken.toOption.isNone && unknownGrant.toOption.isNone),
+      ("recovery: checking a grant does not spend it (AUTH-9.10.4)",
+        authorisedAgain.toOption.isSome),
+      ("recovery: the disposition the caller chose is what the grant carries",
+        (keeping.toOption.map (·.grant.disposition)) == some .keepExisting),
+      ("recovery: nothing is mailed, because the channel being gone is the premise",
+        mailed.isEmpty && listed.length == 1),
+      ("recovery: revoking one works once and authorises nothing afterwards",
+        withdrawn && !withdrawnTwice && afterRevoking.toOption.isNone),
+      ("recovery: a grant for an account that does not exist is refused",
+        forNobody.toOption.isNone),
+      ("recovery: an hour on, the grant is refused and listed as expired",
+        expired.toOption.isNone && (standingNow.map (·.2)) == some .expired) ]
+
 end Tests.Session
