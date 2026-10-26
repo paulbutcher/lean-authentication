@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.22.0] - 2026-10-26
 
 - Documentation lives in `docs/`: the supported use cases, and a guide for each whose code compiles in the suite.
 - The README is a landing page, and the passkey and recovery plans are retired into the requirements.
