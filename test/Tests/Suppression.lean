@@ -242,7 +242,7 @@ def checks : IO (List (String × Bool)) := do
       ("suppression: an invitation to a suppressed address is not sent (AUTH-12.3)",
         sentToInvited == 2),
       ("suppression: and the client is told why, permanently (AUTH-10.3)",
-        (invited.map fun issued =>
+        (invited.toOption.map fun issued =>
           match issued.delivery with
           | .error e => e == .addressSuppressed && e.isPermanent
           | .ok _ => false) == some true),

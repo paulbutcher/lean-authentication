@@ -605,6 +605,37 @@ def acceptLink {tenant : TenantId} (config : TenantConfig tenant) (invitation : 
   config.baseUrl.url tenant
     ("/invitation/accept?invitation=" ++ invitation.value ++ "&token=" ++ token.encoded)
 
+/--
+The federated start, carrying the invitation the sign-in through it would be accepting. The
+token is not on it and is not needed: what admits the invitation is the address the provider
+asserts, so holding the link grants nobody anything (AUTH-8.6).
+-/
+def providerAcceptLink {tenant : TenantId} (config : TenantConfig tenant) (provider : ProviderId)
+    (invitation : InvitationId tenant) : Url :=
+  config.baseUrl.url tenant
+    ("/federated/" ++ provider.value ++ "?invitation=" ++ invitation.value)
+
+/--
+Where the invitation mail points, and `none` where nothing it could point at would work.
+
+The accept route proves the address by mailing it, so a tenant whose origin policy does not admit
+`emailAddress` has to be sent to a provider instead. Which provider is the first the tenant
+listed: the library serves no page offering a choice between them, and the order is the tenant's
+own.
+
+`none` is the combination AUTH-8.6 leaves no way through: a passkey never creates an account, so
+a tenant admitting only passkeys, or only a provider it has configured none of, has nowhere to
+send an invited person at all.
+-/
+def invitationLink {tenant : TenantId} (config : TenantConfig tenant)
+    (invitation : InvitationId tenant) (token : CredentialValue) : Option Url :=
+  if config.originPolicy.permits .emailAddress then
+    some (acceptLink config invitation token)
+  else if config.originPolicy.permits .federatedIdentity then
+    config.providers.head?.map fun provider =>
+      providerAcceptLink config provider.id invitation
+  else none
+
 private def invitationEmail {tenant : TenantId} (config : TenantConfig tenant)
     (invitation : Invitation tenant) (link : Url) : OutboundEmail :=
   let rendered := config.templates.invitation
@@ -632,51 +663,75 @@ structure InvitationIssued (tenant : TenantId) where
   token : CredentialValue
   delivery : Except SendError SentMessageId
 
-/-- Creates an invitation for exactly one address in one tenant and mails the link. -/
+/-- Why an invitation operation produced nothing. -/
+inductive InvitationRefusal where
+  /-- No kind of credential this tenant admits can create an account, so the invitation could
+  never be accepted however it were sent (AUTH-8.6). Refused here rather than at acceptance, so
+  that nobody is mailed a link that was dead when it was written. -/
+  | noWayToAccept
+  /-- Resending what is not a pending invitation: never issued, already accepted, revoked, or
+  changed by another writer during the resend. -/
+  | notPending
+  /-- The entropy source failed, so nothing was written and nothing was sent. -/
+  | notDrawn
+  deriving DecidableEq, Repr, Inhabited
+
+/-- Creates an invitation for exactly one address in one tenant and mails the link, or refuses
+where the tenant admits no means of accepting one. -/
 def createInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (address : EmailAddress)
     (metadata : InvitationMetadata) (createdBy : Actor := .anonymous) :
-    m (Option (InvitationIssued tenant)) := do
+    m (Except InvitationRefusal (InvitationIssued tenant)) := do
   let now ← Clock.now
   match ← randomValue 12, ← randomValue 16 with
-  | .error _, _ => pure none
-  | _, .error _ => pure none
+  | .error _, _ => pure (.error .notDrawn)
+  | _, .error _ => pure (.error .notDrawn)
   | .ok generated, .ok token =>
-    let invitation : Invitation tenant :=
-      { id := ⟨generated.encoded⟩
-        address
-        tokenDigest := ports.peppers.current.digest token
-        metadata
-        expiresAt := now.advance config.invitationLifetime
-        createdBy }
-    ports.store.createInvitation tenant invitation
-    let delivery ← deliver tenant ports
-      (invitationEmail config invitation (acceptLink config invitation.id token))
-    pure (some { invitation, token, delivery })
+    let id : InvitationId tenant := ⟨generated.encoded⟩
+    -- Decided before the record is written, so a refusal leaves nothing pending to list, revoke
+    -- or resend.
+    match invitationLink config id token with
+    | none => pure (.error .noWayToAccept)
+    | some link =>
+      let invitation : Invitation tenant :=
+        { id
+          address
+          tokenDigest := ports.peppers.current.digest token
+          metadata
+          expiresAt := now.advance config.invitationLifetime
+          createdBy }
+      ports.store.createInvitation tenant invitation
+      let delivery ← deliver tenant ports (invitationEmail config invitation link)
+      pure (.ok { invitation, token, delivery })
 
 /-- Rotating the token is what invalidates the old link, which is what AUTH-8.5 requires of a
-resend: the person who was sent one twice can use either message and only the newer works. -/
+resend: the person who was sent one twice can use either message and only the newer works.
+
+The destination is decided again rather than remembered, so an invitation created while the
+magic link was admitted is resent to the provider once it is not. -/
 def resendInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (id : InvitationId tenant) :
-    m (Option (InvitationIssued tenant)) := do
+    m (Except InvitationRefusal (InvitationIssued tenant)) := do
   let now ← Clock.now
   match ← ports.store.invitationById tenant id with
-  | none => pure none
+  | none => pure (.error .notPending)
   | some invitation =>
-    if invitation.state != .pending then pure none
+    if invitation.state != .pending then pure (.error .notPending)
     else
       match ← randomValue 16 with
-      | .error _ => pure none
+      | .error _ => pure (.error .notDrawn)
       | .ok token =>
-        let rotated :=
-          { invitation with
-            tokenDigest := ports.peppers.current.digest token
-            expiresAt := now.advance config.invitationLifetime }
-        if ← ports.store.commitInvitation tenant invitation rotated then
-          let delivery ← deliver tenant ports
-            (invitationEmail config rotated (acceptLink config id token))
-          pure (some { invitation := rotated, token, delivery })
-        else pure none
+        match invitationLink config id token with
+        | none => pure (.error .noWayToAccept)
+        | some link =>
+          let rotated :=
+            { invitation with
+              tokenDigest := ports.peppers.current.digest token
+              expiresAt := now.advance config.invitationLifetime }
+          if ← ports.store.commitInvitation tenant invitation rotated then
+            let delivery ← deliver tenant ports (invitationEmail config rotated link)
+            pure (.ok { invitation := rotated, token, delivery })
+          else pure (.error .notPending)
 
 def revokeInvitation {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
     (id : InvitationId tenant) : m Bool := do

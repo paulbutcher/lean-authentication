@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- An invitation to a tenant that does not admit the magic link is mailed a link to its first configured provider rather than to the accept route, which refuses there (AUTH-8.6); `Service.providerAcceptLink` builds one and `Service.invitationLink` chooses.
+- `Service.createInvitation` and `Service.resendInvitation` answer `Except InvitationRefusal` in place of `Option`, and refuse `noWayToAccept` where nothing the tenant admits could ever accept one, rather than sending a dead link.
+
 ## [0.20.0] - 2026-10-24
 
 - The HTTP routes are generic over `routing`'s `Engine`, so they run on `Std.Http.Server` or LeanIn; require `routing-std` or `routing-leanin` and write `Routing.StatelessHandler .std` where `Std.Http.Server.StatelessHandler` was.

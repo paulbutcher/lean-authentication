@@ -231,6 +231,8 @@ AUTH-6.7 is the one to read twice. Linking an external identity on an address th
 - **AUTH-8.7** An invitation MUST carry an opaque metadata payload that the library stores verbatim and returns on acceptance without interpreting it. This is how the client attaches its own roles to an invitation while keeping roles out of the library (§13.3).
 - **AUTH-8.8** Accepting an invitation for an address that already has an account in that tenant MUST sign that account in and mark the invitation consumed, not create a duplicate.
 - **AUTH-8.9** The library MUST expose listing of pending, accepted, expired, and revoked invitations for a tenant.
+- **AUTH-8.10** The invitation mail MUST link to a route the tenant's origin policy admits, and MUST decide which at send time rather than remembering what an earlier send chose. Where `emailAddress` is not admitted the accept route refuses, so the link is the federated start carrying the invitation; no token travels on it and none is needed, because what admits the grant is the address the provider asserts and not the holder of the link (AUTH-8.6). Which provider is the first the tenant configured, since the library serves no page offering a choice between them.
+- **AUTH-8.11** Creating an invitation MUST be refused, and no record written, where no kind the tenant admits can create an account. A passkey resolves to an account and never creates one, so a tenant admitting only passkeys is such a tenant, as is one admitting only a provider it has configured none of. The alternative is a pending invitation that every route refuses, which spends an administrator's attention on a grant that was dead when it was written.
 
 ---
 

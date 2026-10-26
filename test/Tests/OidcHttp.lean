@@ -57,6 +57,20 @@ theorem startPathAgrees :
     Routing.renderPattern Federated.patterns.callback =
       Routing.renderPattern Federated.patterns.start ++ "/callback" := by decide
 
+/--
+The link an invitation mail carries, where the tenant admits no magic link, is the start route.
+
+`Service.providerAcceptLink` is built in the core library, which cannot see this table, so the
+two are written from one reading of a path and nothing but this makes them agree; a drift would
+mail every invited person a 404 on a tenant that has no other way in. The tenant and the provider
+are captures, as above, so what is established is that both segments fall where the table puts
+them. The invitation is a literal rather than a capture because it rides in the query, which a
+pattern does not match on and `renderPattern` therefore does not print.
+-/
+theorem invitationStartPathAgrees :
+    base.origin ++ Routing.renderPattern Federated.patterns.start ++ "?invitation=inv-1" =
+      (Service.providerAcceptLink (configFor anyTenant) anyProvider ⟨"inv-1"⟩).value := by decide
+
 
 /-! ## The routes over the wire -/
 

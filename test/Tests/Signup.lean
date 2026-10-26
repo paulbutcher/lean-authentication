@@ -49,15 +49,23 @@ private def portsOn (db : SQLite) : Ports IO :=
     humanCheck := HumanCheck.unchecked IO
     peppers }
 
+private def provider : ProviderConfig :=
+  { id := ⟨"google"⟩
+    issuer := "https://accounts.google.test"
+    clientId := "client-abc"
+    credentials := .clientSecret (.external "unused") }
+
 private def configFor (tenant : TenantId) (policy : SignupPolicy)
-    (invitationOverrides : Bool := true) (origin : OriginPolicy := .any) : TenantConfig tenant :=
+    (invitationOverrides : Bool := true) (origin : OriginPolicy := .any)
+    (providers : List ProviderConfig := []) : TenantConfig tenant :=
   { displayName := "Acme"
     baseUrl := ⟨"https://auth.example.com"⟩
     sendingIdentity :=
       { address := address "sign-in@auth.example.com", displayName := "Acme sign-in" }
     signupPolicy := policy
     invitationOverridesAllowlist := invitationOverrides
-    originPolicy := origin }
+    originPolicy := origin
+    providers }
 
 private def parameterFrom (body : String) (name : String) : Option String :=
   let rest := (body.splitOn (name ++ "=")).drop 1
@@ -107,11 +115,17 @@ private def errorOf {t : TenantId} (result : Except AuthError (Outcome t)) : Opt
 
 /-- Only the identifier and the token are needed downstream, so nothing here needs a default
 `Invitation`, which is not a value this library should have lying around. -/
-private def issuedIds {t : TenantId} (created : Option (InvitationIssued t)) :
+private def issuedIds {t : TenantId} (created : Except InvitationRefusal (InvitationIssued t)) :
     InvitationId t × CredentialValue :=
   match created with
-  | some issued => (issued.invitation.id, issued.token)
-  | none => (⟨""⟩, ⟨""⟩)
+  | .ok issued => (issued.invitation.id, issued.token)
+  | .error _ => (⟨""⟩, ⟨""⟩)
+
+private def refusalOf {t : TenantId} (created : Except InvitationRefusal (InvitationIssued t)) :
+    Option InvitationRefusal :=
+  match created with
+  | .error reason => some reason
+  | .ok _ => none
 
 /-- One sign-in from nothing, under whatever policy the tenant has. -/
 private def signInUnder (tenant : TenantId) (policy : SignupPolicy) (raw : String) :
@@ -190,7 +204,7 @@ def invitationChecks : IO (List (String × Bool)) := do
   let (secondInvitationId, secondToken) := issuedIds second
   let rotated ← resendInvitation ports config secondInvitationId
   let staleAccept ← acceptInvitation ports config secondInvitationId secondToken {}
-  let rotatedToken := (rotated.map (·.token)).getD ⟨""⟩
+  let rotatedToken := (rotated.toOption.map (·.token)).getD ⟨""⟩
   let freshAccept ← acceptInvitation ports config secondInvitationId rotatedToken {}
 
   let third ← createInvitation ports config (address "third@elsewhere.com") metadata
@@ -216,7 +230,7 @@ def invitationChecks : IO (List (String × Bool)) := do
       ("invitation: listing reports what happened to each (AUTH-8.9)",
         (listed.find? fun (i, _) => i.id == invitationId).map (·.2) == some .accepted),
       ("invitation: resending rotates the token and invalidates the old one (AUTH-8.5)",
-        rotated.isSome && rotatedToken != secondToken
+        rotated.toOption.isSome && rotatedToken != secondToken
           && errorOf staleAccept == some .unknownToken && (errorOf freshAccept).isNone),
       ("invitation: a revoked invitation cannot be accepted",
         revoked && errorOf revokedAccept == some .invitationNotPending) ]
@@ -289,14 +303,48 @@ def originChecks : IO (List (String × Bool)) := do
   -- have spent it for nothing and the invited person would have no way back in.
   let inviteTenant : TenantId := ⟨"s-origin-invite"⟩
   let invitePorts := portsOn (← Sqlite.openInMemory)
-  let inviteConfig := configFor inviteTenant .inviteOnly (origin := providerOnly)
+  let inviteConfig :=
+    configFor inviteTenant .inviteOnly (origin := providerOnly) (providers := [provider])
   sentRef.set []
   let created ← createInvitation invitePorts inviteConfig (address "guest@elsewhere.com") metadata
   let (inviteId, inviteToken) := issuedIds created
+  let inviteMail := ((← sentRef.get)[0]?.map (·.textBody)).getD ""
   let mailsAfterCreate := (← sentRef.get).length
   let accepted ← acceptInvitation invitePorts inviteConfig inviteId inviteToken {}
   let mailsAfterAccept := (← sentRef.get).length
   let inviteListed ← invitations (tenant := inviteTenant) invitePorts
+
+  -- The same invitation resent once the policy has tightened under it: the destination is
+  -- decided at send time, so the second mail goes where the first could not have.
+  let openTenant : TenantId := ⟨"s-origin-open"⟩
+  let openPorts := portsOn (← Sqlite.openInMemory)
+  let openConfig := configFor openTenant .inviteOnly
+  let tightened :=
+    configFor openTenant .inviteOnly (origin := providerOnly) (providers := [provider])
+  sentRef.set []
+  let openCreated ← createInvitation openPorts openConfig (address "guest@elsewhere.com") metadata
+  let (openId, _) := issuedIds openCreated
+  let firstMail := ((← sentRef.get)[0]?.map (·.textBody)).getD ""
+  let resent ← resendInvitation openPorts tightened openId
+  let secondMail := ((← sentRef.get)[1]?.map (·.textBody)).getD ""
+
+  -- Two tenants an invitation could never be accepted on, for the two different reasons: no
+  -- provider to send anybody to, and a kind that creates no accounts however many are
+  -- configured.
+  let deadPorts := portsOn (← Sqlite.openInMemory)
+  let deadTenant : TenantId := ⟨"s-origin-dead"⟩
+  let deadConfig := configFor deadTenant .inviteOnly (origin := providerOnly)
+  sentRef.set []
+  let deadCreated ← createInvitation deadPorts deadConfig (address "guest@elsewhere.com") metadata
+  let deadMails := (← sentRef.get).length
+  let deadListed ← invitations (tenant := deadTenant) deadPorts
+
+  let passkeyPorts := portsOn (← Sqlite.openInMemory)
+  let passkeyTenant : TenantId := ⟨"s-origin-passkey"⟩
+  let passkeyConfig :=
+    configFor passkeyTenant .inviteOnly (origin := .only [.passkey]) (providers := [provider])
+  let passkeyCreated ←
+    createInvitation passkeyPorts passkeyConfig (address "guest@elsewhere.com") metadata
 
   pure
     [ ("origin policy: a tenant admitting only its provider mints no attempt and mails nothing",
@@ -315,6 +363,20 @@ def originChecks : IO (List (String × Bool)) := do
       ("origin policy: accepting is refused without mailing again or spending the invitation",
         errorOf accepted == some .originNotPermitted
           && mailsAfterAccept == mailsAfterCreate
-          && (inviteListed.find? fun (i, _) => i.id == inviteId).map (·.2) == some .pending) ]
+          && (inviteListed.find? fun (i, _) => i.id == inviteId).map (·.2) == some .pending),
+      ("invitation: a tenant admitting only its provider is invited to the provider (AUTH-8.6)",
+        (inviteMail.splitOn "/federated/google?invitation=").length == 2
+          && (inviteMail.splitOn "/invitation/accept").length == 1),
+      ("invitation: the provider link carries no token, which it does not need (AUTH-8.6)",
+        (inviteMail.splitOn "token=").length == 1),
+      ("invitation: where the magic link is admitted the mail still points at the accept route",
+        (firstMail.splitOn "/invitation/accept").length == 2),
+      ("invitation: a resend goes where the policy now says, not where the first mail went",
+        resent.toOption.isSome
+          && (secondMail.splitOn "/federated/google?invitation=").length == 2),
+      ("invitation: one that could never be accepted is refused rather than sent (AUTH-8.6)",
+        refusalOf deadCreated == some .noWayToAccept && deadMails == 0 && deadListed.isEmpty),
+      ("invitation: a passkey creates no account, so passkeys alone admit no invitation",
+        refusalOf passkeyCreated == some .noWayToAccept) ]
 
 end Tests.Signup

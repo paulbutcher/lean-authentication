@@ -12,15 +12,13 @@ Federated sign-in is exercised against stubs, and the ID tokens in the suite are
 
 That is the honest shape of AUTH-6.8 rather than a shortfall against it: on a tenant that admits the magic link, the address really is a way in, and refusing the unlink would be refusing on a hazard that does not exist. What a deployment wanting the stricter rule does is set the origin policy, which is also what makes a passkey the floor of an account's security rather than its ceiling.
 
-## An invite-only tenant that enforces SSO has no way in (AUTH-8.6)
+## An invitation names one provider, and a tenant may have several (AUTH-8.6)
 
-Two per-tenant policies interact badly in one combination. Where `originPolicy` admits only a provider and `signupPolicy` is `inviteOnly`, nobody can be onboarded through the shipped routes: an invitation is the only way an account may be created, and the invitation mail links to the accept route, which refuses because accepting would prove the address by the one means the tenant has turned off.
+Where `originPolicy` does not admit the magic link, the invitation mail points at the federated start of the first provider in `TenantConfig.providers`, carrying the invitation. That is the whole of the choice the library makes, and on a tenant offering two providers it makes it for the invited person: the mail names one, and the others are reachable only from a page the application wrote.
 
-No other combination is affected. Under a domain allowlist or `unrestricted`, an SSO-only tenant needs no invitation at all, because the provider asserts the address and the account is created on the spot.
+The order is the tenant's own rather than arbitrary, which is what makes picking the first defensible. It is still a choice nobody asked to be made, and a tenant enforcing SSO through two providers, one per acquired company say, will mail half its invitations to the wrong sign-in.
 
-The refusal itself is clean: the invitation stays pending, no second mail is sent, and `Service.acceptInvitation` answers `originNotPermitted`, which a client can tell apart from one that is spent or expired. What is missing is a route in rather than a tidy failure. AUTH-8.6 says where one would come from, since an invitation is a grant on an address and not on a mechanism, and the federated start takes an `invitation` parameter. The library points nobody at it: the mail links to the accept route, and that route renders the same not-found page for every refusal, which is the enumeration-resistant default everywhere else and here hides the one refusal worth explaining.
-
-Closing it is a decision before it is code. The obvious shape is for the invitation mail to link to the sign-in page carrying the invitation, rather than to the accept route, whenever the tenant does not admit the magic link; that changes a template and a link and leaves the model alone. A client driving its own routes can do it today by calling `Service.acceptInvitation` and reading the refusal.
+Closing it needs a page offering the choice, and that page is not this library's to serve: AUTH-22.19 and §17 both land on the same line, that the markup around a sign-in belongs to the application that knows what its sign-in looks like. What would close it here is `Service.invitationLink` taking the provider rather than choosing one, so a client sending its own invitation mail names the provider it means. That is a small change and nothing has asked for it.
 
 ## The emailAddress credential has no writer (AUTH-4.4.2)
 

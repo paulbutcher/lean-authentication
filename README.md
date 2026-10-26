@@ -180,6 +180,8 @@ Service.invitations ports  -- each with pending / accepted / expired / revoked s
 
 An invitation grants one address in one tenant. `metadata` is an opaque payload stored verbatim and handed back on acceptance, which is where your own roles go. Acceptance runs the full sign-in flow, cross-device code included. Invitations are single use, revocable, and last 7 days by default; resending rotates the token and invalidates the old link.
 
+An invitation is a grant on an address rather than on a mechanism, so where `originPolicy` does not admit the magic link the mail points at the first provider the tenant configured, carrying the invitation; the provider must still assert the invited address. Where nothing the tenant admits can create an account, creating one is refused with `noWayToAccept` rather than mailing a link nobody could follow.
+
 ## Bounces and suppression
 
 Give each transport's endpoint to `Http.Config.webhooks`:
