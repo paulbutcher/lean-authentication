@@ -4,6 +4,10 @@
 
 - Documentation lives in `docs/`: the supported use cases, and a guide for each whose code compiles in the suite.
 - The README is a landing page, and the passkey and recovery plans are retired into the requirements.
+- `Http.Config.onAdmitted` and `OidcHttp.Config.onAdmitted` report an account a sign-in created, with whether it is the tenant's first and its invitation's metadata (AUTH-13.6, AUTH-8.7).
+- The conformance suite round-trips every audit event and every value each carries, not only the recovery events.
+- Breaking: `SignInOutcome.unknownAddress` is removed, since nothing produced it; the response policy is asked only before mail is sent (AUTH-14.2.1).
+- Breaking: `SignInResponse.notice` and `NoticeKind` are removed, since nothing sent a notice, as are `SignInMessage.addressNotRecognised`, `invitationRequired` and `domainNotAllowed`, which answered outcomes the policy never sees.
 
 ## [0.21.0] - 2026-10-26
 

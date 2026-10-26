@@ -33,17 +33,21 @@ An invitation lets in an address, whatever it signs in with. Where the tenant's 
 
 The metadata, `⟨"editor"⟩` above, is your own text: stored verbatim, never read, and handed back when the invitation is accepted. Put whatever your application needs to set the new account up there.
 
-If you drive the flow through `Service` yourself, the `Outcome` that creates an account carries `admitted`, which has the metadata and `firstInTenant`, the signal for making a tenant's first account its owner.
-
-The shipped routes do not report either ([KNOWN_ISSUES.md](../KNOWN_ISSUES.md)). Until they do, find the invitation the account accepted:
+Every route that can create an account tells you when it has, through `onAdmitted` on `Http.Config` and `OidcHttp.Config`. You are told whether the account is the first in its tenant, which is the signal for making somebody its owner, and given the metadata of the invitation it accepted:
 
 ```lean
-def invitedAs {tenant : TenantId} (ports : Service.Ports IO) (account : AccountId tenant) :
-    IO (Option InvitationMetadata) := do
-  let some held ← ports.store.accountById tenant account | pure none
-  let invitations ← Service.invitations (tenant := tenant) ports
-  pure <| invitations.findSome? fun (invitation, standing) =>
-    if standing == .accepted && invitation.address.normalise == held.identity then
-      some invitation.metadata
-    else none
+def assignRole {tenant : TenantId} (admitted : Service.AccountAdmitted tenant) : IO Unit :=
+  match admitted.invitationMetadata with
+  | some role => IO.println s!"{admitted.account.value} joins as {role.payload}"
+  | none =>
+    if admitted.firstInTenant then IO.println s!"{admitted.account.value} owns the tenant"
+    else pure ()
 ```
+
+```lean
+def http (ports : Service.Ports IO) (tenant : (t : TenantId) → IO (Option (TenantConfig t))) :
+    Http.Config :=
+  { ports, tenant, onAdmitted := fun _ admitted => assignRole admitted }
+```
+
+It runs before the response is sent, so whatever it sets up is there when the browser arrives. A client driving `Service` itself reads the same record from `Outcome.admitted`.

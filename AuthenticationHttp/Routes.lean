@@ -58,6 +58,11 @@ structure Config where
   anything, so nothing here decides whether to trust a payload; it decides only where to route
   one. -/
   webhooks : List (WebhookEndpoint IO) := []
+  /-- Told when a sign-in through these routes created an account, which the response does not
+  say: whether it is the first in its tenant, and the metadata of the invitation it accepted
+  (AUTH-13.6, AUTH-8.7). It runs before the response is sent, so whatever the client sets up here
+  is in place when the browser arrives. -/
+  onAdmitted : (t : TenantId) → AccountAdmitted t → IO Unit := fun _ _ => pure ()
 
 /-! ## Reading the request -/
 
@@ -437,7 +442,8 @@ private def settled (config : Config) (tenant : TenantId) (tenantConfig : Tenant
     (now : Timestamp) (outcome : Outcome tenant) (returnTo : Option String)
     (context : PageContext) : e.M (Response e.RespBody) :=
   match outcome.session with
-  | some _ =>
+  | some _ => do
+    if let some admitted := outcome.admitted then (config.onAdmitted tenant admitted : IO Unit)
     finish .seeOther ""
       (outcome.setCookies.map (setCookie now)
         ++ outcome.clearCookies.map fun (name, path) => clearCookie tenantConfig.baseUrl name path)

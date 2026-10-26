@@ -621,6 +621,61 @@ def bodyLimitChecks : IO (List (String × Bool)) := do
       ("http: a form past it is refused unread",
         statusOf overLimit == "HTTP/1.1 413 Payload Too Large") ]
 
+/-- Finishes the attempt `started` began, by the link in the newest mail and the code it reveals,
+as a person reading that mail on their phone would. -/
+private def finishFromPhone (http : Authentication.Http.Config) (started : String) : IO String := do
+  let mailBody := (((← sentRef.get).getLast?).map (·.textBody)).getD ""
+  let attemptId := (parameterFrom mailBody "attempt").getD ""
+  let magicToken := (parameterFrom mailBody "token").getD ""
+  discard <| send http (mkGetClose s!"/t/acme/signin/link?attempt={attemptId}&token={magicToken}")
+  let shown := displayCode (revealedCode peppers.current ⟨magicToken⟩)
+  send http
+    (mkPost "/t/acme/signin/code"
+      s!"code={shown}&token={(fieldValue (bodyOf started) "token").getD ""}"
+      ("Content-Type: application/x-www-form-urlencoded\x0d\nConnection: close\x0d\n" ++
+        s!"Cookie: {(cookiePair started "auth_attempt").getD ""}\x0d\n"))
+
+/-- AUTH-13.6 and AUTH-8.7 through the routes: the client has to be told an account was created,
+whether it was the tenant's first, and what the invitation it accepted carried, and told nothing
+when a sign-in only signed somebody in. -/
+def admittedChecks : IO (List (String × Bool)) := do
+  sentRef.set []
+  let db ← Sqlite.openInMemory
+  let admitted : IO.Ref (List (AccountAdmitted tenant)) ← IO.mkRef []
+  let http : Authentication.Http.Config :=
+    { ports := portsOn db
+      tenant := resolver
+      onAdmitted := fun t record =>
+        if h : t = tenant then admitted.modify (· ++ [h ▸ record]) else pure () }
+  let begin (email : String) := send http
+    (mkPost "/t/acme/signin" s!"email={email}"
+      "Content-Type: application/x-www-form-urlencoded\x0d\nConnection: close\x0d\n")
+
+  let first ← finishFromPhone http (← begin "first%40example.com")
+  let again ← finishFromPhone http (← begin "first%40example.com")
+  let afterReturn ← admitted.get
+  let invited ← createInvitation (portsOn db) config (address "invited@example.com")
+    ⟨"role=editor"⟩
+  let inviteMail := (((← sentRef.get).getLast?).map (·.textBody)).getD ""
+  let invitation := (parameterFrom inviteMail "invitation").getD ""
+  let invitationToken := (parameterFrom inviteMail "token").getD ""
+  let accepted ← send http
+    (mkGetClose s!"/t/acme/invitation/accept?invitation={invitation}&token={invitationToken}")
+  let joined ← finishFromPhone http accepted
+  let records ← admitted.get
+
+  let signedIn (response : String) := (cookiePair response "auth_session").isSome
+  pure
+    [ ("http: every sign-in here issued a session",
+        signedIn first && signedIn again && signedIn joined && invited.isOk),
+      ("http: the first account in a tenant is reported as the first (AUTH-13.6)",
+        afterReturn.map (·.firstInTenant) == [true]),
+      ("http: signing in to an account that exists reports nothing",
+        afterReturn.length == 1),
+      ("http: an invited account is reported with its invitation's metadata (AUTH-8.7)",
+        (records.drop 1).map (fun r => (r.firstInTenant, r.invitationMetadata))
+          == [(false, some ⟨"role=editor"⟩)]) ]
+
 /-! ## Reading parameters -/
 
 private def queryFrom (raw : String) : Std.Http.URI.Query :=

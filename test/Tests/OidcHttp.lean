@@ -381,6 +381,35 @@ def refusalChecks : IO (List (String × Bool)) := do
         [unpaired, unverified, refusedLink].all fun response =>
           statusOf response == statusOf noCode && bodyOf response == bodyOf noCode) ]
 
+/-- A provider asserting a verified address nobody holds, so its first sign-in creates an account. -/
+private def verifiedPorts : SignInPorts IO :=
+  { oidcPorts with
+    identities :=
+      { redeem := fun _ _ _ _ _ _ _ _ => pure (.ok
+          { identity := ⟨provider.issuer, "subject-new"⟩
+            address := some (address "newcomer@example.test")
+            addressVerified := true
+            hostedDomain := none }) } }
+
+/-- AUTH-13.6 through the federated routes: an account a provider's sign-in creates is reported
+to the client, and a later sign-in to it is not. -/
+def admittedChecks : IO (List (String × Bool)) := do
+  let db ← Sqlite.openInMemory
+  let admitted : IO.Ref (List Bool) ← IO.mkRef []
+  let config : Config :=
+    { ports := portsOn db, oidc := verifiedPorts, tenant := resolver
+      onAdmitted := fun _ record => admitted.modify (· ++ [record.firstInTenant]) }
+  let signIn : IO String := do
+    let begun ← send config (mkGetClose "/t/acme/federated/google")
+    send config (callbackOf (stateOf begun))
+  let first ← signIn
+  let again ← signIn
+  pure
+    [ ("oidc http: both sign-ins issue a session",
+        [first, again].all fun response => statusOf response == "HTTP/1.1 303 See Other")
+    , ("oidc http: the account the first created is reported, as the tenant's first (AUTH-13.6)",
+        (← admitted.get) == [true]) ]
+
 end Wire
 
 end Tests.OidcHttp

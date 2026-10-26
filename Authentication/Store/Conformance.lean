@@ -33,6 +33,34 @@ private def digestOf (bytes : List UInt8) : Digest := ⟨key, ⟨bytes.toArray�
 
 private def addressOf (localPart : String) : EmailAddress := ⟨localPart, ⟨["example", "com"]⟩⟩
 
+/--
+One of each event an audit entry can carry: every case of `AuditEvent`, each once for every value
+of the enumeration it carries. A backend that maps an event in one direction only drops the entry
+without a word, and the last such mistake was in an enumeration rather than a case, so the round
+trip has to cover both. `Tests.AuditCoverage` proves that nothing is missing.
+-/
+@[expose] def everyAuditEvent (tenant : TenantId) : List (AuditEvent tenant) :=
+  let attempt : AttemptId tenant := ⟨"attempt-1"⟩
+  let account : AccountId tenant := ⟨"account-1"⟩
+  let address := (⟨"logged", ⟨["example", "com"]⟩⟩ : EmailAddress).normalise
+  [.attemptCreated attempt]
+    ++ [Device.same, .cross].map (.linkOpened attempt)
+    ++ [CodeOutcome.accepted, .rejected, .budgetExhausted].map (.codeEntered attempt)
+    ++ [AbandonReason.superseded, .codeBudgetExhausted].map (.attemptAbandoned attempt)
+    ++ [.sessionIssued attempt, .invitationConsumed ⟨"invitation-1"⟩]
+    ++ [SignInOutcome.linkSent, .notInvited, .domainNotAllowed, .addressSuppressed,
+        .accountDeactivated, .addressNotVerified, .originNotPermitted, .throttled,
+        .malformedAddress].map .signInRejected
+    ++ [.sessionRevoked ⟨"session-1"⟩]
+    ++ [RevocationReason.requested, .primaryEmailChanged, .accountDeactivated, .recovery].map
+        (.accountSessionsRevoked account)
+    ++ [.primaryEmailChanged account, .accountDeactivated account, .accountReactivated account]
+    ++ [SuppressionReason.hardBounce, .spamComplaint, .client].map (.addressSuppressed address)
+    ++ [.suppressionCleared address, .consentGranted account ⟨"marketing"⟩,
+        .consentWithdrawn account ⟨"marketing"⟩, .identityLinked account "https://issuer.test",
+        .identityUnlinked account "https://issuer.test", .passkeyCounterRegressed account 7,
+        .recoveryIssued account ⟨"grant-1"⟩, .recoveryRedeemed account ⟨"grant-1"⟩]
+
 private def epoch : Timestamp := ⟨1700000000⟩
 private def soon : Timestamp := ⟨1700000600⟩
 private def later : Timestamp := ⟨1700007200⟩
@@ -469,11 +497,8 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   store.createRecoveryGrant swept (sampleRecoveryGrant swept "grant-kept" ⟨"account-swept"⟩)
   let purgedGrants ← store.purgeExpired swept soon
   let sweptLiveGrant ← store.recoveryGrantById swept ⟨"grant-kept"⟩
-  -- Both recovery events through the audit columns and back. An event the decoder does not
-  -- know is dropped rather than reported, so a mapping written in one direction only loses the
-  -- entry silently, which is how the last addition to this table went wrong.
-  store.appendAudit logged ⟨soon, .client "admin", .recoveryIssued ⟨"account-1"⟩ ⟨"grant-1"⟩⟩
-  store.appendAudit logged ⟨soon, .client "admin", .recoveryRedeemed ⟨"account-1"⟩ ⟨"grant-1"⟩⟩
+  for event in everyAuditEvent logged do
+    store.appendAudit logged ⟨soon, .client "admin", event⟩
   let loggedAudit ← store.auditEntries logged
 
   pure
@@ -687,10 +712,8 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
         passed := purgedGrants.recoveryGrants == 1 && sweptLiveGrant.isSome }
     , { name := "deleting a tenant removes its recovery grants"
         passed := doomedGrant.isNone }
-    , { name := "both recovery audit events read back as what was written (AUTH-14.1.7)"
-        passed := loggedAudit.map (·.event) ==
-            [.recoveryIssued ⟨"account-1"⟩ ⟨"grant-1"⟩,
-              .recoveryRedeemed ⟨"account-1"⟩ ⟨"grant-1"⟩]
-          && loggedAudit.map (·.actor) == [.client "admin", .client "admin"] } ]
+    , { name := "every audit event reads back as what was written (AUTH-14.1.7)"
+        passed := loggedAudit.map (·.event) == everyAuditEvent logged
+          && loggedAudit.all (·.actor == .client "admin") } ]
 
 end Authentication.Store.Conformance

@@ -9,11 +9,11 @@ public import Authentication.Tenant
 /-!
 What a person is told when a sign-in cannot proceed (AUTH-14.2).
 
-The trade-off, so that a client can take it deliberately (AUTH-14.2.8): `domainNotAllowed` and
-the fact that a tenant is invitation-only describe the tenant and say nothing about any
-individual, so they are usually safe to state openly. `unknownAddress` and `notInvited`
-identify people, and are the part worth protecting. Rate limiting does more work here than
-wording does: at a few probes an hour any oracle is nearly worthless.
+The policy is asked only before any mail is sent, so the outcomes it sees are the ones decidable
+without knowing who holds the address: a malformed address, a limit, suppression, and a route the
+tenant does not offer. Whether the address has an account, or may create one, is decided once it
+is proven, and recorded under the same type in the audit log (AUTH-14.2.6). Of the outcomes the
+policy sees, only `addressSuppressed` says anything about a person (AUTH-14.2.8).
 -/
 
 public section
@@ -22,7 +22,6 @@ namespace Authentication
 
 inductive SignInOutcome where
   | linkSent
-  | unknownAddress
   | notInvited
   | domainNotAllowed
   | addressSuppressed
@@ -40,9 +39,6 @@ inductive SignInOutcome where
 
 inductive SignInMessage where
   | checkYourMail
-  | addressNotRecognised
-  | invitationRequired
-  | domainNotAllowed
   | tryAgainLater
   | addressMalformed
   /-- For a client that would rather say an account is closed than let someone keep asking a
@@ -51,16 +47,8 @@ inductive SignInMessage where
   | accountUnavailable
   deriving DecidableEq, Repr, Inhabited
 
-/-- Mail sent in place of a sign-in link, for a client that would rather explain by mail than
-on the page. -/
-inductive NoticeKind where
-  | noAccountExists
-  | signupNotPermitted
-  deriving DecidableEq, Repr, Inhabited
-
 structure SignInResponse where
   message : SignInMessage
-  notice : Option NoticeKind
   deriving DecidableEq, Repr, Inhabited
 
 /-- Selected at startup from configuration, so a structure rather than a class (AUTH-3.5).
@@ -69,10 +57,10 @@ holding a knob for it. -/
 structure SignInResponsePolicy (m : Type → Type) where
   respond : TenantId → SignInOutcome → m SignInResponse
 
-/-- Every outcome produces the same response and no notice. This is the default the wiring
+/-- Every outcome produces the same response. This is the default the wiring
 uses, so a client that configures nothing is enumeration-resistant (AUTH-14.2.3). -/
 def uniformSilence (_tenant : TenantId) (_outcome : SignInOutcome) : SignInResponse :=
-  { message := .checkYourMail, notice := none }
+  { message := .checkYourMail }
 
 namespace SignInResponsePolicy
 

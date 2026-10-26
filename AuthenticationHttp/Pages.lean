@@ -75,9 +75,6 @@ private def carried (context : PageContext) : List (Node .flow) :=
 
 private def messageText : SignInMessage → String
   | .checkYourMail => "If that address can sign in, a link is on its way to it."
-  | .addressNotRecognised => "That address does not have an account here."
-  | .invitationRequired => "This organisation is invitation only."
-  | .domainNotAllowed => "This organisation does not accept that address's domain."
   | .tryAgainLater => "Too many attempts. Try again later."
   | .addressMalformed => "That does not look like an email address."
   | .accountUnavailable => "That account is closed."

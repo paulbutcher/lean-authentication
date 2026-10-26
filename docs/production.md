@@ -106,9 +106,9 @@ By default every one of those shows "check your mail". Changing that is a produc
 def candid : SignInResponsePolicy IO :=
   { respond := fun _ outcome => pure <|
       match outcome with
-      | .malformedAddress => { message := .addressMalformed, notice := none }
-      | .throttled => { message := .tryAgainLater, notice := none }
-      | _ => { message := .checkYourMail, notice := none } }
+      | .malformedAddress => { message := .addressMalformed }
+      | .throttled => { message := .tryAgainLater }
+      | _ => { message := .checkYourMail } }
 ```
 
 A suppressed address is different: saying so tells whoever typed it that the mailbox bounced. Whatever the policy says, the status, headers and timing of the response stay the same, and the audit log records the true outcome.

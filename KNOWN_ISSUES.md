@@ -141,12 +141,6 @@ The limiter of §15.6 covers beginning a sign-in and submitting a code. Nothing 
 
 Registration is the one worth naming. It is unauthenticated by design, it writes a row, and AUTH-20.6.7 bounds what accumulates rather than what arrives; a deployment that exposes it without a limiter in front of it has a way to make a server write rows for nothing.
 
-## The shipped routes do not report an account's creation (AUTH-13.6, AUTH-8.7)
-
-`Service.Outcome.admitted` says that an account was created, whether it was the first in its tenant, and what metadata the invitation it accepted carried. A client driving `Service` itself reads it there. None of the shipped route sets passes it on: `Http.Config`, `OidcHttp.Config` and `PasskeyHttp.Config` have no hook for it, so a client mounting them never learns that the account it is now looking at is new, and has no signal for making a tenant's first account its owner.
-
-The invitation metadata can be recovered afterwards, by finding the accepted invitation whose address is the account's, and `docs/invitations.md` shows how. The first-in-tenant signal cannot, because nothing records it. Closing this needs a callback on each route config, defaulting to doing nothing, which is an addition to three public structures.
-
 ## A tenant admitting only passkeys takes no new members (AUTH-8.11)
 
 A passkey resolves to an account and never creates one, and `.only [.passkey]` refuses the magic link and every provider, so nothing can create an account. Invitations are refused with `noWayToAccept` for that reason, and the library has no operation that creates an account outside a sign-in.

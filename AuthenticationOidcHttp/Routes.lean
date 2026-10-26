@@ -84,6 +84,9 @@ structure Config where
   (AUTH-14.2.6). The default does nothing, which is the only default that can be right: a
   library that chose a log format would be choosing it for every client. -/
   observeRefusal : TenantId → ProviderId → Refusal → IO Unit := fun _ _ _ => pure ()
+  /-- Told when a sign-in through these routes created an account, as `Http.Config.onAdmitted`
+  is for the magic link routes. -/
+  onAdmitted : (t : TenantId) → Service.AccountAdmitted t → IO Unit := fun _ _ => pure ()
   notFoundPage : String := "<!doctype html><title>Not found</title>"
 
 /-- Where the provider sends the browser back. Built from the tenant's base URL, so it is the
@@ -221,7 +224,9 @@ def complete [Clock IO] [RandomBytes IO] (config : Config)
             let cookies := cleared :: outcome.setCookies.map (setCookie now)
             match outcome.session with
             | none => refusedBecause config tenant provider (.noSession outcome.refused) cookies
-            | some _ =>
+            | some _ => do
+              if let some admitted := outcome.admitted then
+                (config.onAdmitted tenant admitted : IO Unit)
               finish .seeOther "" cookies (some (tenantConfig.returnTo completion.returnTo))
           -- A link issues nothing and touches no session cookie: whoever asked was signed in
           -- when they asked and still is (AUTH-6.7.1).

@@ -37,9 +37,9 @@ def ses (credentials : Aws.Sigv4.Credentials) : EmailTransport IO :=
 def candid : SignInResponsePolicy IO :=
   { respond := fun _ outcome => pure <|
       match outcome with
-      | .malformedAddress => { message := .addressMalformed, notice := none }
-      | .throttled => { message := .tryAgainLater, notice := none }
-      | _ => { message := .checkYourMail, notice := none } }
+      | .malformedAddress => { message := .addressMalformed }
+      | .throttled => { message := .tryAgainLater }
+      | _ => { message := .checkYourMail } }
 
 private def config (tenant : TenantId) : TenantConfig tenant :=
   { displayName := "Acme"

@@ -9,7 +9,7 @@ open Authentication
 
 /--
 AUTH-16.1 and AUTH-14.2.3: the default policy is constant. Whatever went wrong, and for whichever
-tenant, the same thing is said and no notice is sent, so a client that configures nothing cannot
+tenant, the same thing is said, so a client that configures nothing cannot
 be used to enumerate addresses.
 
 `uniformSilence` maps a tenant and a sign-in outcome to what the client should say. The two sides

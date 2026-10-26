@@ -176,7 +176,6 @@ private def auditColumns {tenant : TenantId} : AuditEvent tenant → String × S
     ("sign-in-rejected", "",
       match outcome with
       | .linkSent => "link-sent"
-      | .unknownAddress => "unknown-address"
       | .notInvited => "not-invited"
       | .domainNotAllowed => "domain-not-allowed"
       | .addressSuppressed => "address-suppressed"
@@ -228,7 +227,6 @@ private def auditEventOf (tenant : TenantId) (kind subject detail : String) :
   | "sign-in-rejected" =>
     some (.signInRejected
       (if detail == "link-sent" then .linkSent
-        else if detail == "unknown-address" then .unknownAddress
         else if detail == "not-invited" then .notInvited
         else if detail == "domain-not-allowed" then .domainNotAllowed
         else if detail == "address-suppressed" then .addressSuppressed

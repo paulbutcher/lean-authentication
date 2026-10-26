@@ -37,7 +37,7 @@ The registration routes take the account from the session cookie and nowhere els
 
 ## The script is yours
 
-`navigator.credentials` can only be called from script, so these routes answer JSON and serve no page. The script belongs to your page, and is about this much. Every binary value travels as base64url, in both directions. The field names are the ones the routes read, but no test drives this script, so treat it as a sketch:
+`navigator.credentials` can only be called from script, so these routes answer JSON and serve no page. The script belongs to your page, and is about this much. Every binary value travels as base64url, in both directions. It was run once, by hand, against these routes with Chromium's virtual authenticator; the suite does not run it:
 
 ```js
 const decode = s => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));

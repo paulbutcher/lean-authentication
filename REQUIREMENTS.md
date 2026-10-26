@@ -367,17 +367,21 @@ The library owns identity. It owns nothing about permissions. This is a design r
 
 What a person is told when their address cannot sign in is a product decision that trades account enumeration against usability. The library MUST NOT make it; it MUST make the safe choice the default, and it MUST guarantee that whatever the client chooses cannot leak through a channel the client did not intend.
 
-- **AUTH-14.2.1** Beginning a sign-in MUST produce a structured outcome:
+- **AUTH-14.2.1** Beginning a sign-in MUST produce a structured outcome, and MUST decide it before any mail is sent, which is before anyone has proven they hold the address. Whether the address has an account, or may create one, MUST NOT be decided there: it is decided where the session is issued (AUTH-7.6), and the person refused there has proven the address, so telling them why reveals nothing to anybody else. One type carries both:
 
   ```
   inductive SignInOutcome
+    -- decided at the start, and the only outcomes the policy is asked about
     | linkSent
-    | unknownAddress
-    | notInvited
-    | domainNotAllowed
     | addressSuppressed
+    | originNotPermitted
     | throttled
     | malformedAddress
+    -- decided once the address is proven, and recorded in the audit log
+    | notInvited
+    | domainNotAllowed
+    | accountDeactivated
+    | addressNotVerified
   ```
 
 - **AUTH-14.2.2** The response is chosen by a port:
@@ -385,7 +389,6 @@ What a person is told when their address cannot sign in is a product decision th
   ```
   structure SignInResponse where
     message : SignInMessage        -- what the person is shown
-    notice  : Option NoticeKind    -- an email to send in place of the link
 
   structure SignInResponsePolicy (m : Type → Type) where
     respond : TenantId → SignInOutcome → m SignInResponse
@@ -393,13 +396,13 @@ What a person is told when their address cannot sign in is a product decision th
 
   `respond` receives the tenant, so a client can vary behaviour per tenant without the library needing a configuration knob for it.
 
-- **AUTH-14.2.3** The default implementation MUST be **uniform silence**: every outcome maps to the same message and sends no notice. A client that configures nothing gets the enumeration-resistant behaviour. This default MUST be what the wiring produces without explicit opt-in, not merely what the documentation recommends.
+- **AUTH-14.2.3** The default implementation MUST be **uniform silence**: every outcome maps to the same message. A client that configures nothing gets the enumeration-resistant behaviour. This default MUST be what the wiring produces without explicit opt-in, not merely what the documentation recommends.
 - **AUTH-14.2.4 (critical)** The library MUST equalise the mechanical shape of the response regardless of outcome: identical HTTP status, identical header set, and response latency normalised to a fixed floor. Sending mail takes measurably longer than not sending it, so a policy choice would otherwise be undone by a timing oracle it never intended to open.
 - **AUTH-14.2.4.1** "Identical header set" includes `Set-Cookie`. An outcome that begins no attempt has no attempt cookie to set, so the integration target MUST set one anyway, drawn the same way and of the same shape, or its absence reports the outcome the rest of the response was equalised to hide. A credential submitted against such a cookie MUST fail exactly as one submitted against an attempt that has expired.
 - **AUTH-14.2.5** The policy MUST NOT be able to disable rate limiting, bypass suppression, or suppress audit logging. It chooses what is said, not what is done.
 - **AUTH-14.2.6** The audit log and telemetry MUST always record the true outcome, whatever the person was told.
-- **AUTH-14.2.7** The federated sign-in path MUST produce the same outcome type and go through the same policy, so that a client cannot accidentally make one path talkative and the other silent.
-- **AUTH-14.2.8** Documentation MUST record the trade-off so a client can decide deliberately: policy-based rejections (`domainNotAllowed`, and the fact that a tenant is invitation-only) describe the tenant and leak nothing about individuals, so they are usually safe to state openly; membership-based rejections (`unknownAddress`, `notInvited`) identify people and are the part worth protecting. It should also record that rate limiting does more work here than wording does: a probe budget of a few per hour makes any oracle nearly worthless.
+- **AUTH-14.2.7** The federated sign-in path MUST record its outcomes in the same type. It asks the policy nothing, because it has nothing to say before the provider answers, and every refusal after that MUST be one page, with the reason going to the operator and the audit log.
+- **AUTH-14.2.8** Documentation MUST record the trade-off so a client can decide deliberately: of the outcomes the policy is asked about, a malformed address, a limit and a route the tenant does not offer describe the request or the tenant and are usually safe to state, while `addressSuppressed` says that a mailbox bounced and is the one worth protecting. It should also record that rate limiting does more work here than wording does: a probe budget of a few per hour makes any oracle nearly worthless.
 
 ---
 

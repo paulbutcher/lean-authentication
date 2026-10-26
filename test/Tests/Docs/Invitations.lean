@@ -2,7 +2,7 @@
 Copyright (c) 2026 Paul Butcher. All rights reserved.
 Released under Apache 2.0 license as described in the file LICENSE.
 -/
-import Authentication
+import AuthenticationHttp
 import Authentication.Instances
 
 /-! The code of `docs/invitations.md`, checked by `Tests.Docs`. -/
@@ -22,13 +22,15 @@ def manage {tenant : TenantId} (ports : Service.Ports IO) (config : TenantConfig
   let _ ← Service.resendInvitation ports config id
   let _ ← Service.revokeInvitation ports id
 
-def invitedAs {tenant : TenantId} (ports : Service.Ports IO) (account : AccountId tenant) :
-    IO (Option InvitationMetadata) := do
-  let some held ← ports.store.accountById tenant account | pure none
-  let invitations ← Service.invitations (tenant := tenant) ports
-  pure <| invitations.findSome? fun (invitation, standing) =>
-    if standing == .accepted && invitation.address.normalise == held.identity then
-      some invitation.metadata
-    else none
+def assignRole {tenant : TenantId} (admitted : Service.AccountAdmitted tenant) : IO Unit :=
+  match admitted.invitationMetadata with
+  | some role => IO.println s!"{admitted.account.value} joins as {role.payload}"
+  | none =>
+    if admitted.firstInTenant then IO.println s!"{admitted.account.value} owns the tenant"
+    else pure ()
+
+def http (ports : Service.Ports IO) (tenant : (t : TenantId) → IO (Option (TenantConfig t))) :
+    Http.Config :=
+  { ports, tenant, onAdmitted := fun _ admitted => assignRole admitted }
 
 end Tests.Docs.Invitations
