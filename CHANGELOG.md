@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.23.0] - 2026-10-26
 
 - The passkey sign-in completion answers `returnTo` beside `signedIn`, the ceremony's target if the tenant's allowlist still permits it and its default otherwise (AUTH-22.23).
 - Breaking: `Passkey.Service.completeAuthentication` answers a `PasskeySignIn`, the `Outcome` with the ceremony's `returnTo`, in place of a bare `Outcome`.
