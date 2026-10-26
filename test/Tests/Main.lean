@@ -20,7 +20,7 @@ def main : IO UInt32 := do
     ++ (← Tests.PasskeyCeremony.checks) ++ (← Tests.PasskeyFlow.checks)
     ++ (← Tests.PasskeyFlow.recoveryChecks)
     ++ (← Tests.PasskeyHttp.checks) ++ (← Tests.PasskeyHttp.recoveryChecks)
-    ++ (← Tests.PasskeyVectors.checks)
+    ++ (← Tests.PasskeyVectors.checks) ++ (← Tests.PasskeyVectors.captureChecks)
     ++ (← Tests.Postmark.checks) ++ (← Tests.Postmark.flowChecks) ++ Tests.Ses.checks ++ (← Tests.RateLimit.checks)
     ++ (← Tests.RateLimit.serviceChecks) ++ (← Tests.RateLimit.floorChecks)
     ++ (← Tests.Session.checks) ++ (← Tests.Session.cookiePathChecks)

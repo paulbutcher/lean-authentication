@@ -495,7 +495,7 @@ def recoveryChecks : IO (List (String × Bool)) := do
         authorisedAgain.toOption.isSome),
       ("recovery: the disposition the caller chose is what the grant carries",
         (keeping.toOption.map (·.grant.disposition)) == some .keepExisting),
-      ("recovery: nothing is mailed, because the channel being gone is the premise",
+      ("recovery: nothing is mailed, because the channel being gone is the premise (AUTH-9.10.1)",
         mailed.isEmpty && listed.length == 1),
       ("recovery: revoking one works once and authorises nothing afterwards",
         withdrawn && !withdrawnTwice && afterRevoking.toOption.isNone),

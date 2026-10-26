@@ -1,0 +1,23 @@
+{
+  "source": "Chrome DevTools Protocol virtual authenticator, via Playwright",
+  "relyingPartyId": "localhost",
+  "origin": "http://localhost:8766",
+  "registrationChallenge": "cmVnaXN0cmF0aW9uLWNoYWxsZW5nZS0wMQ",
+  "assertionChallenge": "YXNzZXJ0aW9uLWNoYWxsZW5nZS0wMQ",
+  "userHandle": "YWNjb3VudC0x",
+  "registration": {
+    "id": "BNUlCUv1WOKRJ5BNCbhXKWPAvOsFihbvYfiv-zdKPSU",
+    "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YVikSZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2NFAAAAAQECAwQFBgcIAQIDBAUGBwgAIATVJQlL9VjikSeQTQm4VyljwLzrBYoW72H4r_s3Sj0lpQECAyYgASFYIMG8xWioih91pLCIikHe_TSRrhViLwLXeohH25j5YdJ4IlggeCtkRAXIJwVXl-PM5tLPQ-oGYqkVKqB9N-0RCKEUxmU",
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiY21WbmFYTjBjbUYwYVc5dUxXTm9ZV3hzWlc1blpTMHdNUSIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6ODc2NiIsImNyb3NzT3JpZ2luIjpmYWxzZX0",
+    "transports": [
+      "internal"
+    ]
+  },
+  "assertion": {
+    "id": "BNUlCUv1WOKRJ5BNCbhXKWPAvOsFihbvYfiv-zdKPSU",
+    "authenticatorData": "SZYN5YgOjGh0NBcPZHZgW4_krrmihjLHmVzzuoMdl2MFAAAAAg",
+    "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiWVhOelpYSjBhVzl1TFdOb1lXeHNaVzVuWlMwd01RIiwib3JpZ2luIjoiaHR0cDovL2xvY2FsaG9zdDo4NzY2IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+    "signature": "MEUCIDIdnJzpmwsg7mITwRAmLmWv_S_xaoVy1tpor01i2RB_AiEAhtyJFLbxHTT5x1rQRkjmoaBD2sS0JT5QfUXzjInPMso",
+    "userHandle": "YWNjb3VudC0x"
+  }
+}

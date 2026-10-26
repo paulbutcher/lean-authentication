@@ -26,15 +26,15 @@ Closing it needs a page offering the choice, and that page is not this library's
 
 Passkeys arriving did not change this, which is worth saying because it was expected to. A passkey is found by the handle on its descriptor, and a magic link is still found by the account's address, so the kind that would need an `emailAddress` row is one that proves an address by some means the library does not yet have.
 
-## No committed test reaches an authenticator (§18.3, AUTH-16.5)
+## The authenticator the ceremony met is a virtual one (§18.3, AUTH-16.5)
 
-The passkey verification is exercised against two fixtures, and between them they leave one thing open.
+`test/fixtures/passkey-capture.json` is a whole ceremony, registration and assertion from one credential, produced by Chrome's virtual authenticator over the DevTools protocol and committed by `make-passkey-capture.mjs`. The key the assertion verifies against is read out of its own registration, so nothing in that loop was laid out, keyed or signed by this repository. That was the gap, and it is closed.
 
-`test/Tests/Fixtures/PyWebauthn.lean` is an attestation object captured from a real authenticator, redistributed from py_webauthn. It settles the part most likely to be wrong by an off-by-one: that the relying party hash, the flags, the counter, the AAGUID, the two-byte credential id length and the COSE key are where this library looks for them. The hash in it is `SHA-256("localhost")`, which is checked rather than assumed, so the offsets are confirmed against bytes a device produced. What it cannot do is verify a signature, because nobody has the private key that made it.
+What remains is narrower. Chrome's virtual authenticator is Chrome's own CTAP2 implementation, not silicon: it is independent of this library, which is the property the fixture was for, but it is one implementation and a popular one. A security key, a phone and a TPM each sign the same structures and differ in what they put in the fields around them, which is why the py_webauthn capture is kept beside it: that one is from a real device, and between them the layout is confirmed twice over by code this repository did not write.
 
-`test/fixtures/passkey-assertion.json` settles the other half. Its `authenticatorData` is laid out by `make-passkey-fixtures.sh` from the specification's offsets and its signature is made by `openssl`, so a verification that succeeds is not this library agreeing with itself. What it cannot do is tell us a real device lays its assertion out that way, since the script was written from the same reading of the specification the parser was.
+The relying party is `localhost` and the origin carries a port, because WebAuthn treats localhost as a secure origin without a certificate. A deployment runs on neither, so what the fixture cannot exercise is an origin check against a real host, which is a string comparison the other fixtures do cover.
 
-So the registration path has met a real authenticator and the assertion path has not. Closing it needs a capture of a full ceremony, challenge and origin and signature together, which means driving a virtual authenticator over the DevTools protocol and committing what comes back. The first live sign-in is the test until then, and it is worth watching for.
+Regenerating it needs Node, Playwright and its Chromium, which no part of the build or the suite requires: the script is run by hand and the JSON is what the suite reads, because AUTH-16.5 forbids a committed test from reaching anything.
 
 ## No committed test makes an HTTP request (AUTH-16.5)
 
@@ -103,6 +103,16 @@ The authorisation server has a sweep of its own, `OAuth.Service.purgeExpired`, a
 The limiter covers beginning a sign-in and submitting a code. Creating and resending an invitation send mail too, and are not counted.
 
 That is deliberate rather than overlooked: both are privileged operations the client calls only when it has decided who may call them (AUTH-13.2), so they are not reachable by whoever is knocking on the sign-in page. It stops being true the moment a client exposes resend to an unauthenticated route, which is the failure worth naming here because nothing in the types will prevent it.
+
+`Service.createRecovery` is in the same position and is the one to watch, because what it returns is a bearer token standing in for a session on an account that already exists. It is unlimited for the same reason and stops being safe under the same mistake.
+
+## The ceremony routes are not rate limited (AUTH-14.1.1)
+
+`beginFederated` counts a start against the limiter; the passkey and recovery ceremonies do not. Beginning a passkey authentication writes a ceremony row for anyone who asks, with no session and nothing to identify them by, so a client mounting those routes has an unauthenticated way to make a server write rows as fast as it can be asked.
+
+Recovery is the tighter of the two rather than another instance of it. The enrolment routes read a grant and write nothing until the grant and its token are both good, so what a flood of invalid tokens costs is a lookup each; and the token is 128 bits, so it is not a credential anybody guesses. Correctness does not depend on any of this, and the sweep removes what accumulates (AUTH-15.4.3).
+
+Closing it is the limiter the library already has, with an action per ceremony and the scopes `beginFederated` uses. It was not done when the passkey routes landed, and recovery inherited the gap rather than widening it.
 
 
 ## The client metadata document fetcher is a port with no implementation (AUTH-20.2.2)

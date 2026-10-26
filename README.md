@@ -169,6 +169,31 @@ Sessions are server-side and revocable. The idle timeout slides on use, capped b
 
 The session cookie is issued with `TenantConfig.sessionCookiePath`, which defaults to `/t/<tenant>`. Set the field to a path that covers your application if different.
 
+## Recovery
+
+Self-service recovery is out of scope: you decide who the person is, the library supplies the mechanics. On a tenant that admits the magic link, recovery is `Service.changePrimaryEmail` and then a link to the new mailbox. Where the magic link is off, there is nothing to mail, and a recovery grant is what stands in for the session the person no longer has.
+
+```lean
+Service.createRecovery ports config account      -- Except RecoveryRefusal (RecoveryIssued tenant)
+Service.createRecovery ports config account (disposition := .keepExisting)
+Service.recoveryGrants ports account             -- each with pending / spent / expired / revoked
+Service.revokeRecovery ports grant               -- Bool
+```
+
+A grant authorises exactly one credential enrolment and never a session, so the origin policy is not consulted when it is redeemed: the sign-in that follows is checked like any other. Issuing one signs the account out everywhere. It expires in an hour by default, far sooner than an invitation, because an invitation token grants an account that does not exist yet and this one stands in for a session on an account that does.
+
+**The library does not deliver the token, and will not.** `createRecovery` returns it and the rest is yours: a support call, a corporate channel, whatever established who you were talking to. Treat it as you would a password reset link that bypasses the mailbox, because that is what it is.
+
+The person then redeems it at whichever enrolment the tenant admits, both of which take the grant and token in the request body rather than the query, so the token stays out of access logs and referrers:
+
+```
+POST /t/<tenant>/passkey/recover            {"grant": "...", "token": "..."}
+POST /t/<tenant>/passkey/recover/complete   -- as the registration route, with no session
+POST /t/<tenant>/federated/<provider>/recover   grant=...&token=...
+```
+
+By default the enrolment removes whatever else the account could have got in by, which is the point where a lost device stops working; pass `.keepExisting` where you know the old credential is safe.
+
 ## Invitations
 
 ```lean
@@ -367,7 +392,7 @@ Three things remain yours:
 
 ## Passkeys
 
-A passkey is the only phishing-resistant way in this library offers: the browser binds the signature to the origin, so there is no code for anybody to be talked into typing somewhere else. It raises the ceiling on an account's security rather than its floor, though, because an account recoverable by magic link is only as strong as its mailbox. Setting `originPolicy` is what turns that around.
+A passkey is the only phishing-resistant way in this library offers: the browser binds the signature to the origin, so there is no code for anybody to be talked into typing somewhere else. It raises the ceiling on an account's security rather than its floor, though, because an account recoverable by magic link is only as strong as its mailbox. Setting `originPolicy` is what turns that around, and a recovery grant is what gets somebody back in once you have.
 
 Two targets, because verifying a signature links OpenSSL and the magic link routes must not: `AuthenticationPasskey` speaks WebAuthn, `AuthenticationPasskeyHttp` serves it.
 
@@ -555,6 +580,7 @@ The `From` domain needs all of these before mail is delivered rather than filed:
 - **`returnTo` is validated** against the tenant's allowlist before any redirect. It travels as a URI reference in its encoded form: a caller with a target whose own query holds encoded values encodes the whole reference once for the form field, and what reaches the browser is that reference, escaped only where a header value could not otherwise hold it.
 - **The audit log and the consent history are append only.** The port offers no update or delete.
 - **A passkey signs in the account its own credential belongs to**, and only where the user handle the authenticator offered names that account or is absent. A theorem, and the biconditional form of it: nothing reaches a sign-in that is not one of those two cases.
+- **A recovery grant enrols one credential and issues no session**, on the account named on the grant and never one named in the request. It is single use under compare-and-set, spent when the credential is written rather than when the ceremony begins, and issuing one signs the account out everywhere.
 - **An authorization code is redeemed at most once**, a refresh token rotated at most once, and either presented twice revokes everything its grant issued. Both are theorems about the state and compare-and-set in the store.
 - **A token's audience is the `resource` its request named**, and its scopes are a subset of what was consented to. Both are theorems, and verification refuses a token presented anywhere else.
 - **A redirect URI is compared as a string**, with the port ignored for loopback URIs and for nothing else. That the exception admits no other host is a theorem.

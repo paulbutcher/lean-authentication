@@ -1105,9 +1105,9 @@ and never a session, which is what keeps it inside the origin policy rather than
 it: AUTH-9.9.5 already has it that adding a credential issues none, so the sign-in that follows
 is checked like any other.
 
-Nothing here sends anything. The premise of recovery is that the usual channel is gone, so the
-token is returned to the client, which delivers it however it decided the person was who they
-said (AUTH-13.2).
+Nothing here sends anything (AUTH-9.10.1). The premise of recovery is that the usual channel is
+gone, so the token is returned to the client, which delivers it however it decided the person
+was who they said (AUTH-13.2).
 -/
 
 inductive RecoveryRefusal where
@@ -1146,9 +1146,9 @@ def recoveryStanding {tenant : TenantId} (now : Timestamp) (grant : RecoveryGran
 Issues a grant and signs the account out everywhere.
 
 The revocation is not a precaution bolted on: AUTH-9.6 requires every session to go on any
-recovery action, and issuing the grant is the action. It costs nothing, because somebody who
-has lost the credential they signed in with holds no session worth keeping, and it is what
-finally produces `RevocationReason.recovery`.
+recovery action, and issuing the grant is the action (AUTH-9.10.8). It costs nothing, because
+somebody who has lost the credential they signed in with holds no session worth keeping, and it
+is what finally produces `RevocationReason.recovery`.
 -/
 def createRecovery {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (account : AccountId tenant)

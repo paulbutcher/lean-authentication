@@ -1,6 +1,6 @@
 # Recovery plan
 
-The work to answer open decision 18.1: what an administrator does about an account whose only way in is gone. The decisions are taken and nothing is built.
+The work to answer open decision 18.1: what an administrator does about an account whose only way in is gone. All five phases are built and 18.1 is marked answered; what remains here is why it was built this way.
 
 Most of 18.1 is already answered in code and not in the requirements. `Service.changePrimaryEmail` points an account at an address nobody has proven and revokes every session in the same call, so on a tenant that admits the magic link the administrator sets the new mailbox and the next link proves it. What has no answer is a tenant whose origin policy does not admit the magic link. There the administrator has no operation at all: `originPolicy` lives on `TenantConfig`, so the only lever is tenant-wide, and an invitation does not help because AUTH-8.8 routes it into a sign-in that AUTH-9.9.3 then refuses. A passkey-only tenant is where this bites, which is why passkeys opened it.
 

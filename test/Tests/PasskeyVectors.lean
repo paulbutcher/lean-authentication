@@ -8,14 +8,16 @@ import Tests.Fixtures.PyWebauthn
 /-!
 The passkey verification against bytes this repository did not produce.
 
-Two fixtures, because no single one can cover both halves. The capture from a real authenticator
-settles the layout, which is where an off-by-one would hide, and carries no private key so no
-signature over it can be checked. The generated one settles the signature, and its bytes are laid
-out by `make-passkey-fixtures.sh` from the specification's offsets rather than by this library, so
-agreeing with it is not this library agreeing with itself.
+Three fixtures, and the third is the one that closes the loop.
 
-What neither settles is in `KNOWN_ISSUES.md`: nothing here has run against a device this library
-has not been shown the output of.
+`PyWebauthn` is a registration from a real device, redistributed, which settles the layout where
+an off-by-one would hide; it carries no private key, so no signature over it can be checked.
+`passkey-assertion.json` settles a signature, over bytes `make-passkey-fixtures.sh` laid out from
+the specification rather than from this library, but against a key this repository made.
+
+`passkey-capture.json` joins the two. `make-passkey-capture.mjs` drives Chrome's virtual
+authenticator through a whole ceremony, and the key the assertion verifies against is the one
+read out of its own registration, so nothing in the loop was laid out, keyed or signed here.
 -/
 
 namespace Tests.PasskeyVectors
@@ -26,8 +28,15 @@ private def decode (text : String) : ByteArray :=
 
 private def assertionJson : String := include_str "../fixtures/passkey-assertion.json"
 
+private def captureJson : String := include_str "../fixtures/passkey-capture.json"
+
 private def member (payload : Json) (name : String) : String :=
   ((payload.getObjVal? name).toOption.bind (·.getStr?.toOption)).getD ""
+
+private def nested (payload : Json) (group name : String) : String :=
+  match (payload.getObjVal? group).toOption with
+  | some inner => member inner name
+  | none => ""
 
 /-- The `authData` out of an attestation object, which is the one step of the registration path
 that is not public: `verifyRegistration` does it behind a `clientDataJSON` this capture has none
@@ -95,6 +104,78 @@ def checks : IO (List (String × Bool)) := do
         | .ok assertion => assertion.signCount == 1 && assertion.userVerified == false
         | .error _ => false),
       ("passkey vectors: changing one byte of that message breaks it",
+        match tampered with
+        | .error .signatureInvalid => true
+        | _ => false) ]
+
+/--
+The whole ceremony against one authenticator's own bytes (§18.3, AUTH-16.5).
+
+What the two fixtures above leave open is the join between them: the capture carries no private
+key, and the generated assertion verifies against a key this repository made. Here the key comes
+out of a real registration and the signature checked against it comes from the same credential,
+so nothing in the loop was laid out or signed here.
+
+The relying party is `localhost` because WebAuthn treats it as a secure origin without a
+certificate, which is also why the py_webauthn capture uses it.
+-/
+def captureChecks : IO (List (String × Bool)) := do
+  let fixture := (Json.parse captureJson).toOption.getD .null
+  let party : RelyingParty :=
+    { id := member fixture "relyingPartyId", origins := [member fixture "origin"] }
+  let registrationChallenge := member fixture "registrationChallenge"
+  let assertionChallenge := member fixture "assertionChallenge"
+
+  let textOf (encoded : String) : String :=
+    (String.fromUTF8? (decode encoded)).getD ""
+
+  let registered := Ceremony.verifyRegistration
+    (decode (nested fixture "registration" "attestationObject"))
+    (textOf (nested fixture "registration" "clientDataJSON"))
+    (· == registrationChallenge) party
+
+  let authData := decode (nested fixture "assertion" "authenticatorData")
+  let clientData := textOf (nested fixture "assertion" "clientDataJSON")
+  let signature := decode (nested fixture "assertion" "signature")
+
+  -- The key is the registration's, which is the join the other two fixtures cannot make.
+  let key := match registered with
+    | .ok credential => credential.publicKey
+    | .error _ => ⟨#[]⟩
+  let asserted ← Ceremony.verifyAssertion authData clientData (· == assertionChallenge) party key
+    signature
+  -- The challenge the browser echoed, against one it never saw.
+  let wrongChallenge ← Ceremony.verifyAssertion authData clientData
+    (· == registrationChallenge) party key signature
+  -- Byte 32 is the flags, and `0x01` keeps user presence set so the check that reaches is the
+  -- signature rather than the flag it dropped.
+  let tampered ← Ceremony.verifyAssertion (authData.set! 32 0x01) clientData
+    (· == assertionChallenge) party key signature
+
+  pure
+    [ ("passkey capture: a real authenticator's registration verifies, as ES256",
+        match registered with
+        | .ok credential =>
+          credential.algorithm == (⟨Cose.es256Algorithm⟩ : CoseAlgorithm)
+            && credential.passkey.value == nested fixture "registration" "id"
+        | .error _ => false),
+      ("passkey capture: its assertion verifies against the key that registration carried",
+        match asserted with
+        | .ok assertion => assertion.userVerified
+        | .error _ => false),
+      ("passkey capture: the counter moved on between the two, so neither looks cloned",
+        match registered, asserted with
+        | .ok credential, .ok assertion =>
+          !Passkey.regressed credential.signCount assertion.signCount
+        | _, _ => false),
+      ("passkey capture: the handle the assertion names is the one registration wrote",
+        nested fixture "assertion" "id" == nested fixture "registration" "id"
+          && nested fixture "assertion" "userHandle" == member fixture "userHandle"),
+      ("passkey capture: the other ceremony's challenge is not accepted for this one",
+        match wrongChallenge with
+        | .error .challengeMismatch => true
+        | _ => false),
+      ("passkey capture: changing one flag byte breaks the signature",
         match tampered with
         | .error .signatureInvalid => true
         | _ => false) ]
