@@ -126,6 +126,7 @@ def routes (db : SQLite) (secret : ByteArray) (token : String) :
 | `/t/<tenant>/federated/<provider>` | `GET`, sends the browser to the provider |
 | `/t/<tenant>/federated/<provider>` | `POST`, adds the provider to the account signed in |
 | `/t/<tenant>/federated/<provider>/callback` | `GET` or `POST`, the provider's answer |
+| `/t/<tenant>/federated/<provider>/recover` | `POST`, adds the provider under a recovery grant |
 
 `Http.routes` returns the same list for mounting into a router you already have.
 
@@ -367,6 +368,7 @@ def federatedRoutes (ports : Service.Ports IO) (oidc : Oidc.SignInPorts IO) :
 | `/t/<tenant>/federated/<provider>` | `GET`, sends the browser to the provider |
 | `/t/<tenant>/federated/<provider>` | `POST`, adds the provider to the account signed in |
 | `/t/<tenant>/federated/<provider>/callback` | `GET` or `POST`, the provider's answer |
+| `/t/<tenant>/federated/<provider>/recover` | `POST`, the same link under a recovery grant rather than a session |
 
 The `GET` start accepts `returnTo` and `invitation` as query parameters, the first checked against the tenant's allowlist when it is used and the second required to name the address the provider goes on to assert.
 
@@ -420,6 +422,8 @@ def passkeyRoutes (ports : Service.Ports IO) : Routing.StatelessHandler .std :=
 | `/t/<tenant>/passkey/register/complete` | `POST`, the authenticator's answer |
 | `/t/<tenant>/passkey/signin` | `POST`, begins a sign-in |
 | `/t/<tenant>/passkey/signin/complete` | `POST`, the assertion |
+| `/t/<tenant>/passkey/recover` | `POST`, begins a registration under a recovery grant |
+| `/t/<tenant>/passkey/recover/complete` | `POST`, the authenticator's answer, with no session |
 
 ### The script is yours
 

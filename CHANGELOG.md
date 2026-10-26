@@ -1,10 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [0.21.0] - 2026-10-26
 
 - Recovery grants: an administrator issues one for an account nobody can sign in to, and it authorises a single passkey registration or provider link without a session, answering §18.1 (AUTH-9.10). Routes at `/t/<tenant>/passkey/recover` and `/t/<tenant>/federated/<provider>/recover`; the library returns the token and never delivers it.
 - Issuing a grant revokes every session as `RevocationReason.recovery`, which until now nothing produced (AUTH-9.6).
 - A whole passkey ceremony captured from Chrome's virtual authenticator is verified end to end, the assertion against the key its own registration carried (§18.3, AUTH-16.5).
+- Two migrations to apply, `20261026120000_authentication_recovery` and `20261026130000_authentication_recovery_enrolment`, in both backends; nothing checks that you did, and a statement naming the missing column is where it surfaces.
+- Breaking: `AuthStore` gains four operations and `AuditEvent` two cases, so a backend implementing the port and an exhaustive match over the events each stop compiling. `PurgeCounts` gains a field; `LinkFailure`, `Passkey.CeremonyRefusal` and `OidcHttp.Refusal` each gain a case; `PasskeyCeremony` and `FederationState` each gain one.
 - An invitation to a tenant that does not admit the magic link is mailed a link to its first configured provider rather than to the accept route, which refuses there (AUTH-8.6); `Service.providerAcceptLink` builds one and `Service.invitationLink` chooses.
 - `Service.createInvitation` and `Service.resendInvitation` answer `Except InvitationRefusal` in place of `Option`, and refuse `noWayToAccept` where nothing the tenant admits could ever accept one, rather than sending a dead link.
 
