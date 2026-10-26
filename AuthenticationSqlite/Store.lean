@@ -61,9 +61,12 @@ private def passkeySql : String :=
 private def federationLinkSql : String :=
   include_str "../migrations/sqlite/20260915120000_authentication_federation_link.up.sql"
 
+private def recoverySql : String :=
+  include_str "../migrations/sqlite/20261026120000_authentication_recovery.up.sql"
+
 def createSchemaSql : String :=
   initialSql ++ rateCountersSql ++ suppressionSql ++ consentSql ++ federationSql
-    ++ federationInvitationSql ++ federationLinkSql ++ passkeySql
+    ++ federationInvitationSql ++ federationLinkSql ++ passkeySql ++ recoverySql
 
 def createSchema (db : SQLite) : IO Unit := db.exec createSchemaSql
 

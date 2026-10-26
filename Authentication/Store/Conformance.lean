@@ -84,6 +84,14 @@ private def sampleInvitation (tenant : TenantId) (id : String) (address : EmailA
     expiresAt := later
     createdBy := .client "conformance" }
 
+private def sampleRecoveryGrant (tenant : TenantId) (id : String) (account : AccountId tenant) :
+    RecoveryGrant tenant :=
+  { id := ⟨id⟩
+    account
+    tokenDigest := digestOf [4, 5]
+    expiresAt := later
+    createdBy := .client "conformance" }
+
 /-- A refusal, and the one it was supposed to be. `Except` has no `BEq` to compare against, and
 naming the error is the point: a store that refuses for its own reasons still fails the check. -/
 private def refused (expected : StoreError) : Except StoreError Unit → Bool
@@ -331,6 +339,8 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let _ ← store.createCredential doomed
     (sampleCredential doomed "cred-doomed" ⟨"account-doomed"⟩ sampleIdentity)
   store.createFederationState doomed (sampleState doomed "state-doomed" (digestOf [21]) later)
+  store.createRecoveryGrant doomed
+    (sampleRecoveryGrant doomed "grant-doomed" ⟨"account-doomed"⟩)
   store.deleteTenant doomed
   let doomedAccount ← store.accountByIdentity doomed person.normalise
   let doomedAttempt ← store.attemptById doomed ⟨"attempt-doomed"⟩
@@ -341,6 +351,7 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   let doomedConsent ← store.consentHistory doomed ⟨"account-doomed"⟩
   let doomedCredential ← store.credentialByIdentity doomed sampleIdentity
   let doomedState ← store.federationStateByDigest doomed epoch (digestOf [21])
+  let doomedGrant ← store.recoveryGrantById doomed ⟨"grant-doomed"⟩
   let survivingAccount ← store.accountByIdentity alpha person.normalise
 
   -- Linked identities, keyed on issuer and subject and never on the address (AUTH-6.6).
@@ -431,6 +442,29 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
   store.createPasskeyCeremony swept
     (samplePasskeyCeremony swept "ceremony-swept" (digestOf [8, 4]) epoch)
   let purgedCeremonies ← store.purgeExpired swept soon
+
+  -- Recovery grants: every field read back, single use under a race, and listed per account.
+  store.createRecoveryGrant alpha (sampleRecoveryGrant alpha "grant-raced" account)
+  store.createRecoveryGrant alpha
+    { sampleRecoveryGrant alpha "grant-keep" account with disposition := .keepExisting }
+  store.createRecoveryGrant alpha (sampleRecoveryGrant alpha "grant-other" ⟨"account-3"⟩)
+  let readGrant ← store.recoveryGrantById alpha ⟨"grant-keep"⟩
+  let crossTenantGrant ← store.recoveryGrantById beta ⟨"grant-keep"⟩
+  let grantsHeld ← store.recoveryGrantsForAccount alpha account
+  let racedGrantA ← store.recoveryGrantById alpha ⟨"grant-raced"⟩
+  let racedGrantB ← store.recoveryGrantById alpha ⟨"grant-raced"⟩
+  let firstGrantCommit ← match racedGrantA with
+    | some held => store.commitRecoveryGrant alpha held (RecoveryGrant.markSpent soon held)
+    | none => pure false
+  let secondGrantCommit ← match racedGrantB with
+    | some held => store.commitRecoveryGrant alpha held (RecoveryGrant.markSpent soon held)
+    | none => pure false
+  let afterGrantCommit ← store.recoveryGrantById alpha ⟨"grant-raced"⟩
+  store.createRecoveryGrant swept
+    { sampleRecoveryGrant swept "grant-swept" ⟨"account-swept"⟩ with expiresAt := epoch }
+  store.createRecoveryGrant swept (sampleRecoveryGrant swept "grant-kept" ⟨"account-swept"⟩)
+  let purgedGrants ← store.purgeExpired swept soon
+  let sweptLiveGrant ← store.recoveryGrantById swept ⟨"grant-kept"⟩
 
   pure
     [ { name := "an account is readable by the identity it was created with"
@@ -622,6 +656,26 @@ def run {m : Type → Type} [Monad m] (store : AuthStore m) (label : String := "
     , { name := "a spent ceremony is refused on read"
         passed := afterCeremonyCommit.isNone }
     , { name := "sweeping removes expired ceremonies and reports how many"
-        passed := purgedCeremonies.passkeyCeremonies == 1 } ]
+        passed := purgedCeremonies.passkeyCeremonies == 1 }
+    , { name := "a recovery grant reads back as it was written, disposition included"
+        passed := (readGrant.map (·.account.value)) == some "account-1"
+          && (readGrant.map (·.disposition)) == some .keepExisting
+          && (readGrant.map (·.state)) == some .pending
+          && (readGrant.map (·.createdBy)) == some (.client "conformance")
+          && (readGrant.map (·.tokenDigest)) == some (digestOf [4, 5]) }
+    , { name := "a recovery grant is invisible from another tenant (AUTH-4.2.4)"
+        passed := crossTenantGrant.isNone }
+    , { name := "an account's grants are listed, and only its own (AUTH-9.10.7)"
+        passed := (grantsHeld.map (·.id.value)).length == 2
+          && !(grantsHeld.map (·.id.value)).contains "grant-other" }
+    , { name := "two ceremonies racing to redeem one grant enrol once (AUTH-9.10.4)"
+        passed := firstGrantCommit && !secondGrantCommit }
+    , { name := "a spent grant reads back as spent rather than vanishing (AUTH-9.10.6)"
+        passed := (afterGrantCommit.map (·.state)) == some .spent
+          && (afterGrantCommit.bind (·.spentAt)) == some soon }
+    , { name := "sweeping removes expired grants, and only those"
+        passed := purgedGrants.recoveryGrants == 1 && sweptLiveGrant.isSome }
+    , { name := "deleting a tenant removes its recovery grants"
+        passed := doomedGrant.isNone } ]
 
 end Authentication.Store.Conformance

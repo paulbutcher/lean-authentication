@@ -50,6 +50,10 @@ structure PasskeyCeremonyId (tenant : TenantId) where
   value : String
   deriving DecidableEq, Repr
 
+structure RecoveryGrantId (tenant : TenantId) where
+  value : String
+  deriving DecidableEq, Repr
+
 /-- Who the client says performed an action. The library cannot verify it (AUTH-13.7). -/
 inductive Actor where
   | anonymous

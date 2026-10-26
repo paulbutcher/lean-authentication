@@ -8,6 +8,7 @@ public import Authentication.Account
 public import Authentication.Attempt
 public import Authentication.Federation
 public import Authentication.Invitation
+public import Authentication.Recovery
 public import Authentication.Passkey
 import Authentication.Audit
 import Authentication.Consent
@@ -51,6 +52,7 @@ structure PurgeCounts where
   sessions : Nat := 0
   federationStates : Nat := 0
   passkeyCeremonies : Nat := 0
+  recoveryGrants : Nat := 0
   deriving DecidableEq, Repr, Inhabited
 
 /--
@@ -174,6 +176,19 @@ structure AuthStore (m : Type → Type) where
   what lets a resend rotate the token and invalidate the old one in the same operation. -/
   commitInvitation : (tenant : TenantId) → (expected next : Invitation tenant) → m Bool
   invitationsForTenant : (tenant : TenantId) → m (List (Invitation tenant))
+  createRecoveryGrant : (tenant : TenantId) → RecoveryGrant tenant → m Unit
+  /-- Expired and spent grants are returned rather than hidden, as an invitation's are: expiry
+  is `RecoveryGrant.verify`'s to enforce, and a listing has to be able to say which of the four
+  standings a grant is in (AUTH-9.10.6). -/
+  recoveryGrantById : (tenant : TenantId) → RecoveryGrantId tenant →
+    m (Option (RecoveryGrant tenant))
+  /-- Compare and set on the grant's state, so a grant is single use however many ceremonies
+  race to redeem it (AUTH-9.10.4). -/
+  commitRecoveryGrant : (tenant : TenantId) → (expected next : RecoveryGrant tenant) → m Bool
+  /-- What an administrator is shown about one account's grants, which is how a grant issued in
+  error is found and revoked (AUTH-9.10.7). -/
+  recoveryGrantsForAccount : (tenant : TenantId) → AccountId tenant →
+    m (List (RecoveryGrant tenant))
   /-- Counts one failure against the address and returns what the history now says. It is one
   operation rather than a read and a write because two bounces arriving together would otherwise
   count as one, and the count is what AUTH-12.5 reports on. -/
@@ -205,8 +220,8 @@ structure AuthStore (m : Type → Type) where
   appendAudit : (tenant : TenantId) → AuditEntry tenant → m Unit
   auditEntries : (tenant : TenantId) → m (List (AuditEntry tenant))
   /-- Removes attempts that expired before `before`, sessions that can no longer be used and
-  stopped being usable before it, and federation states and passkey ceremonies that expired or
-  were spent before it.
+  stopped being usable before it, and federation states, passkey ceremonies and recovery grants
+  that expired or were spent before it.
   Everything it removes is already refused on read, so no correctness depends on it having run;
   what it bounds is growth (AUTH-15.4.3).
 
@@ -214,8 +229,8 @@ structure AuthStore (m : Type → Type) where
   questions rather than expiry ones, and the port offers no way to remove one of those. -/
   purgeExpired : (tenant : TenantId) → (before : Timestamp) → m PurgeCounts
   /-- Removes the tenant's accounts, credentials, passkeys, sessions, invitations, attempts,
-  federation states, passkey ceremonies, delivery history, consent records and audit records,
-  with no orphans (AUTH-4.2.5). -/
+  federation states, passkey ceremonies, recovery grants, delivery history, consent records and
+  audit records, with no orphans (AUTH-4.2.5). -/
   deleteTenant : (tenant : TenantId) → m Unit
 
 /--

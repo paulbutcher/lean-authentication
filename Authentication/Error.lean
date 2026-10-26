@@ -22,6 +22,10 @@ inductive AuthError where
   | emailedCodeNotEnabled
   | invitationNotPending
   | invitationExpired
+  /-- The grant has been spent or revoked, or there is none by that identifier. One answer for
+  the three, as an invitation has, so that holding an identifier reports nothing about it. -/
+  | recoveryNotPending
+  | recoveryExpired
   /-- This tenant does not admit the means by which this route proves an address, so no attempt
   is minted and no mail is sent (AUTH-9.9.4). The invitation is untouched, and the person's way
   in is whichever kind the tenant does admit. -/

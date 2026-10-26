@@ -35,13 +35,14 @@ private def credentials : TableName := ⟨"credentials"⟩
 private def federationStates : TableName := ⟨"federation_states"⟩
 private def passkeys : TableName := ⟨"passkeys"⟩
 private def passkeyCeremonies : TableName := ⟨"passkey_ceremonies"⟩
+private def recoveryGrants : TableName := ⟨"recovery_grants"⟩
 
 /-- The tables these statements read and write, as the bare names `Dialect.table` qualifies. A
 backend's schema has to create all of them and nothing here depends on what it calls them. -/
 def tableNames : List String :=
   [accounts.value, accountEmails.value, attempts.value, sessions.value, invitations.value,
     deliveryRecords.value, consents.value, audit.value, credentials.value,
-    federationStates.value, passkeys.value, passkeyCeremonies.value]
+    federationStates.value, passkeys.value, passkeyCeremonies.value, recoveryGrants.value]
 
 /-! ## Encoding between domain values and columns -/
 
@@ -91,6 +92,28 @@ private def invitationStateOf : String → InvitationState
   | "accepted" => .accepted
   | "revoked" => .revoked
   | _ => .pending
+
+private def recoveryStateText : RecoveryGrantState → String
+  | .pending => "pending"
+  | .spent => "spent"
+  | .revoked => "revoked"
+
+private def recoveryStateOf : String → RecoveryGrantState
+  | "spent" => .spent
+  | "revoked" => .revoked
+  | _ => .pending
+
+/-- Stored as text rather than a flag, so that a third disposition reads as itself in the
+column instead of inverting the meaning of every row already written. -/
+private def dispositionText : RecoveryDisposition → String
+  | .removeExisting => "remove-existing"
+  | .keepExisting => "keep-existing"
+
+/-- Anything unrecognised reads as `removeExisting`, which is the conservative direction: a row
+this build cannot interpret leaves fewer credentials on the account rather than more. -/
+private def dispositionOf : String → RecoveryDisposition
+  | "keep-existing" => .keepExisting
+  | _ => .removeExisting
 
 private def actorRef : Actor → Option String
   | .anonymous => none
@@ -565,6 +588,61 @@ private def invitationsForTenant [Monad m] (c : Ctx m) (tenant : TenantId) :
     m (List (Invitation tenant)) := do
   let rows ← c.rows (invitationSelect ++ sql!" WHERE tenant = {tenant.value}")
   pure (rows.map readInvitation).toList
+
+/-! ## Recovery grants -/
+
+private def recoverySelect : Statement :=
+  sql!"SELECT id, account_id, token_key, token_bytes, disposition, state, expires_at,
+         created_by, spent_at
+       FROM {recoveryGrants}"
+
+private def readRecoveryGrant {tenant : TenantId} (row : SqlRow) : RecoveryGrant tenant :=
+  { id := ⟨row.text 0⟩
+    account := ⟨row.text 1⟩
+    tokenDigest := digestOf (row.text 2) (row.text 3)
+    disposition := dispositionOf (row.text 4)
+    state := recoveryStateOf (row.text 5)
+    expiresAt := timeOf (row.int 6)
+    createdBy := actorOf (row.text? 7)
+    spentAt := (row.int? 8).map timeOf }
+
+private def createRecoveryGrant [Monad m] (c : Ctx m) (tenant : TenantId)
+    (grant : RecoveryGrant tenant) : m Unit :=
+  c.run
+    sql!"INSERT INTO {recoveryGrants}
+           (tenant, id, account_id, token_key, token_bytes, disposition, state, expires_at,
+            created_by, spent_at)
+         VALUES ({tenant.value}, {grant.id.value}, {grant.account.value},
+           {grant.tokenDigest.keyId.value}, {digestBytesText grant.tokenDigest},
+           {dispositionText grant.disposition}, {recoveryStateText grant.state},
+           {timeText grant.expiresAt}, {actorRef grant.createdBy},
+           {grant.spentAt.map timeText})"
+
+private def recoveryGrantById [Monad m] (c : Ctx m) (tenant : TenantId)
+    (id : RecoveryGrantId tenant) : m (Option (RecoveryGrant tenant)) := do
+  let row ← c.first (recoverySelect ++
+    sql!" WHERE tenant = {tenant.value} AND id = {id.value}")
+  pure (row.map readRecoveryGrant)
+
+/-- The state is in the predicate and not only in the assignment, so two ceremonies completing
+together spend the grant once. Nothing else about the row is writable: a grant's account and
+disposition are what the administrator decided and a redemption does not revise them. -/
+private def commitRecoveryGrant [Monad m] (c : Ctx m) (tenant : TenantId)
+    (expected next : RecoveryGrant tenant) : m Bool := do
+  let affected ← c.affected
+    sql!"UPDATE {recoveryGrants}
+         SET state = {recoveryStateText next.state},
+           spent_at = {next.spentAt.map timeText}
+         WHERE tenant = {tenant.value} AND id = {expected.id.value}
+           AND state = {recoveryStateText expected.state}"
+  pure (affected == 1)
+
+private def recoveryGrantsForAccount [Monad m] (c : Ctx m) (tenant : TenantId)
+    (account : AccountId tenant) : m (List (RecoveryGrant tenant)) := do
+  let rows ← c.rows (recoverySelect ++
+    sql!" WHERE tenant = {tenant.value} AND account_id = {account.value}
+          ORDER BY expires_at, id")
+  pure (rows.map readRecoveryGrant).toList
 
 /-! ## Delivery history and suppression -/
 
@@ -1051,8 +1129,13 @@ private def purgeExpired [Monad m] (c : Ctx m) (tenant : TenantId) (before : Tim
       sql!"DELETE FROM {passkeyCeremonies}
            WHERE tenant = {tenant.value}
              AND (expires_at < {timeText before} OR consumed_at < {timeText before})"
+    let grantsRemoved ← c.affected
+      sql!"DELETE FROM {recoveryGrants}
+           WHERE tenant = {tenant.value}
+             AND (expires_at < {timeText before} OR spent_at < {timeText before})"
     pure { attempts := attemptsRemoved, sessions := sessionsRemoved,
-           federationStates := statesRemoved, passkeyCeremonies := ceremoniesRemoved }
+           federationStates := statesRemoved, passkeyCeremonies := ceremoniesRemoved,
+           recoveryGrants := grantsRemoved }
 
 private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
   c.transaction fun c => do
@@ -1061,6 +1144,7 @@ private def deleteTenant [Monad m] (c : Ctx m) (tenant : TenantId) : m Unit :=
     c.run sql!"DELETE FROM {credentials} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {federationStates} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {passkeyCeremonies} WHERE tenant = {tenant.value}"
+    c.run sql!"DELETE FROM {recoveryGrants} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {accounts} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {attempts} WHERE tenant = {tenant.value}"
     c.run sql!"DELETE FROM {sessions} WHERE tenant = {tenant.value}"
@@ -1110,6 +1194,10 @@ def sqlAuthStore [Monad m] (dialect : Dialect) (conn : SqlConnection m) : AuthSt
     invitationById := invitationById c
     commitInvitation := commitInvitation c
     invitationsForTenant := invitationsForTenant c
+    createRecoveryGrant := createRecoveryGrant c
+    recoveryGrantById := recoveryGrantById c
+    commitRecoveryGrant := commitRecoveryGrant c
+    recoveryGrantsForAccount := recoveryGrantsForAccount c
     recordDeliveryFailure := recordDeliveryFailure c
     suppressAddress := suppressAddress c
     deliveryRecord := deliveryRecord c
