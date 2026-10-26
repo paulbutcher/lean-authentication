@@ -196,6 +196,7 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
     (provider : ProviderConfig) (discovery : Discovery) (redirectUri : String)
     (returnTo : Option String) (invitation : Option (InvitationId tenant) := none)
     (account : Option (AccountId tenant) := none)
+    (recovery : Option (RecoveryGrantId tenant) := none)
     (requester : RequestContext := {}) : m (Except StartRefusal (FederatedStart tenant)) := do
   let now ← Clock.now
   -- Only a sign-in is constrained. A link issues no session (AUTH-6.7.1), and refusing one would
@@ -221,6 +222,7 @@ def beginFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tena
         returnTo
         invitation
         account
+        recovery
         createdAt := now
         expiresAt }
     let parameters :=
@@ -290,13 +292,30 @@ def completeFederated {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
             -- A link asks nothing about the address, so a provider that discloses none can still
             -- be linked; that is what the account on the record bought (AUTH-6.7.1).
             if let some account := record.account then
-              let result ← linkIdentity ports account answer.identity
-              return .ok
-                { result := match result with
-                    | .ok () => .linked account
-                    | .error reason => .linkRefused account reason
-                  returnTo := record.returnTo
-                  profile }
+              -- A grant is spent before the credential is written, for the reason it is on the
+              -- passkey path: a race resolved afterwards would leave an identity linked that
+              -- nothing authorised.
+              let redeemed ← match record.recovery with
+                | none => pure (some none)
+                | some grant => (·.map some) <$> spendRecovery ports grant
+              match redeemed with
+              | none =>
+                return .ok
+                  { result := .linkRefused account .recoveryRefused
+                    returnTo := record.returnTo
+                    profile }
+              | some authorised =>
+                let result ← linkIdentity ports account answer.identity
+                -- Only once the identity is there, and only the credential it wrote is spared.
+                if let (.ok (), some granted) := (result, authorised) then
+                  if let some linked ← ports.store.credentialByIdentity tenant answer.identity then
+                    applyRecoveryDisposition ports granted.disposition account linked.id
+                return .ok
+                  { result := match result with
+                      | .ok () => .linked account
+                      | .error reason => .linkRefused account reason
+                    returnTo := record.returnTo
+                    profile }
             match answer.address with
             | none => pure (.error (.badDocument "email"))
             | some address =>

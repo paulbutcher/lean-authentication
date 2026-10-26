@@ -125,7 +125,7 @@ private def begin [Clock IO] [RandomBytes IO] {tenant : TenantId} (config : Conf
   | .ok discovery =>
     match ← (beginFederated config.ports tenantConfig provider
         discovery (callbackUri tenantConfig provider.id) returnTo invitation account
-        (requesterOf request) : IO _) with
+        (requester := requesterOf request) : IO _) with
     | .error reason => refusedBecause config tenant provider (.notStarted reason)
     | .ok begun =>
       let now ← (Clock.now : IO _)

@@ -1008,7 +1008,7 @@ private def ceremonyKindOf (text : String) : PasskeyCeremonyKind :=
 
 private def passkeyCeremonySelect : Statement :=
   sql!"SELECT id, kind, challenge_key, challenge_bytes, nonce_key, nonce_bytes, account_id,
-         return_to, created_at, expires_at, consumed_at
+         return_to, created_at, expires_at, consumed_at, recovery_grant_id
        FROM {passkeyCeremonies}"
 
 private def readPasskeyCeremony {tenant : TenantId} (row : SqlRow) : PasskeyCeremony tenant :=
@@ -1020,20 +1020,21 @@ private def readPasskeyCeremony {tenant : TenantId} (row : SqlRow) : PasskeyCere
     returnTo := row.text? 7
     createdAt := timeOf (row.int 8)
     expiresAt := timeOf (row.int 9)
-    consumedAt := (row.int? 10).map timeOf }
+    consumedAt := (row.int? 10).map timeOf
+    recovery := (row.text? 11).map (⟨·⟩) }
 
 private def createPasskeyCeremony [Monad m] (c : Ctx m) (tenant : TenantId)
     (ceremony : PasskeyCeremony tenant) : m Unit :=
   c.run
     sql!"INSERT INTO {passkeyCeremonies}
            (tenant, id, kind, challenge_key, challenge_bytes, nonce_key, nonce_bytes,
-            account_id, return_to, created_at, expires_at, consumed_at)
+            account_id, return_to, created_at, expires_at, consumed_at, recovery_grant_id)
          VALUES ({tenant.value}, {ceremony.id.value}, {ceremonyKindText ceremony.kind},
            {ceremony.challenge.keyId.value}, {digestBytesText ceremony.challenge},
            {ceremony.bindingNonce.keyId.value}, {digestBytesText ceremony.bindingNonce},
            {ceremony.account.map (·.value)}, {ceremony.returnTo},
            {timeText ceremony.createdAt}, {timeText ceremony.expiresAt},
-           {ceremony.consumedAt.map timeText})"
+           {ceremony.consumedAt.map timeText}, {ceremony.recovery.map (·.value)})"
 
 private def passkeyCeremonyById [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
     (id : PasskeyCeremonyId tenant) : m (Option (PasskeyCeremony tenant)) := do
@@ -1058,7 +1059,7 @@ private def commitPasskeyCeremony [Monad m] (c : Ctx m) (tenant : TenantId)
 
 private def federationStateSelect : Statement :=
   sql!"SELECT id, provider, digest_key, digest_bytes, verifier, nonce, return_to,
-         created_at, expires_at, consumed_at, invitation_id, account_id
+         created_at, expires_at, consumed_at, invitation_id, account_id, recovery_grant_id
        FROM {federationStates}"
 
 private def readFederationState {tenant : TenantId} (row : SqlRow) : FederationState tenant :=
@@ -1072,20 +1073,21 @@ private def readFederationState {tenant : TenantId} (row : SqlRow) : FederationS
     expiresAt := timeOf (row.int 8)
     consumedAt := (row.int? 9).map timeOf
     invitation := (row.text? 10).map (⟨·⟩)
-    account := (row.text? 11).map (⟨·⟩) }
+    account := (row.text? 11).map (⟨·⟩)
+    recovery := (row.text? 12).map (⟨·⟩) }
 
 private def createFederationState [Monad m] (c : Ctx m) (tenant : TenantId)
     (state : FederationState tenant) : m Unit :=
   c.run
     sql!"INSERT INTO {federationStates}
            (tenant, id, provider, digest_key, digest_bytes, verifier, nonce, return_to,
-            created_at, expires_at, consumed_at, invitation_id, account_id)
+            created_at, expires_at, consumed_at, invitation_id, account_id, recovery_grant_id)
          VALUES ({tenant.value}, {state.id.value}, {state.provider.value},
            {state.stateDigest.keyId.value}, {digestBytesText state.stateDigest},
            {state.verifier}, {state.nonce}, {state.returnTo},
            {timeText state.createdAt}, {timeText state.expiresAt},
            {state.consumedAt.map timeText}, {state.invitation.map (·.value)},
-           {state.account.map (·.value)})"
+           {state.account.map (·.value)}, {state.recovery.map (·.value)})"
 
 private def federationStateByDigest [Monad m] (c : Ctx m) (tenant : TenantId) (now : Timestamp)
     (digest : Digest) : m (Option (FederationState tenant)) := do

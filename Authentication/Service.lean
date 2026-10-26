@@ -229,6 +229,9 @@ inductive LinkFailure where
   /-- The store refused for a reason creating a credential should not produce. Carried rather
   than flattened into the refusals above, which would report something that did not happen. -/
   | storeRefused (error : StoreError)
+  /-- The link was offered under a recovery grant that may no longer be redeemed: spent,
+  revoked, expired, or withdrawn between the start and the callback. -/
+  | recoveryRefused
   deriving DecidableEq, Repr, Inhabited
 
 /-- The operator's name for one, for a log record or a span attribute, as `LinkRefusal.name`
@@ -240,6 +243,7 @@ def LinkFailure.name : LinkFailure → String
   | .alreadyLinked => "already-linked"
   | .noIdentifier => "no-identifier"
   | .storeRefused _ => "store-refused"
+  | .recoveryRefused => "recovery-refused"
 
 /-- Writes a credential and records that a way in was added (AUTH-14.1.7). Both the linking a
 federated sign-in decides and the linking a held session authorises come through here, so neither
@@ -1208,6 +1212,61 @@ def authoriseRecovery {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId
   match ← ports.store.recoveryGrantById tenant id with
   | none => pure (.error .recoveryNotPending)
   | some grant => pure (RecoveryGrant.verify now grant (ports.peppers.present token))
+
+/--
+Spends a grant, before the credential it authorises is written.
+
+Before and not after, deliberately. Two ceremonies completing together would otherwise each
+write a credential and only one lose the race to mark the grant spent, which is an enrolment
+nobody authorised. What spending first costs is that an enrolment which then fails to store
+burns the grant and the administrator issues another; by that point the authenticator has
+already produced a valid signature, so it is a store failure rather than anything the person
+did.
+
+The token is not presented again and does not need to be. It was checked when the ceremony
+began, and what carries the grant from there is the ceremony record, which only this library
+writes. The state and the expiry are rechecked, because a grant can be revoked or run out
+between the two halves.
+-/
+def spendRecovery {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId} (ports : Ports m)
+    (id : RecoveryGrantId tenant) : m (Option (RecoveryAuthorisation tenant)) := do
+  let now ← Clock.now
+  match ← ports.store.recoveryGrantById tenant id with
+  | none => pure none
+  | some grant =>
+    if grant.state != .pending || grant.expiresAt ≤ now then pure none
+    else if ← ports.store.commitRecoveryGrant tenant grant (RecoveryGrant.markSpent now grant) then
+      ports.store.appendAudit tenant
+        ⟨now, .anonymous, .recoveryRedeemed grant.account grant.id⟩
+      pure (.some
+        { grant := grant.id, account := grant.account, disposition := grant.disposition })
+    else pure none
+
+/--
+Removes whatever else the account could have got in by, which is what `removeExisting` means.
+
+Called once the new credential exists and never before: a disposition applied first would leave
+an account holding nothing at all if the enrolment then failed. The credential just enrolled is
+excluded by identifier rather than by kind, so recovering onto a second passkey still removes
+the first.
+
+`unlinkIdentity`'s last-way-in check is deliberately not applied here, and this is the one place
+in the library that removes a credential without it. That check exists to stop an account holder
+taking away their own last way in by accident; here an administrator has decided what the way in
+is now, and the credential proving it was written a moment ago.
+-/
+def applyRecoveryDisposition {m : Type → Type} [Monad m] [Clock m] {tenant : TenantId}
+    (ports : Ports m) (disposition : RecoveryDisposition) (account : AccountId tenant)
+    (enrolled : CredentialId tenant) : m Unit := do
+  match disposition with
+  | .keepExisting => pure ()
+  | .removeExisting =>
+    let now ← Clock.now
+    for credential in ← ports.store.credentialsForAccount tenant account do
+      if credential.id != enrolled then
+        ports.store.deleteCredential tenant credential.id
+        ports.store.appendAudit tenant
+          ⟨now, .anonymous, .identityUnlinked account credential.descriptor.origin⟩
 
 /-! ## Consent
 

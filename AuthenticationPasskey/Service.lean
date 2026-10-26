@@ -48,6 +48,10 @@ inductive CeremonyRefusal where
   defaulted, because an identifier guessed here would be bound into every credential registered
   under it and could not be corrected afterwards. -/
   | noRelyingParty
+  /-- The recovery grant this registration was offered under is not one that may be redeemed:
+  spent, revoked, expired, no such grant, or the wrong token. One answer for all of them, as an
+  invitation has, so that holding an identifier reports nothing about it. -/
+  | recoveryRefused
   deriving Repr
 
 def CeremonyRefusal.name : CeremonyRefusal → String
@@ -61,6 +65,7 @@ def CeremonyRefusal.name : CeremonyRefusal → String
   | .decided reason => reason.name
   | .notStored _ => "not-stored"
   | .noRelyingParty => "no-relying-party"
+  | .recoveryRefused => "recovery-refused"
 
 /-- What a page needs to call `navigator.credentials.create`, as values rather than as JSON. -/
 structure RegistrationOptions where
@@ -103,7 +108,7 @@ private def partyOf {tenant : TenantId} (config : TenantConfig tenant) :
 private def beginCeremony {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
     {tenant : TenantId} (ports : Ports m) (config : TenantConfig tenant)
     (kind : PasskeyCeremonyKind) (account : Option (AccountId tenant))
-    (returnTo : Option String) :
+    (returnTo : Option String) (recovery : Option (RecoveryGrantId tenant) := none) :
     m (Except CeremonyRefusal (CredentialValue × CookieSpec)) := do
   let now ← Clock.now
   match ← draw 32, ← draw 16, ← draw 12 with
@@ -116,6 +121,7 @@ private def beginCeremony {m : Type → Type} [Monad m] [Clock m] [RandomBytes m
         challenge := ports.peppers.current.digest challenge
         bindingNonce := ports.peppers.current.digest nonce
         account
+        recovery
         returnTo
         createdAt := now
         expiresAt }
@@ -124,16 +130,14 @@ private def beginCeremony {m : Type → Type} [Monad m] [Clock m] [RandomBytes m
         (PasskeyCeremony.cookieValue id nonce) expiresAt))
   | _, _, _ => pure (.error .noRandomness)
 
-/-- Begins a registration for an account that is already signed in. The account comes from the
-caller's session and is carried on the ceremony record, so completion cannot be told which account
-to attach a credential to (AUTH-6.7.1 takes the same position for a federated link). -/
-def beginRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
-    (ports : Ports m) (config : TenantConfig tenant) (account : AccountId tenant) :
+private def registrationFor {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
+    {tenant : TenantId} (ports : Ports m) (config : TenantConfig tenant)
+    (account : AccountId tenant) (recovery : Option (RecoveryGrantId tenant)) :
     m (Except CeremonyRefusal RegistrationOptions) := do
   match partyOf config with
   | .error refusal => pure (.error refusal)
   | .ok party =>
-    match ← beginCeremony ports config .registration (some account) none with
+    match ← beginCeremony ports config .registration (some account) none recovery with
     | .error refusal => pure (.error refusal)
     | .ok (challenge, cookie) =>
       let held ← ports.store.credentialsForAccount tenant account
@@ -148,6 +152,35 @@ def beginRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {t
             | .passkey handle => some handle
             | _ => none
           cookie })
+
+/-- Begins a registration for an account that is already signed in. The account comes from the
+caller's session and is carried on the ceremony record, so completion cannot be told which account
+to attach a credential to (AUTH-6.7.1 takes the same position for a federated link). -/
+def beginRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {tenant : TenantId}
+    (ports : Ports m) (config : TenantConfig tenant) (account : AccountId tenant) :
+    m (Except CeremonyRefusal RegistrationOptions) :=
+  registrationFor ports config account none
+
+/--
+Begins a registration authorised by a recovery grant rather than by a session (AUTH-9.10.2).
+
+This is the whole point of a grant: the person has lost what they signed in with, so there is no
+session to read an account from, and the account comes from the grant instead. The grant is
+checked and not spent here, so a ceremony the authenticator refuses leaves it usable.
+
+Nothing about the origin policy is consulted, for the reason AUTH-9.9.5 gives and which applies
+unchanged: registering a credential issues no session. The sign-in that follows is checked like
+any other, and on a tenant admitting only passkeys it is the passkey just registered that passes
+it.
+-/
+def beginRecoveryRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
+    {tenant : TenantId} (ports : Ports m) (config : TenantConfig tenant)
+    (grant : RecoveryGrantId tenant) (token : CredentialValue) :
+    m (Except CeremonyRefusal RegistrationOptions) := do
+  match ← authoriseRecovery ports grant token with
+  | .error _ => pure (.error .recoveryRefused)
+  | .ok authorised =>
+    registrationFor ports config authorised.account (some authorised.grant)
 
 /-- Begins an authentication. No account is named and none is known: a discoverable credential is
 what the authenticator offers, and which account it belongs to is settled by the assertion. -/
@@ -186,16 +219,23 @@ private def challengeAccepts {m : Type → Type} {tenant : TenantId} (ports : Po
   fun echoed => ceremony.challenge.accepts (ports.peppers.present ⟨echoed⟩)
 
 /--
-Completes a registration, writing the credential and its attributes.
+Completes a registration, whichever of the two began it.
 
-`label` and `transports` are the client's, because an authenticator names neither. The ceremony is
-spent under compare and set before the credential is written, so two requests carrying one
-challenge register one credential.
+`expected` is the account the caller holds a session for, and `none` where it holds a recovery
+grant instead: the account is the ceremony's either way, and the parameter only says whether the
+caller is entitled to the one it names. A ceremony carrying a grant redeems it here however it
+is completed, so presenting a recovery cookie to the session route does not enrol a credential
+while leaving the grant pending.
+
+The order is forced. The ceremony is spent under compare and set, then the grant, and only then
+is the credential written: either race resolved after the write would be a credential nobody
+authorised. The disposition is applied last, once there is something for the account to be left
+with.
 -/
-def completeRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
+private def finishRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
     {tenant : TenantId} (ports : Ports m) (config : TenantConfig tenant)
-    (account : AccountId tenant) (cookie : String) (attestationObject : ByteArray)
-    (clientDataJson label : String) (transports : List String := []) :
+    (expected : Option (AccountId tenant)) (cookie : String) (attestationObject : ByteArray)
+    (clientDataJson label : String) (transports : List String) :
     m (Except CeremonyRefusal (PasskeyRegistration tenant)) := do
   match partyOf config with
   | .error refusal => pure (.error refusal)
@@ -203,7 +243,10 @@ def completeRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
     match ← liveCeremony ports .registration cookie with
     | .error refusal => pure (.error refusal)
     | .ok ceremony =>
-      if ceremony.account != some account then pure (.error .notThisAccount)
+      match ceremony.account with
+      | none => pure (.error .notThisAccount)
+      | some account =>
+      if expected.isSome && expected != some account then pure (.error .notThisAccount)
       else
         match Ceremony.verifyRegistration attestationObject clientDataJson
             (challengeAccepts ports ceremony) party with
@@ -213,6 +256,11 @@ def completeRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
           if !(← ports.store.commitPasskeyCeremony tenant ceremony (ceremony.consumed now)) then
             pure (.error .unknownCeremony)
           else
+            match ← (match ceremony.recovery with
+                | none => pure (some none)
+                | some grant => (·.map some) <$> spendRecovery ports grant) with
+            | none => pure (.error .recoveryRefused)
+            | some redeemed =>
             match ← draw 12 with
             | none => pure (.error .noRandomness)
             | some identifier =>
@@ -237,7 +285,31 @@ def completeRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
               | .ok () =>
                 ports.store.appendAudit tenant
                   ⟨now, .anonymous, .identityLinked account "passkey"⟩
+                if let some authorised := redeemed then
+                  applyRecoveryDisposition ports authorised.disposition account credential
                 pure (.ok registration)
+
+/--
+Completes a registration begun by an account that is signed in.
+
+`label` and `transports` are the client's, because an authenticator names neither.
+-/
+def completeRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
+    {tenant : TenantId} (ports : Ports m) (config : TenantConfig tenant)
+    (account : AccountId tenant) (cookie : String) (attestationObject : ByteArray)
+    (clientDataJson label : String) (transports : List String := []) :
+    m (Except CeremonyRefusal (PasskeyRegistration tenant)) :=
+  finishRegistration ports config (some account) cookie attestationObject clientDataJson label
+    transports
+
+/-- Completes one begun under a recovery grant. There is no account to pass: the caller holds no
+session, and the account is the grant's, carried on the ceremony since it began (AUTH-9.10.3). -/
+def completeRecoveryRegistration {m : Type → Type} [Monad m] [Clock m] [RandomBytes m]
+    {tenant : TenantId} (ports : Ports m) (config : TenantConfig tenant) (cookie : String)
+    (attestationObject : ByteArray) (clientDataJson label : String)
+    (transports : List String := []) :
+    m (Except CeremonyRefusal (PasskeyRegistration tenant)) :=
+  finishRegistration ports config none cookie attestationObject clientDataJson label transports
 
 /--
 Completes an authentication and issues a session.

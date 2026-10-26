@@ -206,4 +206,118 @@ def checks : IO (List (String × Bool)) := do
         | .error .noRelyingParty => true
         | _ => false) ]
 
+/-! ## Recovery
+
+Registering a passkey with no session at all, which is the case a passkey-only tenant had no
+answer to: the device holding the account's one credential is gone, so there is nothing to sign
+in with and nothing to begin an ordinary registration from.
+-/
+
+private def holder : Account tenant :=
+  { id := account
+    identity := (address "person@example.com").normalise
+    primaryEmail := address "person@example.com"
+    createdAt := ⟨1700000000⟩ }
+
+private def existingIdentity : FederatedIdentity := ⟨"https://issuer.example", "subject-1"⟩
+
+/-- An account holding one federated identity, so a disposition has something to act on. -/
+private def recoverable : IO SQLite := do
+  let db ← Sqlite.openInMemory
+  let ports := portsOn db
+  let _ ← ports.store.createAccount tenant holder
+  let _ ← ports.store.createCredential tenant
+    { id := ⟨"cred-sso"⟩
+      account
+      descriptor := .federatedIdentity existingIdentity
+      createdAt := ⟨1700000000⟩ }
+  pure db
+
+private def grantOf (issued : Except RecoveryRefusal (RecoveryIssued tenant)) :
+    RecoveryGrantId tenant × CredentialValue :=
+  match issued with
+  | .ok made => (made.grant.id, made.token)
+  | .error _ => (⟨""⟩, ⟨""⟩)
+
+/-- One whole recovery onto a new passkey, answering what the account holds afterwards. The
+attestation is built from a key generated here, as the registration above is. -/
+private def recoverOnto (disposition : RecoveryDisposition) : IO (List (Credential tenant)) := do
+  let ports := portsOn (← recoverable)
+  let key ← Libcrypto.Evp.PKey.generate "EC" #[⟨"group", .utf8 "P-256"⟩]
+  let (x, y) := coordinatesOf (← key.toSpki)
+  let attestation := attestationObjectOf (registrationAuthData (coseKeyOf x y))
+  let (grant, token) := grantOf (← createRecovery ports config account (disposition := disposition))
+  let begun := (← Service.beginRecoveryRegistration ports config grant token).toOption
+  let _ ← Service.completeRecoveryRegistration ports config
+    ((begun.map (·.cookie.value)).getD "") attestation
+    (clientDataFor registrationType ((begun.map (·.challenge.encoded)).getD ""))
+    "Replacement" []
+  ports.store.credentialsForAccount tenant account
+
+def recoveryChecks : IO (List (String × Bool)) := do
+  let ports := portsOn (← recoverable)
+  let key ← Libcrypto.Evp.PKey.generate "EC" #[⟨"group", .utf8 "P-256"⟩]
+  let (x, y) := coordinatesOf (← key.toSpki)
+  let attestation := attestationObjectOf (registrationAuthData (coseKeyOf x y))
+
+  let (grant, token) := grantOf (← createRecovery ports config account)
+
+  -- Begun and walked away from. The grant has to survive that, or the person who fumbles the
+  -- authenticator dialog needs another trip to an administrator.
+  let _ ← Service.beginRecoveryRegistration ports config grant token
+  let afterAbandoning ← authoriseRecovery (tenant := tenant) ports grant token
+
+  let begun := (← Service.beginRecoveryRegistration ports config grant token).toOption
+  let cookie := (begun.map (·.cookie.value)).getD ""
+  let clientData := clientDataFor registrationType ((begun.map (·.challenge.encoded)).getD "")
+  let registered ← Service.completeRecoveryRegistration ports config cookie attestation
+    clientData "Replacement" []
+  let afterSpending ← authoriseRecovery (tenant := tenant) ports grant token
+  let audited ← ports.store.auditEntries tenant
+  let signedIn ← Service.beginAuthentication ports config
+
+  -- A second grant, revoked after its ceremony began: the enrolment is refused at the end.
+  let (withdrawn, withdrawnToken) := grantOf (← createRecovery ports config account)
+  let secondBegun :=
+    (← Service.beginRecoveryRegistration ports config withdrawn withdrawnToken).toOption
+  let _ ← revokeRecovery (tenant := tenant) ports withdrawn
+  let afterRevoking ← Service.completeRecoveryRegistration ports config
+    ((secondBegun.map (·.cookie.value)).getD "") attestation
+    (clientDataFor registrationType ((secondBegun.map (·.challenge.encoded)).getD ""))
+    "Too late" []
+
+  let refusedAtBegin ←
+    Service.beginRecoveryRegistration ports config grant ⟨"not-the-token"⟩
+
+  let afterRemoving ← recoverOnto .removeExisting
+  let afterKeeping ← recoverOnto .keepExisting
+
+  pure
+    [ ("recovery: a passkey registers with no session, on the grant alone (AUTH-9.10.2)",
+        registered.toOption.isSome),
+      ("recovery: beginning does not spend the grant, so an abandoned ceremony costs nothing",
+        afterAbandoning.toOption.isSome),
+      ("recovery: completing spends it, and a second enrolment has nothing to redeem",
+        afterSpending.toOption.isNone),
+      ("recovery: the redemption is audited against the account it enrolled onto",
+        audited.any fun entry =>
+          match entry.event with
+          | .recoveryRedeemed enrolled _ => enrolled == account
+          | _ => false),
+      ("recovery: the account can start an authentication again afterwards",
+        signedIn.toOption.isSome),
+      ("recovery: a grant revoked mid-ceremony enrols nothing (AUTH-9.10.4)",
+        match afterRevoking with
+        | .error .recoveryRefused => true
+        | _ => false),
+      ("recovery: a wrong token is refused before any ceremony begins",
+        match refusedAtBegin with
+        | .error .recoveryRefused => true
+        | _ => false),
+      ("recovery: removing leaves exactly the passkey just enrolled",
+        afterRemoving.map (·.descriptor.kind) == [.passkey]),
+      ("recovery: keeping leaves what the account already had beside it",
+        afterKeeping.length == 2
+          && (afterKeeping.map (·.descriptor.kind)).contains .federatedIdentity) ]
+
 end Tests.PasskeyFlow

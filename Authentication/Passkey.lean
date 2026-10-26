@@ -64,6 +64,10 @@ structure PasskeyCeremony (tenant : TenantId) where
   rather than supplied at completion, so the account comes from the session that began the
   ceremony and from nowhere the browser could write (AUTH-6.7.1 takes the same position). -/
   account : Option (AccountId tenant) := none
+  /-- The recovery grant standing in for the session this registration would otherwise need
+  (AUTH-9.10.2). Carried on the record for the reason `account` is, and spent at completion
+  rather than here, so a ceremony begun and abandoned does not burn it. -/
+  recovery : Option (RecoveryGrantId tenant) := none
   /-- Where to land afterwards, still to be checked against the tenant's allowlist when it is
   used. Stored unchecked deliberately, as `FederationState.returnTo` is. -/
   returnTo : Option String := none

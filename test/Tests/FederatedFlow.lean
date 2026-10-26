@@ -279,9 +279,12 @@ def limitChecks : IO (List (String × Bool)) := do
             counted.modify (· + 1)
             pure (action != .federatedStart || (← counted.get) ≤ 2 && !scopes.isEmpty) } }
   let requester : RequestContext := { ip := some "198.51.100.7" }
-  let first ← beginFederated limited config provider discovery redirectUri none none none requester
-  let second ← beginFederated limited config provider discovery redirectUri none none none requester
-  let third ← beginFederated limited config provider discovery redirectUri none none none requester
+  let first ← beginFederated limited config provider discovery redirectUri none none none
+    (requester := requester)
+  let second ← beginFederated limited config provider discovery redirectUri none none none
+    (requester := requester)
+  let third ← beginFederated limited config provider discovery redirectUri none none none
+    (requester := requester)
   let scopes := startScopes tenant requester
   let anonymous := startScopes tenant {}
   pure
@@ -347,6 +350,64 @@ def linkFlowChecks : IO (List (String × Bool)) := do
         (completed.toOption.bind (signedIn ·.result)).isNone)
     , ("link flow: the same answer signs nobody in when no account began the flow",
         match withoutAccount with | .error _ => true | .ok _ => false) ]
+
+/-- The same link, authorised by a recovery grant rather than by a session. This is the other
+half of AUTH-9.10.2: a tenant that admits only its provider recovers by linking a new directory
+identity, as a passkey tenant recovers by registering a new authenticator. -/
+def recoveryLinkChecks : IO (List (String × Bool)) := do
+  let db ← openDb
+  let ports := portsOn db
+  let made ← issueFor ports config
+    { origin := .federated ⟨"https://first.test", "first-subject"⟩ true
+      address := address "holder@example.com"
+      requester := { ip := none, userAgent := none, approximateLocation := none } }
+  let account := (made.admitted.map (·.account)).getD ⟨""⟩
+  let before ← linkedIdentities ports account
+
+  let silent : SignInPorts IO :=
+    { metadata := { discover := fun _ => pure (.ok discovery) }
+      identities :=
+        { redeem := fun _ _ _ _ _ _ _ _ => pure (.ok
+            { identity, address := none, addressVerified := false, hostedDomain := none }) } }
+
+  let issued ← createRecovery ports config account
+  let (grant, token) := match issued with
+    | .ok grantIssued => (grantIssued.grant.id, grantIssued.token)
+    | .error _ => (⟨""⟩, ⟨""⟩)
+  let authorised ← authoriseRecovery (tenant := tenant) ports grant token
+  let started := (← beginFederated ports config provider discovery redirectUri none none
+    (some account) (some grant)).toOption
+  let state := (started.bind fun s => parameter s.authorizationUrl "state").getD ""
+  let cookieValue := (started.map (·.cookie.value)).getD ""
+  -- The grant survives the round trip and is spent at the callback, not at the start.
+  let midFlight ← authoriseRecovery (tenant := tenant) ports grant token
+  let completed ← completeFederated ports silent config provider discovery redirectUri
+    (some state) (some cookieValue) "the-code" {}
+  let held ← linkedIdentities ports account
+  let afterwards ← authoriseRecovery (tenant := tenant) ports grant token
+  let audited ← ports.store.auditEntries tenant
+
+  pure
+    [ ("recovery link: a grant names the account, so the start needs no session (AUTH-9.10.3)",
+        (authorised.toOption.map (·.account.value)) == some account.value)
+    , ("recovery link: the grant is still live while the browser is at the provider",
+        midFlight.toOption.isSome)
+    , ("recovery link: the callback links the identity",
+        match completed with
+        | .ok completion => match completion.result with
+          | .linked linkedTo => linkedTo == account
+          | _ => false
+        | .error _ => false)
+    , ("recovery link: and spends the grant, so the callback cannot be replayed onto another",
+        afterwards.toOption.isNone)
+    , ("recovery link: removing leaves the identity just linked and nothing it replaced",
+        before.length == 1 && held.length == 1
+          && (held.map (·.descriptor.origin)) != (before.map (·.descriptor.origin)))
+    , ("recovery link: the redemption is audited (AUTH-14.1.7)",
+        audited.any fun entry =>
+          match entry.event with
+          | .recoveryRedeemed enrolled _ => enrolled == account
+          | _ => false) ]
 
 /--
 A start whose random source will not answer is refused as that, and not as a throttle.

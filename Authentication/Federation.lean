@@ -50,6 +50,10 @@ structure FederationState (tenant : TenantId) where
   It and `invitation` answer different flows; a record carrying both links and spends neither, and
   the shipped routes set at most one. -/
   account : Option (AccountId tenant) := none
+  /-- The recovery grant standing in for the session a link would otherwise need (AUTH-9.10.2).
+  Set only alongside `account`, since a grant names the account it enrols onto; spent at the
+  callback rather than here, so a round trip the person abandons does not burn it. -/
+  recovery : Option (RecoveryGrantId tenant) := none
   /-- Where to land afterwards, still to be checked against the allowlist of AUTH-9.8 when it is
   used. Storing it unchecked is deliberate: the allowlist belongs to the tenant's configuration
   at the moment of the redirect, not to this record. -/

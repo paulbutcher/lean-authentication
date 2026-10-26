@@ -66,8 +66,12 @@ private def federationLinkSql : String :=
 private def recoverySql : String :=
   include_str "../migrations/postgres/20261026120000_authentication_recovery.up.sql"
 
+private def recoveryEnrolmentSql : String :=
+  include_str "../migrations/postgres/20261026130000_authentication_recovery_enrolment.up.sql"
+
 def createSchemaSql : String :=
   initialSql ++ rateCountersSql ++ suppressionSql ++ consentSql ++ federationSql
     ++ federationInvitationSql ++ federationLinkSql ++ passkeySql ++ recoverySql
+    ++ recoveryEnrolmentSql
 
 end Authentication.Postgres
