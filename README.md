@@ -7,6 +7,8 @@
 
 This library handles authentication only, not roles or permissions or any other form of authorisation.
 
+For an example of this in use, see [TodoMVC Max](https://github.com/paulbutcher/lean-todomvc-max).
+
 ## Installing
 
 ```toml
