@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- `Service.Ports.observeSendFailure` is told of every send that failed or was declined to a suppressed address, with the tenant, the kind of mail, its attempt or invitation id and the `SendError`, and never the address or the response.
+- The SES and Postmark transports put the provider's error code at the start of a failure's `detail`.
+
 ## [0.23.0] - 2026-10-26
 
 - The passkey sign-in completion answers `returnTo` beside `signedIn`, the ceremony's target if the tenant's allowlist still permits it and its default otherwise (AUTH-22.23).

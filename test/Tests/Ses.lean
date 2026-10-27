@@ -127,6 +127,9 @@ def checks : List (String × Bool) :=
     ("ses: a rejected recipient is a permanent failure",
       (errorOf (failure "MessageRejected" "Email address is not verified" 400)).map
         SendError.isPermanent == some true),
+    ("ses: the error type that decided the failure is in its detail",
+      errorOf (failure "AccountSuspendedException" "Your account is suspended" 400)
+        == some (.providerFailure "AccountSuspendedException: Your account is suspended")),
     ("ses: throttling is transient",
       errorOf (failure "TooManyRequestsException" "Maximum sending rate exceeded" 400)
         == some .rateLimited),

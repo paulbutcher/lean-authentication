@@ -35,6 +35,14 @@ namespace Authentication.Service
 
 open Leancrypto.Codec
 
+/-- Which message failed to go, by the record it belongs to. The address is not here, so an
+observer that logs everything it is given logs no addresses; the id joins to the audit trail. -/
+inductive MailKind (tenant : TenantId) where
+  | signIn (attempt : AttemptId tenant)
+  | invitation (id : InvitationId tenant)
+  | rotatedInvitation (id : InvitationId tenant)
+  deriving DecidableEq, Repr
+
 /-- The implementations chosen at startup (AUTH-3.5), together with the peppers in force. -/
 structure Ports (m : Type → Type) where
   store : AuthStore m
@@ -44,6 +52,10 @@ structure Ports (m : Type → Type) where
   responseFloor : ResponseFloor m
   humanCheck : HumanCheck m
   peppers : PepperRing
+  /-- Told of every send that failed, suppressed addresses included, since the person who asked
+  is not: the response policy answers as though the mail went, so that a failure cannot be told
+  apart from an unknown address. Told nothing about the response, for the same reason. -/
+  observeSendFailure : Option ((tenant : TenantId) → MailKind tenant → SendError → m Unit) := none
 
 /--
 What an account creation tells the client. Both fields exist because the library owns identity
@@ -376,11 +388,13 @@ because asking is exactly what spends the sending domain's reputation, and what 
 everyone else's mail rather than this one.
 -/
 private def deliver {m : Type → Type} [Monad m] (tenant : TenantId) (ports : Ports m)
-    (mail : OutboundEmail) : m (Except SendError SentMessageId) := do
-  match ← ports.store.deliveryRecord tenant mail.to.normalise with
-  | some record =>
-    if record.suppressed then pure (.error .addressSuppressed) else ports.transport.send mail
-  | none => ports.transport.send mail
+    (kind : MailKind tenant) (mail : OutboundEmail) : m (Except SendError SentMessageId) := do
+  let suppressed :=
+    ((← ports.store.deliveryRecord tenant mail.to.normalise).map (·.suppressed)).getD false
+  let result ← if suppressed then pure (.error .addressSuppressed) else ports.transport.send mail
+  if let (.error e, some observe) := (result, ports.observeSendFailure) then
+    observe tenant kind e
+  pure result
 
 private def perform {m : Type → Type} [Monad m] [RandomBytes m] {tenant : TenantId}
     (ports : Ports m) (config : TenantConfig tenant) (now : Timestamp)
@@ -389,7 +403,7 @@ private def perform {m : Type → Type} [Monad m] [RandomBytes m] {tenant : Tena
     ports.store.appendAudit tenant entry
     pure outcome
   | .sendSignInEmail message => do
-    match ← deliver tenant ports (signInEmail config message) with
+    match ← deliver tenant ports (.signIn message.attempt) (signInEmail config message) with
     | .ok id => pure { outcome with sent := outcome.sent ++ [id] }
     | .error _ => pure outcome
   | .setAttemptCookie cookie => pure { outcome with setCookies := outcome.setCookies ++ [cookie] }
@@ -705,7 +719,8 @@ def createInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {te
           expiresAt := now.advance config.invitationLifetime
           createdBy }
       ports.store.createInvitation tenant invitation
-      let delivery ← deliver tenant ports (invitationEmail config invitation link)
+      let delivery ←
+        deliver tenant ports (.invitation id) (invitationEmail config invitation link)
       pure (.ok { invitation, token, delivery })
 
 /-- Rotating the token is what invalidates the old link, which is what AUTH-8.5 requires of a
@@ -733,7 +748,8 @@ def resendInvitation {m : Type → Type} [Monad m] [Clock m] [RandomBytes m] {te
               tokenDigest := ports.peppers.current.digest token
               expiresAt := now.advance config.invitationLifetime }
           if ← ports.store.commitInvitation tenant invitation rotated then
-            let delivery ← deliver tenant ports (invitationEmail config rotated link)
+            let delivery ← deliver tenant ports (.rotatedInvitation id)
+              (invitationEmail config rotated link)
             pure (.ok { invitation := rotated, token, delivery })
           else pure (.error .notPending)
 

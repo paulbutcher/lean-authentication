@@ -125,7 +125,8 @@ def outcome (status : UInt32) (body : String) : Except SendError SentMessageId :
     | some id => .ok ⟨id⟩
     | none => .error (.providerFailure "response carried no MessageID")
   else if code != 0 then
-    .error (errorOfCode code detail)
+    -- The code is what decided the failure, so an operator reading `detail` needs it as well.
+    .error (errorOfCode code s!"{code}: {detail}")
   else if status == 429 then
     .error .rateLimited
   else

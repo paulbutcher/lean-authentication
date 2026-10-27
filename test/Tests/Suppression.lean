@@ -136,9 +136,12 @@ def parserChecks : List (String × Bool) :=
 
 /-! ## What suppression does -/
 
+def tenant : TenantId := ⟨"acme"⟩
+
 initialize clockRef : IO.Ref Timestamp ← IO.mkRef ⟨1700000000⟩
 initialize drawCounter : IO.Ref Nat ← IO.mkRef 0
 initialize sentRef : IO.Ref (List OutboundEmail) ← IO.mkRef []
+initialize observedRef : IO.Ref (List (MailKind tenant × SendError)) ← IO.mkRef []
 
 instance : Clock IO where
   now := clockRef.get
@@ -158,8 +161,6 @@ private def address (raw : String) : EmailAddress := (EmailAddress.parse raw).to
 def peppers : PepperRing :=
   { current := { keyId := ⟨"pepper-1"⟩, secret := Leancrypto.Sha256.hashUtf8 "test pepper" } }
 
-def tenant : TenantId := ⟨"acme"⟩
-
 private def portsOn (db : SQLite) : Ports IO :=
   { store := Sqlite.store db
     transport := capturing
@@ -167,7 +168,12 @@ private def portsOn (db : SQLite) : Ports IO :=
     limiter := RateLimiter.unlimited IO
     responseFloor := ResponseFloor.immediate IO
     humanCheck := HumanCheck.unchecked IO
-    peppers }
+    peppers
+    observeSendFailure := some fun t kind error =>
+      if h : t = tenant then observedRef.modify (· ++ [(h ▸ kind, error)]) else pure () }
+
+def failing : EmailTransport IO where
+  send _ := pure (.error (.providerFailure "sending identity not verified"))
 
 private def config : TenantConfig tenant :=
   { displayName := "Acme"
@@ -181,6 +187,7 @@ private def sentCount : IO Nat := do pure (← sentRef.get).length
 def checks : IO (List (String × Bool)) := do
   clockRef.set ⟨1700000000⟩
   sentRef.set []
+  observedRef.set []
   let db ← Sqlite.openInMemory
   let ports := portsOn db
   let gone := address "gone@example.com"
@@ -208,6 +215,19 @@ def checks : IO (List (String × Bool)) := do
   -- ever receive it.
   let invited ← createInvitation ports config gone ⟨"{}"⟩
   let sentToInvited ← sentCount
+  let observedSuppressed ← observedRef.get
+
+  -- A transport that refuses everything, as an unverified sending identity does.
+  observedRef.set []
+  let refusing := { ports with transport := failing }
+  let fresh := address "fresh@example.com"
+  let (_, refusedResponse) ← begin refusing config fresh {}
+  let refusedAudit ← refusing.store.auditEntries tenant
+  let refusedInvitation ← createInvitation refusing config fresh ⟨"{}"⟩
+  let resent ← match refusedInvitation with
+    | .ok issued => resendInvitation refusing config issued.invitation.id
+    | .error e => pure (.error e)
+  let observedRefused ← observedRef.get
 
   -- The report, and then clearing.
   let report ← deliveryReport (tenant := tenant) ports (minimumFailures := 2)
@@ -246,6 +266,27 @@ def checks : IO (List (String × Bool)) := do
           match issued.delivery with
           | .error e => e == .addressSuppressed && e.isPermanent
           | .ok _ => false) == some true),
+      ("suppression: the observer is told of a send declined to a suppressed address",
+        (invited.toOption.map fun issued =>
+          observedSuppressed == [(.invitation issued.invitation.id, .addressSuppressed)])
+          == some true),
+      ("suppression: a refused sign-in send reaches the observer under its attempt",
+        match observedRefused.head? with
+        | some (.signIn attempt, _) =>
+          refusedAudit.any fun entry => entry.event == .attemptCreated attempt
+        | _ => false),
+      ("suppression: and the person is told exactly what a send that worked would tell them",
+        refusedResponse.message == .checkYourMail),
+      ("suppression: a refused invitation and its resend are each reported as what they were",
+        match refusedInvitation, resent with
+        | .ok first, .ok second =>
+          match first.delivery, second.delivery with
+          | .error e1, .error e2 =>
+            observedRefused.drop 1
+              == [(.invitation first.invitation.id, e1),
+                  (.rotatedInvitation second.invitation.id, e2)]
+          | _, _ => false
+        | _, _ => false),
       ("suppression: the report names the addresses worth telling the client about (AUTH-12.5)",
         report.map (·.address.localPart) == ["busy", "gone"]),
       ("suppression: clearing lets the address receive mail again (AUTH-12.4)",

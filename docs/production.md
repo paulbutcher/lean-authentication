@@ -71,6 +71,15 @@ The `From` domain needs all of these before mail is delivered rather than filed:
 - **DMARC** on the organisational domain, tested at `p=none` first.
 - **MX** on the sending subdomain: a real one, or an explicit null MX (`0 .`, RFC 7505).
 
+A send that fails looks to the person who asked exactly like one that worked, so a sender identity nobody verified fails in silence unless you observe it. `observeSendFailure` is told the tenant, which mail it was with its attempt or invitation id, and the error, whose detail carries the provider's own error code. It is not told the address:
+
+```lean
+def logSendFailures (ports : Service.Ports IO) : Service.Ports IO :=
+  { ports with
+    observeSendFailure := some fun tenant kind error =>
+      IO.eprintln s!"send failed in {tenant.value}: {repr kind}: {repr error}" }
+```
+
 ## Bounces
 
 Without bounce handling, a mistyped address keeps being sent sign-in mail and your sending reputation pays for it. Give each transport's endpoint to the routes:

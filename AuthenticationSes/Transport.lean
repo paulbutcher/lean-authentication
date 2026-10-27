@@ -165,7 +165,10 @@ def outcome (response : Leancurl.Response) : Except SendError SentMessageId :=
       match (stringField parsed "message").orElse fun _ => stringField parsed "Message" with
       | some m => m
       | none => text
-    .error (errorOfType (errorType response parsed) detail response.status)
+    let errorName := errorType response parsed
+    -- The name is what decided the failure, so an operator reading `detail` needs it as well.
+    let detail := if errorName.isEmpty then detail else s!"{errorName}: {detail}"
+    .error (errorOfType errorName detail response.status)
 
 private def errorOfCurl (error : Leancurl.CurlError) : SendError :=
   if error.code == Leancurl.CurlError.operationTimedOut then .timedOut

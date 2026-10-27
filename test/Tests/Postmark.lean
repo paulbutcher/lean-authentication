@@ -114,6 +114,10 @@ def checks : IO (List (String × Bool)) := do
         errorOf (Postmark.outcome 429 "") == some .rateLimited),
       ("postmark: a missing sender signature is the operator's problem, not the recipient's",
         (errorOf (Postmark.outcome 422 noSignature)).map SendError.isPermanent == some false),
+      ("postmark: the error code that decided the failure is in its detail",
+        match errorOf (Postmark.outcome 422 noSignature) with
+        | some (.providerFailure detail) => detail.startsWith "400: "
+        | _ => false),
       ("postmark: a provider 5xx is transient",
         (errorOf (Postmark.outcome 500 "{\"Message\":\"oops\"}")).map SendError.isPermanent
           == some false),

@@ -34,6 +34,11 @@ def rotated (current previous : Pepper) : PepperRing :=
 def ses (credentials : Aws.Sigv4.Credentials) : EmailTransport IO :=
   Ses.transport { region := "eu-west-1", credentials }
 
+def logSendFailures (ports : Service.Ports IO) : Service.Ports IO :=
+  { ports with
+    observeSendFailure := some fun tenant kind error =>
+      IO.eprintln s!"send failed in {tenant.value}: {repr kind}: {repr error}" }
+
 def candid : SignInResponsePolicy IO :=
   { respond := fun _ outcome => pure <|
       match outcome with
