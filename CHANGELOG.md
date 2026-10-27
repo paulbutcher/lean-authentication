@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.24.0] - 2026-10-27
 
 - `Service.Ports.observeSendFailure` is told of every send that failed or was declined to a suppressed address, with the tenant, the kind of mail, its attempt or invitation id and the `SendError`, and never the address or the response.
 - The SES and Postmark transports put the provider's error code at the start of a failure's `detail`.
