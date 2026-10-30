@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.25.0] - 2026-10-30
+
+- Chore: bump dependencies.
+
 ## [0.24.0] - 2026-10-27
 
 - `Service.Ports.observeSendFailure` is told of every send that failed or was declined to a suppressed address, with the tenant, the kind of mail, its attempt or invitation id and the `SendError`, and never the address or the response.
