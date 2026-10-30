@@ -57,11 +57,10 @@ namespace Pages
 
 private def page (title : String) (children : List (Node .flow)) : String :=
   Html.document (lang := "en")
-    [ Html.head
-        [ Html.meta_ [("charset", "utf-8")],
-          Html.meta_ [("name", "viewport"), ("content", "width=device-width, initial-scale=1")],
-          Html.title title ],
-      Html.body [Html.main children] ]
+    (Html.head (Html.title title)
+      [ Html.meta_ [("charset", "utf-8")],
+        Html.meta_ [("name", "viewport"), ("content", "width=device-width, initial-scale=1")] ])
+    (Html.body [Html.main children])
 
 /-- Carried in the form rather than in a header, because the magic link's landing page is reached
 by a top-level navigation and has no script to add one (AUTH-14.1.4). -/
@@ -88,14 +87,14 @@ private def refusalText : SignInRefusal → String
 
 private def oneCodeForm (context : PageContext) (action label id : String) : Node .flow :=
   Html.form
-    ([ Html.p [ Html.label [Node.text label] { for_ := id } ],
+    (([ Html.p [ Html.label [Node.text label] { for_ := id } ],
        Html.p
          [ Html.input
              { type := "text", name := "code", id, required := true }
              [("autocomplete", "one-time-code"), ("autocapitalize", "off"),
-              ("spellcheck", "false")] ] ]
+              ("spellcheck", "false")] ] ] : List (Node .flow))
       ++ carried context
-      ++ [Html.p [Html.button [Node.text "Sign in"]]])
+      ++ [(Html.p [Html.button [Node.text "Sign in"]] : Node .flow)])
     { method := "post", action }
 
 private def codeForm (context : PageContext) : List (Node .flow) :=
@@ -109,29 +108,30 @@ def standard : Pages where
     page s!"Sign in to {context.tenantName}"
       [ Html.h1 [Node.text s!"Sign in to {context.tenantName}"],
         Html.form
-          ([ Html.p [Html.label [Node.text "Email address"] { for_ := "email" }],
+          (([ Html.p [Html.label [Node.text "Email address"] { for_ := "email" }],
              Html.p
                [ Html.input
                    { type := "email", name := "email", id := "email", required := true }
                    [("autocomplete", "email"), ("autocapitalize", "off"),
-                    ("spellcheck", "false")] ] ]
+                    ("spellcheck", "false")] ] ] : List (Node .flow))
             ++ hidden "returnTo" context.returnTo
-            ++ [Html.p [Html.button [Node.text "Send me a link"]]])
+            ++ [(Html.p [Html.button [Node.text "Send me a link"]] : Node .flow)])
           { method := "post", action := context.action } ]
   sent context message :=
     page s!"Sign in to {context.tenantName}"
-      ([ Html.h1 [Node.text "Check your mail"],
+      (([ Html.h1 [Node.text "Check your mail"],
         Html.p [Node.text (messageText message)],
         Html.p
           [ Node.text
               "If you opened the link on another device, type the code it showed you here." ] ]
+        : List (Node .flow))
       ++ codeForm context)
   confirm context :=
     page s!"Sign in to {context.tenantName}"
       [ Html.h1 [Node.text s!"Sign in to {context.tenantName}"],
         Html.p [Node.text "You opened this link in the browser you asked from."],
         Html.form
-          (carried context ++ [Html.p [Html.button [Node.text "Sign in"]]])
+          (carried context ++ [(Html.p [Html.button [Node.text "Sign in"]] : Node .flow)])
           { method := "post", action := context.action } ]
   code context shown :=
     page s!"Sign in to {context.tenantName}"
@@ -142,11 +142,11 @@ def standard : Pages where
         Html.p [Html.strong [Html.code [Node.text shown]]] ]
   codeRejected context remaining :=
     page s!"Sign in to {context.tenantName}"
-      ([ Html.h1 [Node.text "That code is not right"],
+      (([ Html.h1 [Node.text "That code is not right"],
         Html.p
           [ Node.text
               (if remaining == 0 then "No attempts remain. Ask for a new link."
-                else s!"{remaining} attempts remain.") ] ]
+                else s!"{remaining} attempts remain.") ] ] : List (Node .flow))
       ++ codeForm context)
   refused context reason :=
     page s!"Sign in to {context.tenantName}"

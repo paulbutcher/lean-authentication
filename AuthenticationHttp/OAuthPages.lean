@@ -76,11 +76,10 @@ namespace OAuthPages
 
 private def page (title : String) (children : List (Node .flow)) : String :=
   Html.document (lang := "en")
-    [ Html.head
-        [ Html.meta_ [("charset", "utf-8")],
-          Html.meta_ [("name", "viewport"), ("content", "width=device-width, initial-scale=1")],
-          Html.title title ],
-      Html.body [Html.main children] ]
+    (Html.head (Html.title title)
+      [ Html.meta_ [("charset", "utf-8")],
+        Html.meta_ [("name", "viewport"), ("content", "width=device-width, initial-scale=1")] ])
+    (Html.body [Html.main children])
 
 /-- One checkbox per scope, ticked, under the field name `Scope.approvalField` fixes. Ticked
 because the request is what the client asked for and unticking is how a scope is withheld; the
@@ -125,10 +124,10 @@ def standard : OAuthPages where
               { type := "hidden", name := context.antiForgeryField,
                 value := context.antiForgeryToken },
             Html.fieldset
-              (Html.legend [Node.text "What it is asking for"]
-                :: (if context.requestedScopes.isEmpty then
-                      [Html.p [Node.text "Nothing this server can grant."]]
-                    else scopeBoxes context)),
+              (if context.requestedScopes.isEmpty then
+                [Html.p [Node.text "Nothing this server can grant."]]
+              else scopeBoxes context)
+              (legend := Html.legend [Node.text "What it is asking for"]),
             Html.p
               [ Html.button [Node.text "Allow"]
                   { name := ConsentForm.answerField, value := ConsentForm.approveValue },
