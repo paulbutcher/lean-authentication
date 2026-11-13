@@ -6,7 +6,7 @@ import Lake
 open System Lake DSL
 
 package authentication where
-  version := v!"0.25.3"
+  version := v!"0.25.4"
   leanOptions := #[
     ⟨`autoImplicit, false⟩,
     ⟨`relaxedAutoImplicit, false⟩,
