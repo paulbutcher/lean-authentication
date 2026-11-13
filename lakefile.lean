@@ -6,7 +6,7 @@ import Lake
 open System Lake DSL
 
 package authentication where
-  version := v!"0.25.3"
+  version := v!"0.25.4"
   leanOptions := #[
     ⟨`autoImplicit, false⟩,
     ⟨`relaxedAutoImplicit, false⟩,
@@ -63,13 +63,13 @@ are not among them: `Middleware.params` already decodes a form body, and nothing
 needs a partial page update.
 -/
 require routing from git
-  "https://github.com/paulbutcher/lean-routing" @ "v0.15.2"
+  "https://github.com/paulbutcher/lean-routing" @ "v0.15.3"
 
 require html from git
   "https://github.com/paulbutcher/lean-html" @ "v0.14.2"
 
 require middleware from git
-  "https://github.com/paulbutcher/lean-middleware" @ "v0.21.0"
+  "https://github.com/paulbutcher/lean-middleware" @ "v0.21.1"
 
 /-- The submodules are globbed because `Authentication.Instances` is deliberately not imported by
 the root: importing it is what turns the default `Clock` and `RandomBytes` on. -/
