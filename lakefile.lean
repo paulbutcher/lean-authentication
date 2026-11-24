@@ -6,7 +6,7 @@ import Lake
 open System Lake DSL
 
 package authentication where
-  version := v!"0.26.0"
+  version := v!"0.26.1"
   leanOptions := #[
     ⟨`autoImplicit, false⟩,
     ⟨`relaxedAutoImplicit, false⟩,
@@ -66,7 +66,7 @@ require routing from git
   "https://github.com/paulbutcher/lean-routing" @ "v0.16.0"
 
 require html from git
-  "https://github.com/paulbutcher/lean-html" @ "v0.15.2"
+  "https://github.com/paulbutcher/lean-html" @ "v0.15.3"
 
 require middleware from git
   "https://github.com/paulbutcher/lean-middleware" @ "v0.22.1"
