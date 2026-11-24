@@ -66,7 +66,7 @@ require routing from git
   "https://github.com/paulbutcher/lean-routing" @ "v0.16.0"
 
 require html from git
-  "https://github.com/paulbutcher/lean-html" @ "v0.15.2"
+  "https://github.com/paulbutcher/lean-html" @ "v0.15.3"
 
 require middleware from git
   "https://github.com/paulbutcher/lean-middleware" @ "v0.22.1"
