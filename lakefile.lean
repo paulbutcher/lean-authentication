@@ -6,26 +6,26 @@ import Lake
 open System Lake DSL
 
 package authentication where
-  version := v!"0.25.4"
+  version := v!"0.26.0"
   leanOptions := #[
     ⟨`autoImplicit, false⟩,
     ⟨`relaxedAutoImplicit, false⟩,
     ⟨`warningAsError, true⟩]
 
 require json from git
-  "https://github.com/paulbutcher/lean-json" @ "v0.3.1"
+  "https://github.com/paulbutcher/lean-json" @ "v0.4.0"
 
 require leansqlite from git
   "https://github.com/leanprover/leansqlite" @ "v4.33.0"
 
 require leanpostgres from git
-  "https://github.com/paulbutcher/leanpostgres" @ "v0.8.1"
+  "https://github.com/paulbutcher/leanpostgres" @ "v0.9.0"
 
 require leancurl from git
-  "https://github.com/paulbutcher/leancurl" @ "v0.3.3"
+  "https://github.com/paulbutcher/leancurl" @ "v0.4.0"
 
 require leancrypto from git
-  "https://github.com/paulbutcher/leancrypto" @ "v0.4.2"
+  "https://github.com/paulbutcher/leancrypto" @ "v0.5.0"
 
 /-
 The encoding a COSE key and a WebAuthn attestation object arrive in. Deterministic: one encoding
@@ -33,7 +33,7 @@ per value, and a decoder that refuses anything else, so bytes a signature covers
 re-encoded into different ones. Pure Lean and requires nothing itself.
 -/
 require cbor from git
-  "https://github.com/paulbutcher/lean-cbor" @ "v0.1.1"
+  "https://github.com/paulbutcher/lean-cbor" @ "v0.2.1"
 
 /-
 The one dependency needing a system library, `pkg-config` and OpenSSL 3 development headers. It is
@@ -41,7 +41,7 @@ confined to the federation targets (AUTH-6.11), so a consumer taking the magic l
 SQL backend, or the authorisation server links none of it.
 -/
 require «lean-libcrypto» from git
-  "https://github.com/paulbutcher/lean-libcrypto" @ "v0.2.1"
+  "https://github.com/paulbutcher/lean-libcrypto" @ "v0.3.0"
 
 /-
 JOSE, and the backend that gives it the elliptic curve half. `lean-jose` is pure Lean and holds the
@@ -49,13 +49,13 @@ algorithm allowlist in its `Policy`, so a token never selects the means of its o
 (AUTH-6.5); `jose-libcrypto` supplies ES256 and the private key operations, over the binding below.
 -/
 require jose from git
-  "https://github.com/paulbutcher/lean-jose" @ "v0.2.2"
+  "https://github.com/paulbutcher/lean-jose" @ "v0.3.1"
 
 require «jose-libcrypto» from git
-  "https://github.com/paulbutcher/jose-libcrypto" @ "v0.1.2"
+  "https://github.com/paulbutcher/jose-libcrypto" @ "v0.2.1"
 
 require leanaws from git
-  "https://github.com/paulbutcher/lean-aws" @ "v0.3.2"
+  "https://github.com/paulbutcher/lean-aws" @ "v0.4.1"
 
 /-
 The HTTP integration target's dependencies, and only its (AUTH-2.3). `lean-forms` and `lean-htmx`
@@ -63,13 +63,13 @@ are not among them: `Middleware.params` already decodes a form body, and nothing
 needs a partial page update.
 -/
 require routing from git
-  "https://github.com/paulbutcher/lean-routing" @ "v0.15.3"
+  "https://github.com/paulbutcher/lean-routing" @ "v0.16.0"
 
 require html from git
-  "https://github.com/paulbutcher/lean-html" @ "v0.14.2"
+  "https://github.com/paulbutcher/lean-html" @ "v0.15.2"
 
 require middleware from git
-  "https://github.com/paulbutcher/lean-middleware" @ "v0.21.1"
+  "https://github.com/paulbutcher/lean-middleware" @ "v0.22.1"
 
 /-- The submodules are globbed because `Authentication.Instances` is deliberately not imported by
 the root: importing it is what turns the default `Clock` and `RandomBytes` on. -/
